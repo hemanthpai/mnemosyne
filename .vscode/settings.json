@@ -1,0 +1,39 @@
+{
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit"
+        }
+    },
+    "pylint.enabled": true,
+    "pylint.args": [
+        "--disable=missing-module-docstring",
+        "--disable=missing-class-docstring",
+        "--disable=missing-function-docstring",
+        "--disable=invalid-name",
+        "--disable=too-few-public-methods",
+        "--disable=too-many-arguments",
+        "--disable=too-many-locals",
+        "--disable=too-many-statements",
+        "--disable=broad-except",
+        "load-plugins=pylint_django"
+    ],
+    "eslint.enable": true,
+    "eslint.format.enable": true,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "always",
+        "source.fixAll.pylint": "always",
+        "source.removeUnusedImports": "always",
+        "source.organizeImports": "always",
+        "source.addMissingImports.ts": "always",
+        "source.fixAll": "always",
+        "source.fixAll.stylelint": "always",
+        "source.fixAll.ts": "always",
+        "source.removeUnused.ts": "always",
+        "source.organizeLinkDefinitions": "always"
+    },
+    "prettier.enable": true,
+    "prettier.tabWidth": 4
+}

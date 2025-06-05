@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pyd
+*.pyo
+*.py.class
+
+# Django
+*.log
+*.pot
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+db.sqlite3
+media/
+staticfiles/
+.env
+.env.*
+*.env
+*.secret
+instance/
+.settings/
+local_settings.py
+
+# VSCode
+.history/
+
+# Node/React
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+/frontend/build/
+/frontend/dist/
+/frontend/.env
+/frontend/.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/coverage
+.coverage
+.tox/
+.nox/
+.cache/
+pytest_cache/
+htmlcov/
+coverage.xml
+
+# Migrations (optional, if you want to ignore generated migrations)
+# **/migrations/*.py
+# **/migrations/*.pyc
+
+# Jupyter
+.ipynb_checkpoints
+
+# Qdrant local
+qdrant_storage/
+
+# Misc
+*.swp
+*.swo
+*.bak
+*.tmp
+*.orig
+*.old
+*.log
+
+# Editor backups
+*~

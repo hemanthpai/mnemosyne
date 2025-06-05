@@ -1,0 +1,510 @@
+import json
+import logging
+import uuid
+from datetime import datetime
+
+from rest_framework import status, viewsets
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from settings_app.models import LLMSettings
+
+from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_service
+from .memory_search_service import memory_search_service
+from .models import Memory
+from .serializers import MemorySerializer
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for CRUD operations on memories
+    """
+
+    serializer_class = MemorySerializer
+    queryset = Memory.objects.all()
+
+    def get_queryset(self):
+        """Filter memories by user_id if provided in query params"""
+        user_id = self.request.GET.get("user_id")
+        if user_id:
+            try:
+                uuid.UUID(user_id)  # Validate UUID format
+                return Memory.objects.filter(user_id=user_id).order_by("-created_at")
+            except ValueError:
+                logger.warning(f"Invalid user_id format: {user_id}")
+                return Memory.objects.none()
+        # Return all memories if no user_id filter provided
+        return Memory.objects.all().order_by("-created_at")
+
+    def retrieve(self, request, *args, pk=None, **kwargs):
+        """Get a specific memory by ID"""
+        try:
+            # Validate UUID format
+            uuid.UUID(pk)
+            memory = self.get_object()
+            serializer = self.get_serializer(memory)
+            return Response(serializer.data)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid memory ID format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            return Response(
+                {"success": False, "error": "Memory not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+    def list(self, request, *args, **kwargs):
+        """List memories with optional user_id filtering"""
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "count": len(serializer.data),
+                "memories": serializer.data,
+            }
+        )
+
+    def create(self, request, *args, **kwargs):
+        """Create a new memory"""
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            # Validate user_id
+            user_id = serializer.validated_data.get("user_id")
+            if user_id:
+                try:
+                    uuid.UUID(str(user_id))
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid user_id format"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            memory = serializer.save()
+            return Response(
+                {"success": True, "memory": self.get_serializer(memory).data},
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {"success": False, "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class ExtractMemoriesView(APIView):
+    """
+    API endpoint to extract memories from conversation text using LLM
+    """
+
+    def post(self, request):
+        conversation_text = request.data.get("conversation_text", "")
+        user_id = request.data.get("user_id")
+
+        if not conversation_text:
+            return Response(
+                {"success": False, "error": "conversation_text is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate user_id format
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # Get LLM settings for the extraction prompt
+            settings = LLMSettings.get_settings()
+            system_prompt = settings.get_memory_extraction_prompt_rendered()
+
+            logger.info("Extracting memories for user %s", user_id)
+
+            # Add the current datetime to system prompt for time awareness
+            system_prompt_with_date = system_prompt
+            try:
+                now = datetime.now()
+                # TODO: Handle timezone if needed
+                system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+            except Exception as e:
+                logger.warning("Could not add date to system prompt: %s", e)
+
+            # Query LLM to extract memories
+            llm_result = llm_service.query_llm(
+                system_prompt=system_prompt_with_date,
+                prompt=conversation_text,
+                temperature=0.1,  # Low temperature for consistent extraction
+                response_format=MEMORY_EXTRACTION_FORMAT,
+            )
+
+            if not llm_result["success"]:
+                logger.error("LLM extraction failed: %s", llm_result["error"])
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Memory extraction failed: {llm_result['error']}",
+                        "memories_extracted": 0,
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Parse the JSON response
+            try:
+                memories_data = json.loads(llm_result["response"])
+                if not isinstance(memories_data, list):
+                    raise ValueError("Expected a JSON array")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error("Failed to parse LLM response as JSON: %s", e)
+                logger.debug("LLM response: %s", llm_result["response"])
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Failed to parse memory extraction results",
+                        "memories_extracted": 0,
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Store extracted memories
+            stored_memories = []
+            for memory_data in memories_data:
+                if not isinstance(memory_data, dict):
+                    continue
+
+                content = memory_data.get("content", "")
+                if not content:
+                    continue
+
+                # Prepare metadata
+                metadata = {
+                    "tags": memory_data.get("tags", []),
+                    "memory_bank": memory_data.get("memory_bank", "General"),
+                    "confidence": memory_data.get("confidence", 0.5),
+                    "extraction_source": "conversation",
+                    "model_used": llm_result.get("model", "unknown"),
+                }
+
+                memory = memory_search_service.store_memory_with_embedding(
+                    content=content, user_id=user_id, metadata=metadata
+                )
+
+                stored_memories.append(
+                    {
+                        "id": str(memory.id),
+                        "content": memory.content,
+                        "metadata": memory.metadata,
+                        "created_at": memory.created_at.isoformat(),
+                    }
+                )
+
+            logger.info(
+                "Successfully extracted and stored %d memories", len(stored_memories)
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "memories_extracted": len(stored_memories),
+                    "memories": stored_memories,
+                    "model_used": llm_result.get("model", "unknown"),
+                }
+            )
+
+        except Exception as e:
+            logger.error("Unexpected error during memory extraction: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during memory extraction",
+                    "memories_extracted": 0,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class RetrieveMemoriesView(APIView):
+    """
+    API endpoint to retrieve relevant memories for a prompt using vector search
+    """
+
+    # Replace the existing RetrieveMemoriesView.post method:
+
+    def post(self, request):
+        prompt = request.data.get("prompt", "")
+        user_id = request.data.get("user_id")
+        limit = request.data.get("limit", 99)
+        threshold = request.data.get("threshold", 0.7)
+        boosted_threshold = request.data.get("boosted_threshold", 0.5)
+
+        if not prompt:
+            return Response(
+                {"success": False, "error": "prompt is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate user_id format
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate limit and threshold
+        try:
+            limit = int(limit)
+            if limit <= 0 or limit > 100:
+                limit = 10
+        except (ValueError, TypeError):
+            limit = 10
+
+        try:
+            threshold = float(threshold)
+            if threshold < 0.0 or threshold > 1.0:
+                threshold = 0.7
+        except (ValueError, TypeError):
+            threshold = 0.7
+
+        try:
+            boosted_threshold = float(boosted_threshold)
+            if boosted_threshold < 0.0 or boosted_threshold > 1.0:
+                boosted_threshold = 0.5
+        except (ValueError, TypeError):
+            boosted_threshold = 0.5
+
+        try:
+            # Step 1: Get LLM settings and generate search queries
+            settings = LLMSettings.get_settings()
+            search_prompt = settings.get_memory_search_prompt_rendered()
+
+            logger.info(
+                "Generating search queries for user %s with prompt: %s...",
+                user_id,
+                prompt,
+            )
+
+            # Query LLM to generate search queries
+            llm_result = llm_service.query_llm(
+                prompt=prompt,
+                system_prompt=search_prompt,
+                temperature=0.1,
+                response_format=MEMORY_SEARCH_FORMAT,
+            )
+
+            if not llm_result["success"]:
+                logger.error(
+                    "Failed to generate search queries: %s", llm_result["error"]
+                )
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Search query generation failed: {llm_result['error']}",
+                        "memories": [],
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Step 2: Parse the search queries JSON
+            try:
+                search_queries = json.loads(llm_result["response"])
+                if not isinstance(search_queries, list):
+                    raise ValueError("Expected a JSON array of search queries")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error("Failed to parse search queries as JSON: %s", e)
+                logger.debug("LLM response: %s", llm_result["response"])
+                # Fallback: use original prompt as single search query
+                search_queries = [{"search_query": prompt, "confidence": 0.5}]
+
+            logger.info("Generated %d search queries", len(search_queries))
+
+            # Step 3: Use memory search service to find relevant memories
+            relevant_memories = memory_search_service.search_memories_with_queries(
+                search_queries=search_queries,
+                user_id=user_id,
+                limit=limit,
+                threshold=threshold,
+            )
+
+            # Step 4: Format memories for response
+            formatted_memories = []
+            for memory in relevant_memories:
+                memory_data = {
+                    "id": str(memory.id),
+                    "content": memory.content,
+                    "metadata": memory.metadata,
+                    "created_at": memory.created_at.isoformat(),
+                    "updated_at": memory.updated_at.isoformat(),
+                }
+
+                # Add search metadata if available
+                # if hasattr(memory, "_search_score"):
+                #     memory_data["search_metadata"] = {
+                #         "score": memory._search_score,
+                #         "original_score": memory._original_score,
+                #         "query_confidence": memory._query_confidence,
+                #         "search_query": memory._search_query,
+                #     }
+
+                formatted_memories.append(memory_data)
+
+            logger.info("Found %d relevant memories", len(formatted_memories))
+
+            return Response(
+                {
+                    "success": True,
+                    "memories": formatted_memories,
+                    "count": len(formatted_memories),
+                    "search_queries_generated": len(search_queries),
+                    "model_used": llm_result.get("model", "unknown"),
+                    "query_params": {
+                        "limit": limit,
+                        "threshold": threshold,
+                    },
+                }
+            )
+
+        except Exception as e:
+            logger.error("Unexpected error during memory retrieval: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during memory retrieval",
+                    "memories": [],
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class TestConnectionView(APIView):
+    """
+    API endpoint to test connections to LLM and vector services
+    """
+
+    def get(self, request):
+        try:
+            # Refresh LLM settings
+            llm_service.refresh_settings()
+
+            # Test LLM connection
+            llm_result = llm_service.test_connection()
+
+            # Test vector service
+            from .vector_service import vector_service
+
+            vector_health = vector_service.health_check()
+            vector_info = vector_service.get_collection_info()
+
+            return Response(
+                {
+                    "llm_connection": llm_result.get("llm_connection", False),
+                    "llm_error": llm_result.get("llm_error"),
+                    "embeddings_connection": llm_result.get(
+                        "embeddings_connection", False
+                    ),
+                    "embeddings_error": llm_result.get("embeddings_error"),
+                    "vector_service_health": vector_health,
+                    "vector_collection_info": vector_info,
+                }
+            )
+
+        except Exception as e:
+            logger.error("Error testing connections: %s", e)
+            return Response(
+                {
+                    "error": "Failed to test connections",
+                    "llm_connection": False,
+                    "embeddings_connection": False,
+                    "vector_service_health": False,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class MemoryStatsView(APIView):
+    """
+    API endpoint to get memory statistics for a user
+    """
+
+    def get(self, request):
+        user_id = request.query_params.get("user_id")
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            memories = Memory.objects.filter(user_id=user_id)
+
+            # Basic stats
+            total_memories = memories.count()
+
+            # Group by memory bank
+            memory_banks = {}
+            tags_count = {}
+
+            for memory in memories:
+                metadata = memory.metadata or {}
+
+                # Count by memory bank
+                bank = metadata.get("memory_bank", "General")
+                memory_banks[bank] = memory_banks.get(bank, 0) + 1
+
+                # Count tags
+                tags = metadata.get("tags", [])
+                for tag in tags:
+                    tags_count[tag] = tags_count.get(tag, 0) + 1
+
+            # Get vector service stats
+            from .vector_service import vector_service
+
+            collection_info = vector_service.get_collection_info()
+
+            return Response(
+                {
+                    "success": True,
+                    "total_memories": total_memories,
+                    "memory_banks": memory_banks,
+                    "top_tags": dict(
+                        sorted(tags_count.items(), key=lambda x: x[1], reverse=True)[
+                            :10
+                        ]
+                    ),
+                    "vector_collection_info": collection_info,
+                }
+            )
+
+        except Exception as e:
+            logger.error("Error getting memory stats: %s", e)
+            return Response(
+                {"success": False, "error": "Failed to get memory statistics"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

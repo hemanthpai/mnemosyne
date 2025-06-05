@@ -1,0 +1,554 @@
+import logging
+import time
+from typing import Any, Dict, List, Union  # Add Union import
+
+import requests
+from django.utils import timezone
+from settings_app.models import LLMSettings
+
+logger = logging.getLogger(__name__)
+
+# Define format schemas
+MEMORY_EXTRACTION_FORMAT = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string"},
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "memory_bank": {"type": "string"},
+        },
+        "required": ["content", "tags", "confidence"],
+    },
+}
+
+MEMORY_SEARCH_FORMAT = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "search_query": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["search_query", "confidence"],
+    },
+}
+
+
+class LLMService:
+    """
+    Service class for making calls to LLM and embedding APIs
+    """
+
+    def __init__(self):
+        self.settings = None
+        self._load_settings()
+
+    def _load_settings(self):
+        """Load current LLM settings from database"""
+        try:
+            self.settings = LLMSettings.get_settings()
+            logger.info(
+                "LLM settings loaded successfully: %s",
+                self.settings.extraction_provider_type,
+            )
+        except Exception as e:
+            logger.error("Failed to load LLM settings: %s", e)
+            raise
+
+    def refresh_settings(self):
+        """Refresh settings from database"""
+        self._load_settings()
+
+    def get_formatted_datetime(self):
+        """Get current datetime with timezone"""
+        return timezone.now()
+
+    def query_llm(
+        self,
+        prompt: str,
+        user_input: str = "",
+        system_prompt: str = "",
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        response_format: Union[
+            str, Dict[str, Any], None
+        ] = None,  # Add response_format parameter
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+    ) -> Dict[str, Any]:
+        """
+        Query LLM with retry logic, supporting multiple provider types.
+
+        Args:
+            format: Output format specification. Can be:
+                - None: No format constraints
+                - "json": Force JSON output (legacy, maps to generic JSON object)
+                - Dict: Specific JSON schema for structured output
+        """
+        if not self.settings:
+            return {
+                "success": False,
+                "error": "LLM settings not loaded",
+                "response": "",
+                "model": "unknown",
+            }
+
+        provider_type = self.settings.extraction_provider_type
+        model = self.settings.extraction_model
+        api_url = self.settings.extraction_endpoint_url
+
+        logger.info(
+            "LLM Query: Provider=%s, Model=%s, URL=%s", provider_type, model, api_url
+        )
+
+        # Construct full prompt
+        full_prompt = prompt
+        if user_input:
+            full_prompt = f"User Input: {user_input}\n\nTask: {prompt}"
+
+        # Add current datetime to system prompt for time awareness
+        system_prompt_with_date = system_prompt
+        try:
+            now = self.get_formatted_datetime()
+            tzname = now.tzname() or "UTC"
+            system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')} {tzname}"
+        except Exception as e:
+            logger.warning("Could not add date to system prompt: %s", e)
+
+        headers = {"Content-Type": "application/json"}
+
+        # Add API key if needed (for OpenAI-compatible APIs)
+        if provider_type == "openai_compatible":
+            if (
+                hasattr(self.settings, "extraction_endpoint_api_key")
+                and self.settings.extraction_endpoint_api_key
+            ):
+                headers["Authorization"] = (
+                    f"Bearer {self.settings.extraction_endpoint_api_key}"
+                )
+
+        for attempt in range(1, max_retries + 2):
+            logger.debug("LLM query attempt %d/%d", attempt, max_retries + 1)
+
+            try:
+                # Prepare request data based on provider type
+                if provider_type == "ollama":
+                    data = self._prepare_ollama_request(
+                        model,
+                        system_prompt_with_date,
+                        full_prompt,
+                        temperature,
+                        max_tokens,
+                        response_format,  # Pass response_format instead of force_json
+                    )
+                    endpoint = f"{api_url.rstrip('/')}/api/chat"
+                elif provider_type in ["openai", "openai_compatible"]:
+                    data = self._prepare_openai_request(
+                        model,
+                        system_prompt_with_date,
+                        full_prompt,
+                        temperature,
+                        max_tokens,
+                        response_format,  # Pass response_format instead of force_json
+                    )
+                    endpoint = f"{api_url.rstrip('/')}/v1/chat/completions"
+                else:
+                    error_msg = f"Unsupported provider type: {provider_type}"
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "response": "",
+                        "model": model,
+                    }
+
+                logger.info(
+                    "Making API request to %s (attempt %d/%d)",
+                    endpoint,
+                    attempt,
+                    max_retries + 1,
+                )
+
+                # Make the API call
+                response = requests.post(
+                    endpoint,
+                    json=data,
+                    headers=headers,
+                    timeout=self.settings.extraction_timeout,
+                )
+
+                logger.info("API response status: %s", response.status_code)
+
+                if response.status_code == 200:
+                    # Parse response based on provider type
+                    result = self._parse_response(response, provider_type)
+
+                    if result["success"]:
+                        return {
+                            "success": True,
+                            "response": result["content"],
+                            "model": model,
+                            "metadata": result.get("metadata", {}),
+                        }
+                    else:
+                        error_msg = result["error"]
+                        logger.error(error_msg)
+                        if attempt > max_retries:
+                            return {
+                                "success": False,
+                                "error": error_msg,
+                                "response": "",
+                                "model": model,
+                            }
+                else:
+                    # Handle error response
+                    error_msg = f"LLM API ({provider_type}) returned {response.status_code}: {response.text}"
+                    logger.warning("API error: %s", error_msg)
+
+                    # Determine if we should retry
+                    is_retryable = response.status_code in [429, 500, 502, 503, 504]
+
+                    if is_retryable and attempt <= max_retries:
+                        sleep_time = retry_delay * (2 ** (attempt - 1))
+                        logger.warning("Retrying in %.2f seconds...", sleep_time)
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "response": "",
+                            "model": model,
+                        }
+
+            except requests.exceptions.Timeout:
+                logger.warning("Attempt %d failed: LLM API request timed out", attempt)
+                if attempt <= max_retries:
+                    sleep_time = retry_delay * (2 ** (attempt - 1))
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "error": "LLM API request timed out after multiple retries",
+                        "response": "",
+                        "model": model,
+                    }
+            except Exception as e:
+                logger.error(
+                    "Attempt %d failed: Unexpected error during LLM query: %s",
+                    attempt,
+                    e,
+                )
+                if attempt <= max_retries:
+                    sleep_time = retry_delay * (2 ** (attempt - 1))
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Unexpected error after {max_retries} attempts: {str(e)}",
+                        "response": "",
+                        "model": model,
+                    }
+
+        return {
+            "success": False,
+            "error": f"LLM query failed after {max_retries} attempts",
+            "response": "",
+            "model": model,
+        }
+
+    def _prepare_ollama_request(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Union[str, Dict[str, Any], None] = None,
+    ) -> Dict[str, Any]:
+        """Prepare request data for Ollama API"""
+
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "options": {
+                "temperature": temperature,
+                "top_p": 0.9,
+                "top_k": 40,
+                "num_predict": max_tokens,
+            },
+            "stream": False,
+        }
+
+        # Handle response_format parameter
+        if response_format is not None:
+            if isinstance(response_format, dict):
+                # Use the provided schema directly
+                data["format"] = response_format
+            elif response_format == "json":
+                # Legacy support - use generic JSON object
+                data["format"] = {"type": "object"}
+            else:
+                logger.warning(
+                    "Unsupported format type: %s. Ignoring format constraint.",
+                    response_format,
+                )
+
+        logger.debug("Prepared Ollama request data: %s", data)
+        return data
+
+    def _prepare_openai_request(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Union[str, Dict[str, Any], None],
+    ) -> Dict[str, Any]:
+        """Prepare request data for OpenAI-compatible API"""
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "top_p": 1,
+            "stream": False,
+        }
+
+        if max_tokens:
+            data["max_tokens"] = max_tokens
+
+        if response_format:
+            if isinstance(response_format, dict):
+                data["response_format"] = response_format
+            elif response_format == "json":
+                data["response_format"] = {"type": "json_object"}
+
+        return data
+
+    def _parse_response(self, response, provider_type: str) -> Dict[str, Any]:
+        """Parse API response based on provider type"""
+        try:
+            data = response.json()
+
+            logger.info("Raw response data: %s", data)
+
+            # Extract content based on provider type
+            content = None
+            metadata = {}
+
+            if provider_type in ["openai", "openai_compatible"]:
+                if (
+                    data.get("choices")
+                    and data["choices"][0].get("message")
+                    and data["choices"][0]["message"].get("content")
+                ):
+                    content = data["choices"][0]["message"]["content"]
+                    metadata = {
+                        "usage": data.get("usage", {}),
+                        "finish_reason": data["choices"][0].get("finish_reason"),
+                    }
+            elif provider_type == "ollama":
+                if data.get("message") and data["message"].get("content"):
+                    content = data["message"]["content"]
+                    metadata = {
+                        "total_duration": data.get("total_duration"),
+                        "load_duration": data.get("load_duration"),
+                        "prompt_eval_count": data.get("prompt_eval_count"),
+                        "eval_count": data.get("eval_count"),
+                        "eval_duration": data.get("eval_duration"),
+                    }
+
+            if content:
+                return {"success": True, "content": content, "metadata": metadata}
+            else:
+                return {
+                    "success": False,
+                    "error": f"Could not extract content from {provider_type} response format",
+                }
+
+        except Exception as e:
+            return {"success": False, "error": f"Error parsing response: {str(e)}"}
+
+    def get_embeddings(
+        self, texts: List[str], normalize: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Get embeddings for the provided texts (synchronous)
+        """
+        if not self.settings:
+            return {
+                "success": False,
+                "error": "LLM settings not loaded",
+                "embeddings": [],
+                "model": "unknown",
+            }
+
+        try:
+            if self.settings.embeddings_provider_type == "ollama":
+                return self._get_ollama_embeddings(texts, normalize)
+            elif self.settings.embeddings_provider_type == "openai_compatible":
+                return self._get_openai_compatible_embeddings(texts, normalize)
+            else:
+                raise ValueError(
+                    f"Unsupported embeddings provider: {self.settings.embeddings_provider_type}"
+                )
+        except Exception as e:
+            logger.error("Error getting embeddings: %s", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "embeddings": [],
+                "model": self.settings.embeddings_model,
+            }
+
+    def _get_ollama_embeddings(
+        self, texts: List[str], normalize: bool
+    ) -> Dict[str, Any]:
+        """Get embeddings from Ollama (synchronous)"""
+        if not self.settings or not getattr(
+            self.settings, "embeddings_endpoint_url", None
+        ):
+            return {
+                "success": False,
+                "error": "Embeddings settings not loaded or missing embeddings_endpoint_url",
+                "embeddings": [],
+                "model": getattr(self.settings, "embeddings_model", "unknown"),
+            }
+
+        url = f"{self.settings.embeddings_endpoint_url.rstrip('/')}/api/embeddings"
+        all_embeddings = []
+
+        for text in texts:
+            payload = {"model": self.settings.embeddings_model, "prompt": text}
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=60,
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            embedding = result.get("embedding", [])
+
+            if normalize and embedding:
+                import math
+
+                magnitude = math.sqrt(sum(x * x for x in embedding))
+                if magnitude > 0:
+                    embedding = [x / magnitude for x in embedding]
+
+            all_embeddings.append(embedding)
+
+        return {
+            "success": True,
+            "embeddings": all_embeddings,
+            "model": self.settings.embeddings_model,
+            "metadata": {
+                "count": len(all_embeddings),
+                "dimension": len(all_embeddings[0])
+                if all_embeddings and all_embeddings[0]
+                else 0,
+            },
+        }
+
+    def _get_openai_compatible_embeddings(
+        self, texts: List[str], normalize: bool
+    ) -> Dict[str, Any]:
+        """Get embeddings from OpenAI-compatible API (synchronous)"""
+        if not self.settings or not getattr(
+            self.settings, "embeddings_endpoint_url", None
+        ):
+            return {
+                "success": False,
+                "error": "Embeddings settings not loaded or missing embeddings_endpoint_url",
+                "embeddings": [],
+                "model": getattr(self.settings, "embeddings_model", "unknown"),
+            }
+
+        url = f"{self.settings.embeddings_endpoint_url.rstrip('/')}/v1/embeddings"
+
+        payload = {"model": self.settings.embeddings_model, "input": texts}
+        headers = {"Content-Type": "application/json"}
+
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+
+        result = response.json()
+
+        embeddings = []
+        for item in sorted(result["data"], key=lambda x: x["index"]):
+            embedding = item["embedding"]
+
+            if normalize:
+                import math
+
+                magnitude = math.sqrt(sum(x * x for x in embedding))
+                if magnitude > 0:
+                    embedding = [x / magnitude for x in embedding]
+
+            embeddings.append(embedding)
+
+        return {
+            "success": True,
+            "embeddings": embeddings,
+            "model": self.settings.embeddings_model,
+            "metadata": {
+                "usage": result.get("usage", {}),
+                "count": len(embeddings),
+                "dimension": len(embeddings[0]) if embeddings else 0,
+            },
+        }
+
+    def test_connection(self) -> Dict[str, Any]:
+        """Test connection to both LLM and embeddings endpoints"""
+        results = {
+            "llm_connection": False,
+            "embeddings_connection": False,
+            "llm_error": None,
+            "embeddings_error": None,
+        }
+
+        # Test LLM connection
+        try:
+            llm_result = self.query_llm(
+                prompt="Respond with just 'Hello' to test the connection.",
+                temperature=0.1,
+            )
+            results["llm_connection"] = llm_result.get("success", False)
+            if not results["llm_connection"]:
+                results["llm_error"] = llm_result.get("error", "Unknown error")
+        except Exception as e:
+            results["llm_error"] = str(e)
+
+        # Test embeddings connection
+        try:
+            embeddings_result = self.get_embeddings(["test connection"])
+            results["embeddings_connection"] = embeddings_result.get("success", False)
+            if not results["embeddings_connection"]:
+                results["embeddings_error"] = embeddings_result.get(
+                    "error", "Unknown error"
+                )
+        except Exception as e:
+            results["embeddings_error"] = str(e)
+
+        return results
+
+
+# Global instance
+llm_service = LLMService()

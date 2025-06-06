@@ -20,7 +20,11 @@ MEMORY_EXTRACTION_FORMAT = {
                 "items": {"type": "string"},
             },
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "memory_bank": {"type": "string"},
+            "context": {"type": "string"},
+            "connections": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
         },
         "required": ["content", "tags", "confidence"],
     },
@@ -105,7 +109,6 @@ class LLMService:
     """
 
     def __init__(self):
-        self.settings = None
         self._load_settings()
 
     def _load_settings(self):
@@ -339,8 +342,8 @@ class LLMService:
             ],
             "options": {
                 "temperature": temperature,
-                "top_p": self.settings.llm_top_p,
-                "top_k": self.settings.llm_top_k,
+                "top_p": int(self.settings.llm_top_p),
+                "top_k": float(self.settings.llm_top_k),
                 "num_predict": max_tokens,
             },
             "stream": False,
@@ -373,8 +376,8 @@ class LLMService:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
-            "top_p": self.settings.llm_top_p,
-            "top_k": self.settings.llm_top_k,
+            "top_p": int(self.settings.llm_top_p),
+            "top_k": float(self.settings.llm_top_k),
             "stream": False,
         }
 

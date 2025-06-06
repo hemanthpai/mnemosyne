@@ -2,7 +2,16 @@ export interface Memory {
     id: string;
     user_id: string;
     content: string;
-    metadata: Record<string, any>;
+    metadata: {
+        tags: string[];
+        confidence: number;
+        context?: string;
+        connections?: string[];
+        extraction_source?: string;
+        model_used?: string;
+        created_at?: string;
+        [key: string]: any;
+    };
     created_at: string;
     updated_at: string;
 }
@@ -102,4 +111,17 @@ export interface DeleteAllMemoriesResponse {
     error?: string;
     deleted_count: number;
     user_id?: string;
+}
+
+export interface MemoryStatsData {
+    success: boolean;
+    total_memories: number;
+    domain_distribution: Record<string, number>;
+    top_tags: Record<string, number>;
+    vector_collection_info?: {
+        points_count: number;
+        vectors_count?: number;
+        status?: string;
+        config?: Record<string, any>;
+    };
 }

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { extractMemories, retrieveMemories } from "../services/api";
 import { ExtractMemoriesResponse, RetrieveMemoriesResponse } from "../types";
 
@@ -19,6 +19,23 @@ const DevToolsPage: React.FC = () => {
     const [retrievalResult, setRetrievalResult] =
         useState<RetrieveMemoriesResponse | null>(null);
     const [retrievalError, setRetrievalError] = useState<string | null>(null);
+    const [searchParams] = useSearchParams();
+
+    useEffect(() => {
+        // Load initial data from search params if available
+        const initialExtractionText = searchParams.get("extractionText") || "";
+        const initialExtractionUserId =
+            searchParams.get("extractionUserId") || "";
+        const initialRetrievalPrompt =
+            searchParams.get("retrievalPrompt") || "";
+        const initialRetrievalUserId =
+            searchParams.get("retrievalUserId") || "";
+
+        setExtractionText(initialExtractionText);
+        setExtractionUserId(initialExtractionUserId);
+        setRetrievalPrompt(initialRetrievalPrompt);
+        setRetrievalUserId(initialRetrievalUserId);
+    }, [searchParams]);
 
     const handleExtractMemories = async () => {
         if (!extractionText.trim() || !extractionUserId.trim()) {
@@ -98,20 +115,19 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
 
     return (
         <div className="min-h-screen bg-gray-50">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Header */}
-                <div className="mb-8">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            {/* Header */}
+            <header className="bg-white shadow-sm">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex justify-between items-center py-6">
+                        <div className="flex items-center">
+                            <h1 className="text-3xl font-bold text-gray-900">
                                 DevTools
                             </h1>
-                            <p className="text-gray-600">
-                                Test memory extraction and retrieval
-                                functionality
-                            </p>
+                            <span className="ml-3 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
+                                Testing
+                            </span>
                         </div>
-                        <div className="flex space-x-4">
+                        <div className="flex space-x-3">
                             <button
                                 onClick={loadSampleData}
                                 className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors duration-200"
@@ -152,6 +168,21 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                             </Link>
                         </div>
                     </div>
+                </div>
+            </header>
+
+            {/* Main Content */}
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                {/* Description Section */}
+                <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+                    <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                        Memory Testing Tools
+                    </h2>
+                    <p className="text-gray-600">
+                        Test memory extraction and retrieval functionality with
+                        real data. Use the sample data or enter your own to see
+                        how the system processes and retrieves memories.
+                    </p>
                 </div>
 
                 <div className="grid lg:grid-cols-2 gap-8">
@@ -506,7 +537,7 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                         </div>
                     </div>
                 </div>
-            </div>
+            </main>
         </div>
     );
 };

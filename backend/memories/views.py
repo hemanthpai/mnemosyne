@@ -187,11 +187,12 @@ class ExtractMemoriesView(APIView):
                 if not content:
                     continue
 
-                # Prepare metadata
+                # Prepare metadata without memory_bank
                 metadata = {
                     "tags": memory_data.get("tags", []),
-                    "memory_bank": memory_data.get("memory_bank", "General"),
                     "confidence": memory_data.get("confidence", 0.5),
+                    "context": memory_data.get("context", ""),
+                    "connections": memory_data.get("connections", []),
                     "extraction_source": "conversation",
                     "model_used": llm_result.get("model", "unknown"),
                 }
@@ -492,36 +493,33 @@ class MemoryStatsView(APIView):
             # Basic stats
             total_memories = memories.count()
 
-            # Group by memory bank
-            memory_banks = {}
+            # Count tags (remove memory_banks grouping)
             tags_count = {}
+            domain_tags = {}  # Track domain-related tags separately if needed
 
             for memory in memories:
                 metadata = memory.metadata or {}
 
-                # Count by memory bank
-                bank = metadata.get("memory_bank", "General")
-                memory_banks[bank] = memory_banks.get(bank, 0) + 1
-
-                # Count tags
+                # Count all tags
                 tags = metadata.get("tags", [])
                 for tag in tags:
                     tags_count[tag] = tags_count.get(tag, 0) + 1
+                    
+                    # Optionally group domain tags for insights
+                    if tag in ["personal", "professional", "academic", "creative"]:
+                        domain_tags[tag] = domain_tags.get(tag, 0) + 1
 
             # Get vector service stats
             from .vector_service import vector_service
-
             collection_info = vector_service.get_collection_info()
 
             return Response(
                 {
                     "success": True,
                     "total_memories": total_memories,
-                    "memory_banks": memory_banks,
+                    "domain_distribution": domain_tags,  # Replace memory_banks with domain_distribution
                     "top_tags": dict(
-                        sorted(tags_count.items(), key=lambda x: x[1], reverse=True)[
-                            :10
-                        ]
+                        sorted(tags_count.items(), key=lambda x: x[1], reverse=True)[:20]  # Show more tags
                     ),
                     "vector_collection_info": collection_info,
                 }

@@ -76,12 +76,11 @@ class LLMSettings(models.Model):
         default="""You are an automated memory extraction system. Extract user-specific facts, preferences, experiences, and insights as a JSON array.
 
 **OUTPUT REQUIREMENT:**
-Your response must be ONLY a valid JSON array: `[{"content": "...", "tags": [...], "memory_bank": "...", "confidence": float, "context": "...", "connections": [...]}]`
+Your response must be ONLY a valid JSON array: `[{"content": "...", "tags": [...], "confidence": float, "context": "...", "connections": [...]}]`
 
 **JSON STRUCTURE:**
 - **content**: The extracted memory/fact
 - **tags**: Flexible, descriptive tags that capture ALL aspects (not limited to predefined categories)
-- **memory_bank**: "Personal", "Professional", "Academic", "Creative", or "General"
 - **confidence**: 0.0-1.0 confidence score
 - **context**: Brief description of the situation/context where this was mentioned
 - **connections**: List of broader topics/themes this memory relates to
@@ -92,6 +91,7 @@ Your response must be ONLY a valid JSON array: `[{"content": "...", "tags": [...
 - Include preference indicators (loves, dislikes, wants, etc.)
 - Include experience types (attended, performed, learned, etc.)
 - Include emotional context (excited, disappointed, curious, etc.)
+- Include domain tags (personal, professional, academic, creative, etc.) if relevant
 - Think about what future queries might want to find this memory
 
 **EXAMPLES:**
@@ -99,8 +99,7 @@ If user says "I loved Radiohead's performance at Coachella":
 ```json
 [{
   "content": "User loved Radiohead's performance at Coachella",
-  "tags": ["music", "radiohead", "coachella", "festival", "live_performance", "rock", "alternative", "favorite_artist", "concert_experience", "loved"],
-  "memory_bank": "Personal",
+  "tags": ["music", "radiohead", "coachella", "festival", "live_performance", "rock", "alternative", "favorite_artist", "concert_experience", "loved", "personal", "entertainment"],
   "confidence": 0.95,
   "context": "Discussing music festival experience",
   "connections": ["music_taste", "live_music", "festival_experiences", "favorite_bands", "entertainment_preferences"]
@@ -111,8 +110,7 @@ If user says "I'm fascinated by quantum entanglement":
 ```json
 [{
   "content": "User is fascinated by quantum entanglement",
-  "tags": ["physics", "quantum_physics", "quantum_entanglement", "science", "fascinated", "academic_interest", "theoretical_physics", "learning"],
-  "memory_bank": "Academic", 
+  "tags": ["physics", "quantum_physics", "quantum_entanglement", "science", "fascinated", "academic_interest", "theoretical_physics", "learning", "academic", "research"],
   "confidence": 0.9,
   "context": "Expressing scientific interests",
   "connections": ["science_interests", "physics_topics", "learning_preferences", "intellectual_curiosity", "book_recommendations", "educational_content"]

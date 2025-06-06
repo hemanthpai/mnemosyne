@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { getSettings, updateSettings } from "../services/api";
 import { LLMSettings } from "../types";
 
-type SettingsTab = "prompts" | "llm" | "embeddings";
+type SettingsTab = "prompts" | "llm" | "embeddings" | "parameters" | "search";
 
 const SettingsPage: React.FC = () => {
     const [settings, setSettings] = useState<LLMSettings | null>(null);
@@ -63,8 +63,10 @@ const SettingsPage: React.FC = () => {
 
     const tabs = [
         { id: "prompts" as SettingsTab, name: "Prompts", icon: "📝" },
-        { id: "llm" as SettingsTab, name: "LLM Settings", icon: "🤖" },
+        { id: "llm" as SettingsTab, name: "LLM Endpoints", icon: "🤖" },
         { id: "embeddings" as SettingsTab, name: "Embeddings", icon: "🔍" },
+        { id: "parameters" as SettingsTab, name: "LLM Parameters", icon: "⚙️" },
+        { id: "search" as SettingsTab, name: "Search Config", icon: "🎯" },
     ];
 
     if (loading) {
@@ -106,7 +108,8 @@ const SettingsPage: React.FC = () => {
                                     Settings
                                 </h1>
                                 <p className="mt-1 text-sm text-gray-600">
-                                    Configure your LLM endpoints and prompts.
+                                    Configure your LLM endpoints, parameters,
+                                    and prompts.
                                 </p>
                             </div>
                             <Link
@@ -133,7 +136,10 @@ const SettingsPage: React.FC = () => {
 
                     {/* Tabs */}
                     <div className="border-b border-gray-200">
-                        <nav className="flex space-x-8 px-6" aria-label="Tabs">
+                        <nav
+                            className="flex space-x-8 px-6 overflow-x-auto"
+                            aria-label="Tabs"
+                        >
                             {tabs.map((tab) => (
                                 <button
                                     key={tab.id}
@@ -280,10 +286,50 @@ const SettingsPage: React.FC = () => {
                                         queries.
                                     </div>
                                 </div>
+
+                                {/* Semantic Connection Prompt */}
+                                <div className="border-t pt-8">
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Semantic Connection Analysis Prompt
+                                    </h3>
+                                    <textarea
+                                        value={
+                                            settings.semantic_connection_prompt
+                                        }
+                                        onChange={(e) =>
+                                            handleInputChange(
+                                                "semantic_connection_prompt",
+                                                e.target.value
+                                            )
+                                        }
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                                        rows={10}
+                                    />
+                                </div>
+
+                                {/* Memory Summarization Prompt */}
+                                <div className="border-t pt-8">
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Memory Summarization Prompt
+                                    </h3>
+                                    <textarea
+                                        value={
+                                            settings.memory_summarization_prompt
+                                        }
+                                        onChange={(e) =>
+                                            handleInputChange(
+                                                "memory_summarization_prompt",
+                                                e.target.value
+                                            )
+                                        }
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                                        rows={10}
+                                    />
+                                </div>
                             </div>
                         )}
 
-                        {/* LLM Settings Tab */}
+                        {/* LLM Endpoints Tab */}
                         {activeTab === "llm" && (
                             <div className="space-y-6">
                                 <div>
@@ -302,7 +348,7 @@ const SettingsPage: React.FC = () => {
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "extraction_provider_type",
-                                                        e.target.value as any
+                                                        e.target.value
                                                     )
                                                 }
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -403,7 +449,7 @@ const SettingsPage: React.FC = () => {
                             </div>
                         )}
 
-                        {/* Embeddings Settings Tab */}
+                        {/* Embeddings Tab */}
                         {activeTab === "embeddings" && (
                             <div className="space-y-6">
                                 <div>
@@ -422,7 +468,7 @@ const SettingsPage: React.FC = () => {
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "embeddings_provider_type",
-                                                        e.target.value as any
+                                                        e.target.value
                                                     )
                                                 }
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -514,6 +560,307 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 placeholder="30"
                                             />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* LLM Parameters Tab */}
+                        {activeTab === "parameters" && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        LLM Generation Parameters
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Temperature
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="2"
+                                                value={settings.llm_temperature}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "llm_temperature",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Controls randomness (0.0-2.0).
+                                                Lower = more deterministic.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Top P
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.05"
+                                                min="0"
+                                                max="1"
+                                                value={settings.llm_top_p}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "llm_top_p",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Nucleus sampling (0.0-1.0).
+                                                Controls diversity of output.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Top K
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                value={settings.llm_top_k}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "llm_top_k",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Limits the number of tokens
+                                                considered for each step.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Max Tokens
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                value={settings.llm_max_tokens}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "llm_max_tokens",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Maximum number of tokens to
+                                                generate.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Search Configuration Tab */}
+                        {activeTab === "search" && (
+                            <div className="space-y-6">
+                                {/* Semantic Enhancement */}
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Semantic Enhancement
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="md:col-span-2">
+                                            <label className="flex items-center">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={
+                                                        settings.enable_semantic_connections
+                                                    }
+                                                    onChange={(e) =>
+                                                        handleInputChange(
+                                                            "enable_semantic_connections",
+                                                            e.target.checked.toString()
+                                                        )
+                                                    }
+                                                    className="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+                                                />
+                                                <span className="ml-2 text-sm text-gray-700">
+                                                    Enable semantic connection
+                                                    enhancement
+                                                </span>
+                                            </label>
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Find additional memories through
+                                                semantic analysis
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Enhancement Threshold
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                value={
+                                                    settings.semantic_enhancement_threshold
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "semantic_enhancement_threshold",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Minimum memories needed to
+                                                trigger enhancement
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Search Type Thresholds */}
+                                <div className="border-t pt-6">
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Search Type Thresholds
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Direct Search
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="1"
+                                                value={
+                                                    settings.search_threshold_direct
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "search_threshold_direct",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Threshold for explicit matches
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Semantic Search
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="1"
+                                                value={
+                                                    settings.search_threshold_semantic
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "search_threshold_semantic",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Threshold for related concepts
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Experiential Search
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="1"
+                                                value={
+                                                    settings.search_threshold_experiential
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "search_threshold_experiential",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Threshold for experience-based
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Contextual Search
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="1"
+                                                value={
+                                                    settings.search_threshold_contextual
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "search_threshold_contextual",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Threshold for situational
+                                                relevance
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Interest Search
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="1"
+                                                value={
+                                                    settings.search_threshold_interest
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "search_threshold_interest",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Threshold for general interests
+                                            </p>
                                         </div>
                                     </div>
                                 </div>

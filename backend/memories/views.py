@@ -146,7 +146,6 @@ class ExtractMemoriesView(APIView):
             llm_result = llm_service.query_llm(
                 system_prompt=system_prompt_with_date,
                 prompt=conversation_text,
-                temperature=0.1,  # Low temperature for consistent extraction
                 response_format=MEMORY_EXTRACTION_FORMAT,
             )
 
@@ -305,7 +304,6 @@ class RetrieveMemoriesView(APIView):
             llm_result = llm_service.query_llm(
                 prompt=prompt,
                 system_prompt=search_prompt,
-                temperature=0.1,
                 response_format=MEMORY_SEARCH_FORMAT,
             )
 
@@ -343,8 +341,13 @@ class RetrieveMemoriesView(APIView):
                 threshold=threshold,
             )
 
-            # Step 4: Find additional semantic connections if we have some results
-            if relevant_memories and len(relevant_memories) >= 3:
+            # Step 4: Find additional semantic connections if enabled and we have enough results
+            settings = LLMSettings.get_settings()
+            if (
+                settings.enable_semantic_connections
+                and relevant_memories
+                and len(relevant_memories) >= settings.semantic_enhancement_threshold
+            ):
                 logger.info("Finding additional semantic connections...")
                 relevant_memories = memory_search_service.find_semantic_connections(
                     memories=relevant_memories,
@@ -354,6 +357,13 @@ class RetrieveMemoriesView(APIView):
                 logger.info(
                     "After semantic connection analysis: %d memories",
                     len(relevant_memories),
+                )
+            else:
+                logger.info(
+                    "Skipping semantic connections: enabled=%s, memories=%d, threshold=%d",
+                    settings.enable_semantic_connections,
+                    len(relevant_memories),
+                    settings.semantic_enhancement_threshold,
                 )
 
             # Step 5: Generate memory summary for AI assistance

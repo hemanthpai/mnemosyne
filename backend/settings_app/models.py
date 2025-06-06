@@ -30,7 +30,48 @@ class LLMSettings(models.Model):
     )
     embeddings_timeout = models.IntegerField(default=30)  # seconds
 
-    # Update the memory extraction prompt to be more flexible
+    # LLM Generation Parameters
+    llm_temperature = models.FloatField(
+        default=0.6, help_text="Controls randomness (0.0-2.0)"
+    )
+    llm_top_p = models.FloatField(
+        default=0.95, help_text="Controls diversity via nucleus sampling (0.0-1.0)"
+    )
+    llm_top_k = models.IntegerField(
+        default=20, help_text="Controls diversity via top-k sampling"
+    )
+    llm_max_tokens = models.IntegerField(
+        default=2048, help_text="Maximum tokens to generate"
+    )
+
+    # Search Configuration
+    enable_semantic_connections = models.BooleanField(
+        default=True,
+        help_text="Enable semantic connection enhancement for memory search",
+    )
+    semantic_enhancement_threshold = models.IntegerField(
+        default=3,
+        help_text="Minimum number of initial results needed to trigger semantic enhancement",
+    )
+
+    # Search Type Thresholds
+    search_threshold_direct = models.FloatField(
+        default=0.7, help_text="Similarity threshold for direct searches"
+    )
+    search_threshold_semantic = models.FloatField(
+        default=0.5, help_text="Similarity threshold for semantic searches"
+    )
+    search_threshold_experiential = models.FloatField(
+        default=0.6, help_text="Similarity threshold for experiential searches"
+    )
+    search_threshold_contextual = models.FloatField(
+        default=0.4, help_text="Similarity threshold for contextual searches"
+    )
+    search_threshold_interest = models.FloatField(
+        default=0.5, help_text="Similarity threshold for interest searches"
+    )
+
+    # Memory extraction prompt
     memory_extraction_prompt = models.TextField(
         default="""You are an automated memory extraction system. Extract user-specific facts, preferences, experiences, and insights as a JSON array.
 
@@ -81,7 +122,7 @@ If user says "I'm fascinated by quantum entanglement":
 Analyze the user message and extract memories with rich, flexible tagging."""
     )
 
-    # Update memory search prompt for better semantic understanding
+    # Memory search prompt
     memory_search_prompt = models.TextField(
         default="""You are an intelligent memory search system. Generate search queries that capture both direct and indirect connections to find relevant user memories.
 
@@ -137,6 +178,49 @@ User asks: "Recommend some books"
 ```
 
 Generate comprehensive search queries that find both obvious and subtle connections."""
+    )
+
+    # Semantic connection analysis prompt
+    semantic_connection_prompt = models.TextField(
+        default="""Analyze the found memories against the user's query to identify subtle semantic connections that might reveal additional relevant memories.
+
+**TASK:** 
+Determine if there are subtle connections between these memories and the user's query that suggest additional search terms. Look for:
+1. Implicit interests revealed by the memories
+2. Related topics that weren't directly searched
+3. Contextual connections (e.g., if user went to a music festival, they might have favorite artists from that event)
+4. Experience-based connections (e.g., academic background suggesting reading interests)
+
+**OUTPUT REQUIREMENT:**
+Respond with ONLY a JSON object with:
+- **has_connections**: boolean indicating if connections were found
+- **additional_searches**: array of search objects with search_query, rationale, and confidence
+- **reasoning**: explanation of the analysis"""
+    )
+
+    # Memory summarization prompt
+    memory_summarization_prompt = models.TextField(
+        default="""You are an expert memory analyst tasked with summarizing only the relevant memories based on a user's query. 
+Your **ONLY** goal is to extract actionable context from the provided memories that can help answer or respond to the user's query.
+
+**TASK:**
+1. From the provided memories, first identify all the memories that are relevant to the user's query.
+2. Then, create a comprehensive summary of only the relevant memories, focusing on actionable context.
+3. Any memory that does not provide actionable context should be excluded from the summary.
+
+**ANALYSIS REQUIREMENTS:**
+- Focus on actionable insights that directly address the user's query  
+- Include supporting context and background information
+- Identify patterns across multiple memories
+- Classify memories by relevance level (high/moderate/contextual)
+
+**OUTPUT REQUIREMENT:**
+Respond with ONLY a JSON object with:
+- **summary**: comprehensive text summary
+- **key_points**: array of key insights
+- **relevant_context**: supporting context information
+- **confidence**: confidence score (0.0-1.0)
+- **memory_usage**: object with total_memories, highly_relevant, moderately_relevant, context_relevant counts"""
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

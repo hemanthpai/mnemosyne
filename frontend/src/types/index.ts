@@ -8,18 +8,42 @@ export interface Memory {
 }
 
 export interface LLMSettings {
+    // LLM Endpoints
     extraction_endpoint_url: string;
     extraction_model: string;
     extraction_provider_type: 'openai' | 'openai_compatible' | 'ollama';
     extraction_endpoint_api_key: string;
     extraction_timeout: number;
+    
+    // Embeddings
     embeddings_endpoint_url: string;
     embeddings_model: string;
     embeddings_provider_type: 'openai_compatible' | 'ollama';
     embeddings_endpoint_api_key: string;
     embeddings_timeout: number;
+    
+    // LLM Parameters
+    llm_temperature: number;
+    llm_top_p: number;
+    llm_top_k: number;
+    llm_max_tokens: number;
+    
+    // Search Configuration
+    enable_semantic_connections: boolean;
+    semantic_enhancement_threshold: number;
+    search_threshold_direct: number;
+    search_threshold_semantic: number;
+    search_threshold_experiential: number;
+    search_threshold_contextual: number;
+    search_threshold_interest: number;
+    
+    // Prompts
     memory_extraction_prompt: string;
     memory_search_prompt: string;
+    semantic_connection_prompt: string;
+    memory_summarization_prompt: string;
+    
+    // Metadata
     created_at: string;
     updated_at: string;
 }

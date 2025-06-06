@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, List, Union  # Add Union import
+from typing import Any, Dict, List, Optional, Union  # Add Union import
 
 import requests
 from django.utils import timezone
@@ -133,23 +133,13 @@ class LLMService:
         prompt: str,
         user_input: str = "",
         system_prompt: str = "",
-        temperature: float = 0.1,
-        max_tokens: int = 2048,
-        response_format: Union[
-            str, Dict[str, Any], None
-        ] = None,  # Add response_format parameter
+        response_format: Union[str, Dict[str, Any], None] = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        temperature: Optional[float] = None,  # Make optional
+        max_tokens: Optional[int] = None,  # Make optional
     ) -> Dict[str, Any]:
-        """
-        Query LLM with retry logic, supporting multiple provider types.
-
-        Args:
-            format: Output format specification. Can be:
-                - None: No format constraints
-                - "json": Force JSON output (legacy, maps to generic JSON object)
-                - Dict: Specific JSON schema for structured output
-        """
+        """Query LLM with settings from database"""
         if not self.settings:
             return {
                 "success": False,
@@ -157,6 +147,12 @@ class LLMService:
                 "response": "",
                 "model": "unknown",
             }
+
+        # Use settings values if not provided
+        if temperature is None or not isinstance(temperature, (float, int)):
+            temperature = float(self.settings.llm_temperature)
+        if max_tokens is None or not isinstance(max_tokens, int):
+            max_tokens = int(self.settings.llm_max_tokens)
 
         provider_type = self.settings.extraction_provider_type
         model = self.settings.extraction_model
@@ -333,7 +329,7 @@ class LLMService:
         max_tokens: int,
         response_format: Union[str, Dict[str, Any], None] = None,
     ) -> Dict[str, Any]:
-        """Prepare request data for Ollama API"""
+        """Prepare request data for Ollama API with settings"""
 
         data = {
             "model": model,
@@ -342,9 +338,9 @@ class LLMService:
                 {"role": "user", "content": user_prompt},
             ],
             "options": {
-                # "temperature": temperature,
-                # "top_p": 0.9,
-                # "top_k": 40,
+                "temperature": temperature,
+                "top_p": self.settings.llm_top_p,
+                "top_k": self.settings.llm_top_k,
                 "num_predict": max_tokens,
             },
             "stream": False,
@@ -353,16 +349,9 @@ class LLMService:
         # Handle response_format parameter
         if response_format is not None:
             if isinstance(response_format, dict):
-                # Use the provided schema directly
                 data["format"] = response_format
             elif response_format == "json":
-                # Legacy support - use generic JSON object
                 data["format"] = {"type": "object"}
-            else:
-                logger.warning(
-                    "Unsupported format type: %s. Ignoring format constraint.",
-                    response_format,
-                )
 
         logger.info("Prepared Ollama request data: %s", data)
         return data
@@ -376,7 +365,7 @@ class LLMService:
         max_tokens: int,
         response_format: Union[str, Dict[str, Any], None],
     ) -> Dict[str, Any]:
-        """Prepare request data for OpenAI-compatible API"""
+        """Prepare request data for OpenAI-compatible API with settings"""
         data = {
             "model": model,
             "messages": [
@@ -384,7 +373,8 @@ class LLMService:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
-            "top_p": 1,
+            "top_p": self.settings.llm_top_p,
+            "top_k": self.settings.llm_top_k,
             "stream": False,
         }
 

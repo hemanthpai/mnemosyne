@@ -222,13 +222,17 @@ class MemorySearchService:
         return variations
 
     def _get_threshold_for_search_type(self, search_type: str) -> float:
-        """Get similarity threshold based on search type"""
+        """Get similarity threshold based on search type from settings"""
+        from settings_app.models import LLMSettings
+
+        settings = LLMSettings.get_settings()
+
         thresholds = {
-            "direct": 0.7,
-            "semantic": 0.5,
-            "experiential": 0.6,
-            "contextual": 0.4,
-            "interest": 0.5,
+            "direct": settings.search_threshold_direct,
+            "semantic": settings.search_threshold_semantic,
+            "experiential": settings.search_threshold_experiential,
+            "contextual": settings.search_threshold_contextual,
+            "interest": settings.search_threshold_interest,
         }
         return thresholds.get(search_type, 0.6)
 
@@ -292,33 +296,36 @@ class MemorySearchService:
         self, memories: List[Memory], original_query: str, user_id: str
     ) -> List[Memory]:
         """Find additional semantic connections using LLM analysis"""
-        if len(memories) < 3:  # Only run if we have some initial results
+        from settings_app.models import LLMSettings
+
+        settings = LLMSettings.get_settings()
+
+        # Check if semantic connections are enabled
+        if not settings.enable_semantic_connections:
+            logger.info("Semantic connections disabled in settings")
             return memories
 
-        # Ask LLM to find connections using proper format
+        # Check if we have enough results to trigger enhancement
+        if len(memories) < settings.semantic_enhancement_threshold:
+            logger.info(
+                f"Not enough memories ({len(memories)}) to trigger semantic enhancement (threshold: {settings.semantic_enhancement_threshold})"
+            )
+            return memories
+
+        # Use the configurable prompt
         memory_summaries = [f"- {m.content}" for m in memories]
-        analysis_prompt = f"""Analyze the found memories against the user's query to identify subtle semantic connections that might reveal additional relevant memories.
+        analysis_prompt = f"""{settings.semantic_connection_prompt}
 
 **USER QUERY:** {original_query}
 
 **FOUND MEMORIES:**
-{chr(10).join(memory_summaries)}
-
-**TASK:** 
-Determine if there are subtle connections between these memories and the user's query that suggest additional search terms. Look for:
-1. Implicit interests revealed by the memories
-2. Related topics that weren't directly searched
-3. Contextual connections (e.g., if user went to a music festival, they might have favorite artists from that event)
-4. Experience-based connections (e.g., academic background suggesting reading interests)
-
-**OUTPUT REQUIREMENT:**
-Respond with ONLY a JSON object following this exact structure."""
+{chr(10).join(memory_summaries)}"""
 
         from .llm_service import SEMANTIC_CONNECTION_FORMAT, llm_service
 
         llm_result = llm_service.query_llm(
             prompt=analysis_prompt,
-            temperature=0.3,
+            temperature=settings.llm_temperature,
             response_format=SEMANTIC_CONNECTION_FORMAT,
         )
 
@@ -365,6 +372,10 @@ Respond with ONLY a JSON object following this exact structure."""
         self, memories: List[Memory], user_query: str
     ) -> Dict[str, Any]:
         """Analyze and summarize relevant memories for the user's query"""
+        from settings_app.models import LLMSettings
+
+        settings = LLMSettings.get_settings()
+
         if not memories:
             return {
                 "summary": "No relevant memories found.",
@@ -386,35 +397,19 @@ Respond with ONLY a JSON object following this exact structure."""
 
         memories_text = "\n".join(memory_content)
 
-        summarization_prompt = f"""
-        You are an expert memory analyst tasked with summarizing only the relevant memories based on a user's query. 
-        Your **ONLY** goal is to extract actionable context from the provided memories that can help answer or respond to the user's query.
-        Analyze the following memories and extract all relevant information that would help respond to the user's query.
+        # Use the configurable prompt
+        summarization_prompt = f"""{settings.memory_summarization_prompt}
 
 **USER QUERY:** {user_query}
 
 **MEMORIES TO ANALYZE:**
-{memories_text}
-
-**TASK:**
-1. From the provided memories, first identify all the memories that are relevant to the user's query.
-2. Then, create a comprehensive summary of only the relevant memories, focusing on actionable context.
-3. Any memory that does not provide actionable context should be excluded from the summary.
-
-**ANALYSIS REQUIREMENTS:**
-- Focus on actionable insights that directly address the user's query  
-- Include supporting context and background information
-- Identify patterns across multiple memories
-- Classify memories by relevance level (high/moderate/contextual)
-
-**OUTPUT REQUIREMENT:**
-Respond with ONLY a JSON object following the exact structure specified."""
+{memories_text}"""
 
         from .llm_service import MEMORY_SUMMARY_FORMAT, llm_service
 
         llm_result = llm_service.query_llm(
             prompt=summarization_prompt,
-            temperature=0.2,  # Low temperature for consistent analysis
+            temperature=settings.llm_temperature,  # Lower temperature for analysis
             response_format=MEMORY_SUMMARY_FORMAT,
         )
 

@@ -477,14 +477,12 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                     conversations
                                 </li>
                                 <li>
-                                    • Currently returns stub data (not
-                                    implemented)
-                                </li>
-                                <li>
-                                    • Will use LLM to identify memorable content
+                                    • Uses the specified LLM to identify
+                                    memorable content
                                 </li>
                                 <li>
                                     • Stores extracted memories with embeddings
+                                    for fast retrieval
                                 </li>
                             </ul>
                         </div>
@@ -497,14 +495,12 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                     • Finds relevant memories based on prompts
                                 </li>
                                 <li>
-                                    • Currently returns stub data (not
-                                    implemented)
-                                </li>
-                                <li>
-                                    • Will use semantic search with embeddings
+                                    • Uses semantic search with embeddings for
+                                    speed and accuracy
                                 </li>
                                 <li>
                                     • Returns ranked list of relevant memories
+                                    along with a summary and context
                                 </li>
                             </ul>
                         </div>

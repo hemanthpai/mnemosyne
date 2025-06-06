@@ -4,6 +4,8 @@ import TagInput from "../components/TagInput";
 import { getSettings, updateSettings } from "../services/api";
 import { LLMSettings } from "../types";
 
+type SettingsTab = "prompts" | "llm" | "embeddings" | "general";
+
 const SettingsPage: React.FC = () => {
     const [settings, setSettings] = useState<LLMSettings | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -11,7 +13,9 @@ const SettingsPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<boolean>(false);
     const [memoryCategories, setMemoryCategories] = useState<string[]>([]);
-    const [showPreview, setShowPreview] = useState(false);
+    const [activeTab, setActiveTab] = useState<SettingsTab>("prompts");
+    const [showExtractionPreview, setShowExtractionPreview] = useState(false);
+    const [showSearchPreview, setShowSearchPreview] = useState(false);
 
     // Track template variables
     const [templateVariables] = useState([
@@ -20,45 +24,48 @@ const SettingsPage: React.FC = () => {
         "{{ memory_categories }}",
     ]);
 
-    // Ref to track if template variables are present
-    const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+    // Refs for textareas
+    const extractionPromptRef = useRef<HTMLTextAreaElement>(null);
+    const searchPromptRef = useRef<HTMLTextAreaElement>(null);
 
-    // Function to check if template variables are present in prompt
+    // Template variable functions
     const hasTemplateVariables = (prompt: string) => {
         return templateVariables.some((variable) => prompt.includes(variable));
     };
 
-    // Function to suggest adding template variables if missing
     const suggestTemplateVariables = (prompt: string) => {
-        const missing = templateVariables.filter(
+        return templateVariables.filter(
             (variable) => !prompt.includes(variable)
         );
-        return missing;
-    };
-
-    // Handle prompt change with template variable checking
-    const handlePromptChange = (value: string) => {
-        if (!settings) return;
-        setSettings({ ...settings, memory_extraction_prompt: value });
     };
 
     // Insert template variable at cursor position
-    const insertTemplateVariable = (variable: string) => {
-        if (!promptTextareaRef.current || !settings) return;
+    const insertTemplateVariable = (
+        variable: string,
+        field: "extraction" | "search"
+    ) => {
+        const textarea =
+            field === "extraction"
+                ? extractionPromptRef.current
+                : searchPromptRef.current;
+        const promptField =
+            field === "extraction"
+                ? "memory_extraction_prompt"
+                : "memory_search_prompt";
 
-        const textarea = promptTextareaRef.current;
+        if (!textarea || !settings) return;
+
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
-        const currentPrompt = settings.memory_extraction_prompt;
+        const currentPrompt = settings[promptField];
 
         const newPrompt =
             currentPrompt.substring(0, start) +
             variable +
             currentPrompt.substring(end);
 
-        setSettings({ ...settings, memory_extraction_prompt: newPrompt });
+        setSettings({ ...settings, [promptField]: newPrompt });
 
-        // Restore cursor position after the inserted variable
         setTimeout(() => {
             textarea.focus();
             textarea.setSelectionRange(
@@ -68,11 +75,11 @@ const SettingsPage: React.FC = () => {
         }, 0);
     };
 
-    // Function to preview rendered template (client-side approximation)
-    const getPreviewPrompt = () => {
+    // Preview functions
+    const getPreviewPrompt = (prompt: string) => {
         if (!settings) return "";
 
-        let preview = settings.memory_extraction_prompt;
+        let preview = prompt;
         const categoriesJson = memoryCategories
             .map((cat) => `"${cat}"`)
             .join(", ");
@@ -117,16 +124,21 @@ const SettingsPage: React.FC = () => {
         e.preventDefault();
         if (!settings) return;
 
-        // Warn if template variables are missing
-        const missing = suggestTemplateVariables(
+        // Validate template variables for both prompts
+        const extractionMissing = suggestTemplateVariables(
             settings.memory_extraction_prompt
         );
-        if (missing.length === templateVariables.length) {
+        const searchMissing = suggestTemplateVariables(
+            settings.memory_search_prompt
+        );
+
+        if (
+            extractionMissing.length === templateVariables.length ||
+            searchMissing.length === templateVariables.length
+        ) {
             const proceed = window.confirm(
-                `Warning: Your prompt is missing template variables: ${missing.join(
-                    ", "
-                )}\n\n` +
-                    "Without specifying at least one of these variables, memory categories won't be dynamically inserted. As a result, no memories will be extracted. " +
+                "Warning: One or more prompts are missing template variables.\n\n" +
+                    "Without these variables, memory categories won't be dynamically inserted. " +
                     "Continue saving anyway?"
             );
             if (!proceed) return;
@@ -158,6 +170,13 @@ const SettingsPage: React.FC = () => {
         setSettings({ ...settings, [field]: value });
     };
 
+    const tabs = [
+        { id: "prompts" as SettingsTab, name: "Prompts", icon: "📝" },
+        { id: "llm" as SettingsTab, name: "LLM Settings", icon: "🤖" },
+        { id: "embeddings" as SettingsTab, name: "Embeddings", icon: "🔍" },
+        { id: "general" as SettingsTab, name: "General", icon: "⚙️" },
+    ];
+
     if (loading) {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -178,46 +197,38 @@ const SettingsPage: React.FC = () => {
                         to="/"
                         className="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200"
                     >
-                        <svg
-                            className="mr-2 w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                            />
-                        </svg>
-                        Back to Home
+                        ← Back to Home
                     </Link>
                 </div>
             </div>
         );
     }
 
-    const missingVariables = settings
-        ? suggestTemplateVariables(settings.memory_extraction_prompt)
-        : [];
-    const hasVariables = settings
-        ? hasTemplateVariables(settings.memory_extraction_prompt)
-        : false;
+    const extractionMissingVars = suggestTemplateVariables(
+        settings.memory_extraction_prompt
+    );
+    const searchMissingVars = suggestTemplateVariables(
+        settings.memory_search_prompt
+    );
+    const extractionHasVars = hasTemplateVariables(
+        settings.memory_extraction_prompt
+    );
+    const searchHasVars = hasTemplateVariables(settings.memory_search_prompt);
 
     return (
         <div className="min-h-screen bg-gray-50">
-            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 <div className="bg-white shadow rounded-lg">
+                    {/* Header */}
                     <div className="px-6 py-4 border-b border-gray-200">
                         <div className="flex items-center justify-between">
                             <div>
                                 <h1 className="text-2xl font-bold text-gray-900">
-                                    LLM Settings
+                                    Settings
                                 </h1>
                                 <p className="mt-1 text-sm text-gray-600">
-                                    Configure your LLM endpoints and models for
-                                    memory extraction and retrieval.
+                                    Configure your LLM endpoints, prompts, and
+                                    system preferences.
                                 </p>
                             </div>
                             <Link
@@ -242,145 +253,71 @@ const SettingsPage: React.FC = () => {
                         </div>
                     </div>
 
-                    <form
-                        onSubmit={handleSubmit}
-                        className="px-6 py-4 space-y-6"
-                    >
-                        {/* Memory Extraction Settings */}
-                        <div className="border-b border-gray-200 pb-6">
-                            <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                Memory Extraction LLM
-                            </h3>
+                    {/* Tabs */}
+                    <div className="border-b border-gray-200">
+                        <nav className="flex space-x-8 px-6" aria-label="Tabs">
+                            {tabs.map((tab) => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`${
+                                        activeTab === tab.id
+                                            ? "border-blue-500 text-blue-600"
+                                            : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                                    } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2`}
+                                >
+                                    <span>{tab.icon}</span>
+                                    <span>{tab.name}</span>
+                                </button>
+                            ))}
+                        </nav>
+                    </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <form onSubmit={handleSubmit} className="px-6 py-6">
+                        {/* Prompts Tab */}
+                        {activeTab === "prompts" && (
+                            <div className="space-y-8">
+                                {/* Memory Extraction Prompt */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Provider Type
-                                    </label>
-                                    <select
-                                        value={
-                                            settings.extraction_provider_type
-                                        }
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "extraction_provider_type",
-                                                e.target.value as any
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    >
-                                        <option value="openai">OpenAI</option>
-                                        <option value="openai_compatible">
-                                            OpenAI Compatible
-                                        </option>
-                                        <option value="ollama">Ollama</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Model
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={settings.extraction_model}
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "extraction_model",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="e.g., gpt-4, llama2"
-                                    />
-                                </div>
-
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Endpoint URL
-                                    </label>
-                                    <input
-                                        type="url"
-                                        value={settings.extraction_endpoint_url}
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "extraction_endpoint_url",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="http://localhost:11434"
-                                    />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        API Key
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={
-                                            settings.extraction_endpoint_api_key
-                                        }
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "extraction_endpoint_api_key",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="Your API key for the LLM endpoint"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Timeout (seconds)
-                                    </label>
-                                    <input
-                                        type="number"
-                                        value={settings.extraction_timeout}
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "extraction_timeout",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="Timeout for LLM requests"
-                                    />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <label className="block text-sm font-medium text-gray-700">
-                                            Memory Extraction Prompt
-                                        </label>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div>
+                                            <h3 className="text-lg font-medium text-gray-900">
+                                                Memory Extraction Prompt
+                                            </h3>
+                                            <p className="text-sm text-gray-600">
+                                                Prompt used to extract memories
+                                                from conversations
+                                            </p>
+                                        </div>
                                         <div className="flex items-center space-x-2">
                                             <button
                                                 type="button"
                                                 onClick={() =>
-                                                    setShowPreview(!showPreview)
+                                                    setShowExtractionPreview(
+                                                        !showExtractionPreview
+                                                    )
                                                 }
                                                 className="text-sm text-blue-600 hover:text-blue-800"
                                             >
-                                                {showPreview
+                                                {showExtractionPreview
                                                     ? "Hide Preview"
                                                     : "Show Preview"}
                                             </button>
-                                            {!hasVariables && (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                                    Missing template variables
-                                                </span>
-                                            )}
-                                            {hasVariables && (
+                                            {extractionHasVars ? (
                                                 <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                                                     ✓ Template variables
                                                     detected
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                                    Missing template variables
                                                 </span>
                                             )}
                                         </div>
                                     </div>
 
-                                    {/* Template variable insertion buttons */}
-                                    <div className="mb-2 flex flex-wrap gap-2">
+                                    {/* Template variable buttons */}
+                                    <div className="mb-3 flex flex-wrap gap-2">
                                         <span className="text-xs text-gray-600">
                                             Insert template variables:
                                         </span>
@@ -390,11 +327,11 @@ const SettingsPage: React.FC = () => {
                                                 type="button"
                                                 onClick={() =>
                                                     insertTemplateVariable(
-                                                        variable
+                                                        variable,
+                                                        "extraction"
                                                     )
                                                 }
                                                 className="inline-flex items-center px-2 py-1 rounded text-xs font-mono bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-                                                title={`Insert ${variable}`}
                                             >
                                                 {variable}
                                             </button>
@@ -402,31 +339,34 @@ const SettingsPage: React.FC = () => {
                                     </div>
 
                                     <textarea
-                                        ref={promptTextareaRef}
+                                        ref={extractionPromptRef}
                                         value={
                                             settings.memory_extraction_prompt
                                         }
                                         onChange={(e) =>
-                                            handlePromptChange(e.target.value)
+                                            handleInputChange(
+                                                "memory_extraction_prompt",
+                                                e.target.value
+                                            )
                                         }
                                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
-                                        rows={12}
+                                        rows={20}
                                         placeholder="Prompt for the LLM to extract memories from conversations"
                                     />
 
-                                    {/* Preview section */}
-                                    {showPreview && (
-                                        <div className="mb-4 p-4 bg-gray-50 border rounded-md">
+                                    {showExtractionPreview && (
+                                        <div className="mt-4 p-4 bg-gray-50 border rounded-md">
                                             <div className="text-sm font-medium text-gray-700 mb-2">
                                                 Template Preview:
                                             </div>
                                             <pre className="text-xs text-gray-600 whitespace-pre-wrap overflow-auto max-h-64">
-                                                {getPreviewPrompt()}
+                                                {getPreviewPrompt(
+                                                    settings.memory_extraction_prompt
+                                                )}
                                             </pre>
                                         </div>
                                     )}
 
-                                    {/* Template variable help */}
                                     <div className="mt-2 text-xs text-gray-500 space-y-1">
                                         <div className="font-medium">
                                             Available template variables:
@@ -436,16 +376,14 @@ const SettingsPage: React.FC = () => {
                                             <code className="bg-gray-100 px-1 rounded">
                                                 {"{{ memory_categories_json }}"}
                                             </code>{" "}
-                                            - JSON array format: ["identity",
-                                            "behavior"]
+                                            - JSON array format
                                         </div>
                                         <div>
                                             •{" "}
                                             <code className="bg-gray-100 px-1 rounded">
                                                 {"{{ memory_categories_list }}"}
                                             </code>{" "}
-                                            - Comma-separated: identity,
-                                            behavior
+                                            - Comma-separated list
                                         </div>
                                         <div>
                                             •{" "}
@@ -454,136 +392,403 @@ const SettingsPage: React.FC = () => {
                                             </code>{" "}
                                             - Python list format
                                         </div>
-                                        {missingVariables.length > 0 && (
+                                        {extractionMissingVars.length > 0 && (
                                             <div className="text-yellow-600 font-medium">
-                                                Missing variables:{" "}
-                                                {missingVariables.join(", ")}
+                                                Missing:{" "}
+                                                {extractionMissingVars.join(
+                                                    ", "
+                                                )}
                                             </div>
                                         )}
                                     </div>
                                 </div>
+
+                                {/* Memory Search Prompt */}
+                                <div className="border-t pt-8">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div>
+                                            <h3 className="text-lg font-medium text-gray-900">
+                                                Memory Search Prompt
+                                            </h3>
+                                            <p className="text-sm text-gray-600">
+                                                Prompt used to generate search
+                                                queries for retrieving relevant
+                                                memories
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center space-x-2">
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    setShowSearchPreview(
+                                                        !showSearchPreview
+                                                    )
+                                                }
+                                                className="text-sm text-blue-600 hover:text-blue-800"
+                                            >
+                                                {showSearchPreview
+                                                    ? "Hide Preview"
+                                                    : "Show Preview"}
+                                            </button>
+                                            {searchHasVars ? (
+                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                    ✓ Template variables
+                                                    detected
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                                    Missing template variables
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Template variable buttons */}
+                                    <div className="mb-3 flex flex-wrap gap-2">
+                                        <span className="text-xs text-gray-600">
+                                            Insert template variables:
+                                        </span>
+                                        {templateVariables.map((variable) => (
+                                            <button
+                                                key={variable}
+                                                type="button"
+                                                onClick={() =>
+                                                    insertTemplateVariable(
+                                                        variable,
+                                                        "search"
+                                                    )
+                                                }
+                                                className="inline-flex items-center px-2 py-1 rounded text-xs font-mono bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                                            >
+                                                {variable}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <textarea
+                                        ref={searchPromptRef}
+                                        value={settings.memory_search_prompt}
+                                        onChange={(e) =>
+                                            handleInputChange(
+                                                "memory_search_prompt",
+                                                e.target.value
+                                            )
+                                        }
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                                        rows={20}
+                                        placeholder="Prompt for the LLM to generate search queries"
+                                    />
+
+                                    {showSearchPreview && (
+                                        <div className="mt-4 p-4 bg-gray-50 border rounded-md">
+                                            <div className="text-sm font-medium text-gray-700 mb-2">
+                                                Template Preview:
+                                            </div>
+                                            <pre className="text-xs text-gray-600 whitespace-pre-wrap overflow-auto max-h-64">
+                                                {getPreviewPrompt(
+                                                    settings.memory_search_prompt
+                                                )}
+                                            </pre>
+                                        </div>
+                                    )}
+
+                                    <div className="mt-2 text-xs text-gray-500 space-y-1">
+                                        <div className="font-medium">
+                                            Available template variables:
+                                        </div>
+                                        <div>
+                                            •{" "}
+                                            <code className="bg-gray-100 px-1 rounded">
+                                                {"{{ memory_categories_json }}"}
+                                            </code>{" "}
+                                            - JSON array format
+                                        </div>
+                                        <div>
+                                            •{" "}
+                                            <code className="bg-gray-100 px-1 rounded">
+                                                {"{{ memory_categories_list }}"}
+                                            </code>{" "}
+                                            - Comma-separated list
+                                        </div>
+                                        <div>
+                                            •{" "}
+                                            <code className="bg-gray-100 px-1 rounded">
+                                                {"{{ memory_categories }}"}
+                                            </code>{" "}
+                                            - Python list format
+                                        </div>
+                                        {searchMissingVars.length > 0 && (
+                                            <div className="text-yellow-600 font-medium">
+                                                Missing:{" "}
+                                                {searchMissingVars.join(", ")}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* LLM Settings Tab */}
+                        {activeTab === "llm" && (
+                            <div className="space-y-6">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Memory Extraction LLM
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Provider Type
+                                            </label>
+                                            <select
+                                                value={
+                                                    settings.extraction_provider_type
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "extraction_provider_type",
+                                                        e.target.value as any
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="openai">
+                                                    OpenAI
+                                                </option>
+                                                <option value="openai_compatible">
+                                                    OpenAI Compatible
+                                                </option>
+                                                <option value="ollama">
+                                                    Ollama
+                                                </option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Model
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={
+                                                    settings.extraction_model
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "extraction_model",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="e.g., gpt-4, llama2"
+                                            />
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Endpoint URL
+                                            </label>
+                                            <input
+                                                type="url"
+                                                value={
+                                                    settings.extraction_endpoint_url
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "extraction_endpoint_url",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="http://localhost:11434"
+                                            />
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                API Key
+                                            </label>
+                                            <input
+                                                type="password"
+                                                value={
+                                                    settings.extraction_endpoint_api_key
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "extraction_endpoint_api_key",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Your API key (leave empty if not needed)"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Timeout (seconds)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                value={
+                                                    settings.extraction_timeout
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "extraction_timeout",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="30"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Embeddings Settings Tab */}
+                        {activeTab === "embeddings" && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Embeddings API
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Provider Type
+                                            </label>
+                                            <select
+                                                value={
+                                                    settings.embeddings_provider_type
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "embeddings_provider_type",
+                                                        e.target.value as any
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="openai_compatible">
+                                                    OpenAI Compatible
+                                                </option>
+                                                <option value="ollama">
+                                                    Ollama
+                                                </option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Model
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={
+                                                    settings.embeddings_model
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "embeddings_model",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="e.g., text-embedding-ada-002, nomic-embed-text"
+                                            />
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Endpoint URL
+                                            </label>
+                                            <input
+                                                type="url"
+                                                value={
+                                                    settings.embeddings_endpoint_url
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "embeddings_endpoint_url",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="http://localhost:11434"
+                                            />
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                API Key
+                                            </label>
+                                            <input
+                                                type="password"
+                                                value={
+                                                    settings.embeddings_endpoint_api_key
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "embeddings_endpoint_api_key",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Your API key (leave empty if not needed)"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Timeout (seconds)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                value={
+                                                    settings.embeddings_timeout
+                                                }
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "embeddings_timeout",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="30"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* General Settings Tab */}
+                        {activeTab === "general" && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
                                         Memory Categories
-                                    </label>
-                                    <TagInput
-                                        value={memoryCategories}
-                                        onChange={setMemoryCategories}
-                                        placeholder="Type a category and press space..."
-                                        className="w-full"
-                                    />
-                                    <p className="text-xs text-gray-500 mt-1">
-                                        Categories used for memory
-                                        classification. Type a word and press
-                                        space to add.
-                                    </p>
+                                    </h3>
+                                    <div className="max-w-xl">
+                                        <TagInput
+                                            value={memoryCategories}
+                                            onChange={setMemoryCategories}
+                                            placeholder="Type a category and press space..."
+                                            className="w-full"
+                                        />
+                                        <p className="text-xs text-gray-500 mt-2">
+                                            Categories used for memory
+                                            classification. These will be
+                                            injected into your prompts using
+                                            template variables.
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-
-                        {/* Embeddings Settings */}
-                        <div>
-                            <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                Embeddings API
-                            </h3>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Provider Type
-                                    </label>
-                                    <select
-                                        value={
-                                            settings.embeddings_provider_type
-                                        }
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "embeddings_provider_type",
-                                                e.target.value as any
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    >
-                                        <option value="openai_compatible">
-                                            OpenAI Compatible
-                                        </option>
-                                        <option value="ollama">Ollama</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Model
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={settings.embeddings_model}
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "embeddings_model",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="e.g., text-embedding-ada-002, nomic-embed-text"
-                                    />
-                                </div>
-
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Endpoint URL
-                                    </label>
-                                    <input
-                                        type="url"
-                                        value={settings.embeddings_endpoint_url}
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "embeddings_endpoint_url",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="http://localhost:11434"
-                                    />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        API Key
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={
-                                            settings.embeddings_endpoint_api_key
-                                        }
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "embeddings_endpoint_api_key",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="Your API key for the embeddings endpoint"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Timeout (seconds)
-                                    </label>
-                                    <input
-                                        type="number"
-                                        value={settings.embeddings_timeout}
-                                        onChange={(e) =>
-                                            handleInputChange(
-                                                "embeddings_timeout",
-                                                e.target.value
-                                            )
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="Timeout for embeddings requests"
-                                    />
-                                </div>
-                            </div>
-                        </div>
+                        )}
 
                         {/* Status Messages */}
                         {error && (
@@ -601,7 +806,7 @@ const SettingsPage: React.FC = () => {
                         )}
 
                         {/* Submit Button */}
-                        <div className="flex justify-end">
+                        <div className="flex justify-end pt-6 border-t">
                             <button
                                 type="submit"
                                 disabled={saving}

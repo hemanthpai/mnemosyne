@@ -19,6 +19,7 @@ export interface LLMSettings {
     embeddings_endpoint_api_key: string;
     embeddings_timeout: number;
     memory_extraction_prompt: string;
+    memory_search_prompt: string;
     memory_categories_list: string[];
     created_at: string;
     updated_at: string;

@@ -129,7 +129,7 @@ class ExtractMemoriesView(APIView):
         try:
             # Get LLM settings for the extraction prompt
             settings = LLMSettings.get_settings()
-            system_prompt = settings.get_memory_extraction_prompt_rendered()
+            system_prompt = settings.memory_extraction_prompt
 
             logger.info("Extracting memories for user %s", user_id)
 
@@ -293,7 +293,7 @@ class RetrieveMemoriesView(APIView):
         try:
             # Step 1: Get LLM settings and generate search queries
             settings = LLMSettings.get_settings()
-            search_prompt = settings.get_memory_search_prompt_rendered()
+            search_prompt = settings.memory_search_prompt
 
             logger.info(
                 "Generating search queries for user %s with prompt: %s...",

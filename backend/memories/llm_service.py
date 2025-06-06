@@ -33,9 +33,69 @@ MEMORY_SEARCH_FORMAT = {
         "properties": {
             "search_query": {"type": "string"},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "search_type": {
+                "type": "string",
+                "enum": [
+                    "direct",
+                    "semantic",
+                    "experiential",
+                    "contextual",
+                    "interest",
+                ],
+            },
+            "rationale": {
+                "type": "string",
+            },
         },
         "required": ["search_query", "confidence"],
     },
+}
+
+SEMANTIC_CONNECTION_FORMAT = {
+    "type": "object",
+    "properties": {
+        "has_connections": {"type": "boolean"},
+        "additional_searches": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "search_query": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["search_query", "rationale", "confidence"],
+            },
+        },
+        "reasoning": {"type": "string"},
+    },
+    "required": ["has_connections", "additional_searches", "reasoning"],
+}
+
+MEMORY_SUMMARY_FORMAT = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "key_points": {"type": "array", "items": {"type": "string"}},
+        "relevant_context": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "memory_usage": {
+            "type": "object",
+            "properties": {
+                "total_memories": {"type": "integer"},
+                "highly_relevant": {"type": "integer"},
+                "moderately_relevant": {"type": "integer"},
+                "context_relevant": {"type": "integer"},
+            },
+        },
+    },
+    "required": [
+        "summary",
+        "key_points",
+        "relevant_context",
+        "confidence",
+        "memory_usage",
+    ],
 }
 
 
@@ -282,9 +342,9 @@ class LLMService:
                 {"role": "user", "content": user_prompt},
             ],
             "options": {
-                "temperature": temperature,
-                "top_p": 0.9,
-                "top_k": 40,
+                # "temperature": temperature,
+                # "top_p": 0.9,
+                # "top_k": 40,
                 "num_predict": max_tokens,
             },
             "stream": False,
@@ -304,7 +364,7 @@ class LLMService:
                     response_format,
                 )
 
-        logger.debug("Prepared Ollama request data: %s", data)
+        logger.info("Prepared Ollama request data: %s", data)
         return data
 
     def _prepare_openai_request(

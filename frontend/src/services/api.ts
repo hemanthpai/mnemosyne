@@ -1,10 +1,12 @@
 import axios from 'axios';
 import {
+    DeleteAllMemoriesResponse,
     ExtractMemoriesResponse,
     LLMSettings,
     Memory,
     RetrieveMemoriesResponse
 } from '../types';
+
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -104,6 +106,33 @@ export const deleteMemory = async (memoryId: string): Promise<{ success: boolean
         console.error('Error deleting memory:', error);
         throw error;
     }
+};
+
+// Add these functions to your existing api.ts file
+export const deleteAllMemories = async (userId?: string): Promise<DeleteAllMemoriesResponse> => {
+    const payload: any = { confirm: true };
+    if (userId) {
+        payload.user_id = userId;
+    }
+    
+    const response = await fetch(`${API_BASE_URL}/api/memories/delete-all/`, {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete memories');
+    }
+
+    return response.json();
+};
+
+export const clearVectorDatabase = async (): Promise<DeleteAllMemoriesResponse> => {
+    return deleteAllMemories(); // Same endpoint, no user_id = clear all
 };
 
 // Settings endpoints

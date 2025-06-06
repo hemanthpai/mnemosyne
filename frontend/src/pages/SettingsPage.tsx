@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import TagInput from "../components/TagInput";
 import { getSettings, updateSettings } from "../services/api";
 import { LLMSettings } from "../types";
 
-type SettingsTab = "prompts" | "llm" | "embeddings" | "general";
+type SettingsTab = "prompts" | "llm" | "embeddings";
 
 const SettingsPage: React.FC = () => {
     const [settings, setSettings] = useState<LLMSettings | null>(null);
@@ -12,103 +11,19 @@ const SettingsPage: React.FC = () => {
     const [saving, setSaving] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<boolean>(false);
-    const [memoryCategories, setMemoryCategories] = useState<string[]>([]);
     const [activeTab, setActiveTab] = useState<SettingsTab>("prompts");
     const [showExtractionPreview, setShowExtractionPreview] = useState(false);
     const [showSearchPreview, setShowSearchPreview] = useState(false);
 
-    // Track template variables
-    const [templateVariables] = useState([
-        "{{ memory_categories_json }}",
-        "{{ memory_categories_list }}",
-        "{{ memory_categories }}",
-    ]);
-
     // Refs for textareas
     const extractionPromptRef = useRef<HTMLTextAreaElement>(null);
     const searchPromptRef = useRef<HTMLTextAreaElement>(null);
-
-    // Template variable functions
-    const hasTemplateVariables = (prompt: string) => {
-        return templateVariables.some((variable) => prompt.includes(variable));
-    };
-
-    const suggestTemplateVariables = (prompt: string) => {
-        return templateVariables.filter(
-            (variable) => !prompt.includes(variable)
-        );
-    };
-
-    // Insert template variable at cursor position
-    const insertTemplateVariable = (
-        variable: string,
-        field: "extraction" | "search"
-    ) => {
-        const textarea =
-            field === "extraction"
-                ? extractionPromptRef.current
-                : searchPromptRef.current;
-        const promptField =
-            field === "extraction"
-                ? "memory_extraction_prompt"
-                : "memory_search_prompt";
-
-        if (!textarea || !settings) return;
-
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const currentPrompt = settings[promptField];
-
-        const newPrompt =
-            currentPrompt.substring(0, start) +
-            variable +
-            currentPrompt.substring(end);
-
-        setSettings({ ...settings, [promptField]: newPrompt });
-
-        setTimeout(() => {
-            textarea.focus();
-            textarea.setSelectionRange(
-                start + variable.length,
-                start + variable.length
-            );
-        }, 0);
-    };
-
-    // Preview functions
-    const getPreviewPrompt = (prompt: string) => {
-        if (!settings) return "";
-
-        let preview = prompt;
-        const categoriesJson = memoryCategories
-            .map((cat) => `"${cat}"`)
-            .join(", ");
-        const categoriesList = memoryCategories.join(", ");
-
-        preview = preview.replace(
-            /\{\{\s*memory_categories_json\s*\}\}/g,
-            categoriesJson
-        );
-        preview = preview.replace(
-            /\{\{\s*memory_categories_list\s*\}\}/g,
-            categoriesList
-        );
-        preview = preview.replace(
-            /\{\{\s*memory_categories\s*\}\}/g,
-            `[${categoriesJson}]`
-        );
-
-        return preview;
-    };
 
     useEffect(() => {
         const fetchSettings = async () => {
             try {
                 const fetchedSettings = await getSettings();
                 setSettings(fetchedSettings);
-                if (fetchedSettings.memory_categories_list) {
-                    setMemoryCategories(fetchedSettings.memory_categories_list);
-                }
             } catch (err) {
                 setError("Failed to fetch settings");
                 console.error("Error fetching settings:", err);
@@ -124,36 +39,12 @@ const SettingsPage: React.FC = () => {
         e.preventDefault();
         if (!settings) return;
 
-        // Validate template variables for both prompts
-        const extractionMissing = suggestTemplateVariables(
-            settings.memory_extraction_prompt
-        );
-        const searchMissing = suggestTemplateVariables(
-            settings.memory_search_prompt
-        );
-
-        if (
-            extractionMissing.length === templateVariables.length ||
-            searchMissing.length === templateVariables.length
-        ) {
-            const proceed = window.confirm(
-                "Warning: One or more prompts are missing template variables.\n\n" +
-                    "Without these variables, memory categories won't be dynamically inserted. " +
-                    "Continue saving anyway?"
-            );
-            if (!proceed) return;
-        }
-
         setSaving(true);
         setError(null);
         setSuccess(false);
 
         try {
-            const payload = {
-                ...settings,
-                memory_categories_list: memoryCategories,
-            };
-            const updatedSettings = await updateSettings(payload);
+            const updatedSettings = await updateSettings(settings);
             setSettings(updatedSettings);
             setSuccess(true);
             setTimeout(() => setSuccess(false), 3000);
@@ -174,7 +65,6 @@ const SettingsPage: React.FC = () => {
         { id: "prompts" as SettingsTab, name: "Prompts", icon: "📝" },
         { id: "llm" as SettingsTab, name: "LLM Settings", icon: "🤖" },
         { id: "embeddings" as SettingsTab, name: "Embeddings", icon: "🔍" },
-        { id: "general" as SettingsTab, name: "General", icon: "⚙️" },
     ];
 
     if (loading) {
@@ -204,17 +94,6 @@ const SettingsPage: React.FC = () => {
         );
     }
 
-    const extractionMissingVars = suggestTemplateVariables(
-        settings.memory_extraction_prompt
-    );
-    const searchMissingVars = suggestTemplateVariables(
-        settings.memory_search_prompt
-    );
-    const extractionHasVars = hasTemplateVariables(
-        settings.memory_extraction_prompt
-    );
-    const searchHasVars = hasTemplateVariables(settings.memory_search_prompt);
-
     return (
         <div className="min-h-screen bg-gray-50">
             <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -227,8 +106,7 @@ const SettingsPage: React.FC = () => {
                                     Settings
                                 </h1>
                                 <p className="mt-1 text-sm text-gray-600">
-                                    Configure your LLM endpoints, prompts, and
-                                    system preferences.
+                                    Configure your LLM endpoints and prompts.
                                 </p>
                             </div>
                             <Link
@@ -286,56 +164,23 @@ const SettingsPage: React.FC = () => {
                                             </h3>
                                             <p className="text-sm text-gray-600">
                                                 Prompt used to extract memories
-                                                from conversations
+                                                from conversations with flexible
+                                                tagging
                                             </p>
                                         </div>
-                                        <div className="flex items-center space-x-2">
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    setShowExtractionPreview(
-                                                        !showExtractionPreview
-                                                    )
-                                                }
-                                                className="text-sm text-blue-600 hover:text-blue-800"
-                                            >
-                                                {showExtractionPreview
-                                                    ? "Hide Preview"
-                                                    : "Show Preview"}
-                                            </button>
-                                            {extractionHasVars ? (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                    ✓ Template variables
-                                                    detected
-                                                </span>
-                                            ) : (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                                    Missing template variables
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Template variable buttons */}
-                                    <div className="mb-3 flex flex-wrap gap-2">
-                                        <span className="text-xs text-gray-600">
-                                            Insert template variables:
-                                        </span>
-                                        {templateVariables.map((variable) => (
-                                            <button
-                                                key={variable}
-                                                type="button"
-                                                onClick={() =>
-                                                    insertTemplateVariable(
-                                                        variable,
-                                                        "extraction"
-                                                    )
-                                                }
-                                                className="inline-flex items-center px-2 py-1 rounded text-xs font-mono bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-                                            >
-                                                {variable}
-                                            </button>
-                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                setShowExtractionPreview(
+                                                    !showExtractionPreview
+                                                )
+                                            }
+                                            className="text-sm text-blue-600 hover:text-blue-800"
+                                        >
+                                            {showExtractionPreview
+                                                ? "Hide Preview"
+                                                : "Show Preview"}
+                                        </button>
                                     </div>
 
                                     <textarea
@@ -357,49 +202,21 @@ const SettingsPage: React.FC = () => {
                                     {showExtractionPreview && (
                                         <div className="mt-4 p-4 bg-gray-50 border rounded-md">
                                             <div className="text-sm font-medium text-gray-700 mb-2">
-                                                Template Preview:
+                                                Current Prompt:
                                             </div>
                                             <pre className="text-xs text-gray-600 whitespace-pre-wrap overflow-auto max-h-64">
-                                                {getPreviewPrompt(
+                                                {
                                                     settings.memory_extraction_prompt
-                                                )}
+                                                }
                                             </pre>
                                         </div>
                                     )}
 
-                                    <div className="mt-2 text-xs text-gray-500 space-y-1">
-                                        <div className="font-medium">
-                                            Available template variables:
-                                        </div>
-                                        <div>
-                                            •{" "}
-                                            <code className="bg-gray-100 px-1 rounded">
-                                                {"{{ memory_categories_json }}"}
-                                            </code>{" "}
-                                            - JSON array format
-                                        </div>
-                                        <div>
-                                            •{" "}
-                                            <code className="bg-gray-100 px-1 rounded">
-                                                {"{{ memory_categories_list }}"}
-                                            </code>{" "}
-                                            - Comma-separated list
-                                        </div>
-                                        <div>
-                                            •{" "}
-                                            <code className="bg-gray-100 px-1 rounded">
-                                                {"{{ memory_categories }}"}
-                                            </code>{" "}
-                                            - Python list format
-                                        </div>
-                                        {extractionMissingVars.length > 0 && (
-                                            <div className="text-yellow-600 font-medium">
-                                                Missing:{" "}
-                                                {extractionMissingVars.join(
-                                                    ", "
-                                                )}
-                                            </div>
-                                        )}
+                                    <div className="mt-2 text-xs text-gray-500">
+                                        This prompt uses flexible tagging
+                                        without predefined categories. The AI
+                                        will generate contextual tags based on
+                                        the content.
                                     </div>
                                 </div>
 
@@ -416,53 +233,19 @@ const SettingsPage: React.FC = () => {
                                                 memories
                                             </p>
                                         </div>
-                                        <div className="flex items-center space-x-2">
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    setShowSearchPreview(
-                                                        !showSearchPreview
-                                                    )
-                                                }
-                                                className="text-sm text-blue-600 hover:text-blue-800"
-                                            >
-                                                {showSearchPreview
-                                                    ? "Hide Preview"
-                                                    : "Show Preview"}
-                                            </button>
-                                            {searchHasVars ? (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                    ✓ Template variables
-                                                    detected
-                                                </span>
-                                            ) : (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                                    Missing template variables
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Template variable buttons */}
-                                    <div className="mb-3 flex flex-wrap gap-2">
-                                        <span className="text-xs text-gray-600">
-                                            Insert template variables:
-                                        </span>
-                                        {templateVariables.map((variable) => (
-                                            <button
-                                                key={variable}
-                                                type="button"
-                                                onClick={() =>
-                                                    insertTemplateVariable(
-                                                        variable,
-                                                        "search"
-                                                    )
-                                                }
-                                                className="inline-flex items-center px-2 py-1 rounded text-xs font-mono bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-                                            >
-                                                {variable}
-                                            </button>
-                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                setShowSearchPreview(
+                                                    !showSearchPreview
+                                                )
+                                            }
+                                            className="text-sm text-blue-600 hover:text-blue-800"
+                                        >
+                                            {showSearchPreview
+                                                ? "Hide Preview"
+                                                : "Show Preview"}
+                                        </button>
                                     </div>
 
                                     <textarea
@@ -482,47 +265,19 @@ const SettingsPage: React.FC = () => {
                                     {showSearchPreview && (
                                         <div className="mt-4 p-4 bg-gray-50 border rounded-md">
                                             <div className="text-sm font-medium text-gray-700 mb-2">
-                                                Template Preview:
+                                                Current Prompt:
                                             </div>
                                             <pre className="text-xs text-gray-600 whitespace-pre-wrap overflow-auto max-h-64">
-                                                {getPreviewPrompt(
-                                                    settings.memory_search_prompt
-                                                )}
+                                                {settings.memory_search_prompt}
                                             </pre>
                                         </div>
                                     )}
 
-                                    <div className="mt-2 text-xs text-gray-500 space-y-1">
-                                        <div className="font-medium">
-                                            Available template variables:
-                                        </div>
-                                        <div>
-                                            •{" "}
-                                            <code className="bg-gray-100 px-1 rounded">
-                                                {"{{ memory_categories_json }}"}
-                                            </code>{" "}
-                                            - JSON array format
-                                        </div>
-                                        <div>
-                                            •{" "}
-                                            <code className="bg-gray-100 px-1 rounded">
-                                                {"{{ memory_categories_list }}"}
-                                            </code>{" "}
-                                            - Comma-separated list
-                                        </div>
-                                        <div>
-                                            •{" "}
-                                            <code className="bg-gray-100 px-1 rounded">
-                                                {"{{ memory_categories }}"}
-                                            </code>{" "}
-                                            - Python list format
-                                        </div>
-                                        {searchMissingVars.length > 0 && (
-                                            <div className="text-yellow-600 font-medium">
-                                                Missing:{" "}
-                                                {searchMissingVars.join(", ")}
-                                            </div>
-                                        )}
+                                    <div className="mt-2 text-xs text-gray-500">
+                                        This prompt generates multiple search
+                                        strategies to find relevant memories
+                                        through direct, semantic, and contextual
+                                        queries.
                                     </div>
                                 </div>
                             </div>
@@ -580,7 +335,7 @@ const SettingsPage: React.FC = () => {
                                                     )
                                                 }
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                                placeholder="e.g., gpt-4, llama2"
+                                                placeholder="e.g., gpt-4, llama3"
                                             />
                                         </div>
 
@@ -760,31 +515,6 @@ const SettingsPage: React.FC = () => {
                                                 placeholder="30"
                                             />
                                         </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* General Settings Tab */}
-                        {activeTab === "general" && (
-                            <div className="space-y-6">
-                                <div>
-                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                        Memory Categories
-                                    </h3>
-                                    <div className="max-w-xl">
-                                        <TagInput
-                                            value={memoryCategories}
-                                            onChange={setMemoryCategories}
-                                            placeholder="Type a category and press space..."
-                                            className="w-full"
-                                        />
-                                        <p className="text-xs text-gray-500 mt-2">
-                                            Categories used for memory
-                                            classification. These will be
-                                            injected into your prompts using
-                                            template variables.
-                                        </p>
                                     </div>
                                 </div>
                             </div>

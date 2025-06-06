@@ -20,7 +20,6 @@ export interface LLMSettings {
     embeddings_timeout: number;
     memory_extraction_prompt: string;
     memory_search_prompt: string;
-    memory_categories_list: string[];
     created_at: string;
     updated_at: string;
 }
@@ -39,7 +38,7 @@ export interface ExtractMemoriesRequest {
 export interface ExtractMemoriesResponse {
     success: boolean;
     memories_extracted: number;
-    message: string;
+    memories: Memory[];
 }
 
 export interface RetrieveMemoriesRequest {
@@ -47,8 +46,36 @@ export interface RetrieveMemoriesRequest {
     user_id: string;
 }
 
+export interface MemorySummary {
+    summary: string;
+    key_points: string[];
+    relevant_context: string;
+    confidence: number;
+    memory_usage: {
+        total_memories: number;
+        highly_relevant: number;
+        moderately_relevant: number;
+        context_relevant: number;
+    };
+}
+
 export interface RetrieveMemoriesResponse {
     success: boolean;
     memories: Memory[];
-    message: string;
+    memory_summary?: MemorySummary;  // Add this field
+    count: number;
+    search_queries_generated: number;
+    model_used: string;
+    query_params: {
+        limit: number;
+        threshold: number;
+    };
+}
+
+export interface DeleteAllMemoriesResponse {
+    success: boolean;
+    message?: string;
+    error?: string;
+    deleted_count: number;
+    user_id?: string;
 }

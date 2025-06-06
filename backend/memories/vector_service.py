@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from django.conf import settings
 from qdrant_client import QdrantClient
@@ -8,6 +8,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PointStruct,
     VectorParams,
@@ -112,7 +113,7 @@ class VectorService:
     def search_similar(
         self,
         query_embedding: List[float],
-        user_id: Optional[str] = None,
+        user_id: str,
         limit: int = 10,
         score_threshold: float = 0.0,
     ) -> List[Dict[str, Any]]:
@@ -128,6 +129,11 @@ class VectorService:
         Returns:
             List of search results with memory_id, score, and payload
         """
+        logger.info(
+            "Searching for similar embeddings for user %s with limit %d",
+            user_id,
+            limit,
+        )
         try:
             # Build filter for user_id if provided
             search_filter = None
@@ -225,6 +231,76 @@ class VectorService:
         except Exception as e:
             logger.error("Qdrant health check failed: %s", e)
             return False
+
+    def delete_memories(self, memory_ids: List[str], user_id: str) -> Dict[str, Any]:
+        """Delete specific memories from vector database"""
+        try:
+            # Delete points by memory IDs
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(key="memory_id", match=MatchAny(any=memory_ids)),
+                        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    ]
+                ),
+            )
+
+            logger.info(f"Deleted {len(memory_ids)} vectors for user {user_id}")
+            return {"success": True, "deleted_count": len(memory_ids)}
+
+        except Exception as e:
+            logger.error(f"Error deleting vectors: {e}")
+            return {"success": False, "error": str(e)}
+
+    def clear_all_memories(self) -> Dict[str, Any]:
+        """Clear ALL memories from vector database (admin operation)"""
+        try:
+            # Get collection info to check if it exists
+            try:
+                collection_info = self.client.get_collection(self.collection_name)
+                point_count = collection_info.points_count
+            except Exception:
+                return {
+                    "success": True,
+                    "message": "Collection doesn't exist or is already empty",
+                }
+
+            if point_count == 0:
+                return {"success": True, "message": "Vector database is already empty"}
+
+            # Delete the entire collection and recreate it
+            self.client.delete_collection(self.collection_name)
+            self._ensure_collection()
+
+            logger.warning(
+                f"ADMIN ACTION: Cleared ALL {point_count} vectors from database"
+            )
+            return {"success": True, "cleared_count": point_count}
+
+        except Exception as e:
+            logger.error(f"Error clearing vector database: {e}")
+            return {"success": False, "error": str(e)}
+
+    def delete_user_memories(self, user_id: str) -> Dict[str, Any]:
+        """Delete all memories for a specific user from vector database"""
+        try:
+            # Delete all points for this user
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(key="user_id", match=MatchValue(value=user_id))
+                    ]
+                ),
+            )
+
+            logger.info(f"Deleted all vectors for user {user_id}")
+            return {"success": True}
+
+        except Exception as e:
+            logger.error(f"Error deleting user vectors: {e}")
+            return {"success": False, "error": str(e)}
 
 
 # Global instance

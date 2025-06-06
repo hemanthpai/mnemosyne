@@ -12,6 +12,16 @@ class Memory(models.Model):
     # Store vector DB reference instead of actual embedding
     vector_id = models.CharField(max_length=255, null=True, blank=True)
 
+    context = models.TextField(
+        blank=True, help_text="Context where this memory was mentioned"
+    )
+    connections = models.JSONField(
+        default=list, help_text="Broader topics this memory relates to"
+    )
+    search_tags = models.JSONField(
+        default=list, help_text="Searchable tags for this memory"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -25,3 +35,13 @@ class Memory(models.Model):
 
     def __str__(self):
         return f"Memory {self.id} for user {self.user_id}"
+
+    def get_all_searchable_text(self):
+        """Get all text that should be searchable"""
+        searchable_parts = [self.content]
+        searchable_parts.extend(self.metadata.get("tags", []))
+        searchable_parts.extend(self.connections)
+        searchable_parts.extend(self.search_tags)
+        if self.context:
+            searchable_parts.append(self.context)
+        return " ".join(searchable_parts)

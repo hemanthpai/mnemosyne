@@ -12,6 +12,7 @@ from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_ser
 from .memory_search_service import memory_search_service
 from .models import Memory
 from .serializers import MemorySerializer
+from .vector_service import vector_service
 
 logger = logging.getLogger(__name__)
 
@@ -239,8 +240,6 @@ class RetrieveMemoriesView(APIView):
     API endpoint to retrieve relevant memories for a prompt using vector search
     """
 
-    # Replace the existing RetrieveMemoriesView.post method:
-
     def post(self, request):
         prompt = request.data.get("prompt", "")
         user_id = request.data.get("user_id")
@@ -344,7 +343,32 @@ class RetrieveMemoriesView(APIView):
                 threshold=threshold,
             )
 
-            # Step 4: Format memories for response
+            # Step 4: Find additional semantic connections if we have some results
+            if relevant_memories and len(relevant_memories) >= 3:
+                logger.info("Finding additional semantic connections...")
+                relevant_memories = memory_search_service.find_semantic_connections(
+                    memories=relevant_memories,
+                    original_query=prompt,
+                    user_id=user_id,
+                )
+                logger.info(
+                    "After semantic connection analysis: %d memories",
+                    len(relevant_memories),
+                )
+
+            # Step 5: Generate memory summary for AI assistance
+            memory_summary = None
+            if relevant_memories:
+                logger.info("Generating memory summary...")
+                memory_summary = memory_search_service.summarize_relevant_memories(
+                    memories=relevant_memories, user_query=prompt
+                )
+                logger.info(
+                    "Memory summary generated with %d key points",
+                    len(memory_summary.get("key_points", [])),
+                )
+
+            # Step 6: Format memories for response
             formatted_memories = []
             for memory in relevant_memories:
                 memory_data = {
@@ -354,16 +378,6 @@ class RetrieveMemoriesView(APIView):
                     "created_at": memory.created_at.isoformat(),
                     "updated_at": memory.updated_at.isoformat(),
                 }
-
-                # Add search metadata if available
-                # if hasattr(memory, "_search_score"):
-                #     memory_data["search_metadata"] = {
-                #         "score": memory._search_score,
-                #         "original_score": memory._original_score,
-                #         "query_confidence": memory._query_confidence,
-                #         "search_query": memory._search_query,
-                #     }
-
                 formatted_memories.append(memory_data)
 
             logger.info("Found %d relevant memories", len(formatted_memories))
@@ -372,6 +386,7 @@ class RetrieveMemoriesView(APIView):
                 {
                     "success": True,
                     "memories": formatted_memories,
+                    "memory_summary": memory_summary,  # Add the summary
                     "count": len(formatted_memories),
                     "search_queries_generated": len(search_queries),
                     "model_used": llm_result.get("model", "unknown"),
@@ -506,5 +521,122 @@ class MemoryStatsView(APIView):
             logger.error("Error getting memory stats: %s", e)
             return Response(
                 {"success": False, "error": "Failed to get memory statistics"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class DeleteAllMemoriesView(APIView):
+    """Delete all memories for a user or all users"""
+
+    def delete(self, request):
+        user_id = request.data.get("user_id")
+        confirm = request.data.get("confirm", False)
+
+        if not confirm:
+            return Response(
+                {"success": False, "error": "Confirmation required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            if user_id:
+                # Validate user_id format
+                try:
+                    uuid.UUID(user_id)
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid user_id format"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Delete memories for specific user
+                memories_to_delete = Memory.objects.filter(user_id=user_id)
+                count = memories_to_delete.count()
+
+                if count == 0:
+                    return Response(
+                        {
+                            "success": True,
+                            "message": f"No memories found for user {user_id}",
+                            "deleted_count": 0,
+                        }
+                    )
+
+                # Delete from vector database first
+                memory_ids = [str(memory.id) for memory in memories_to_delete]
+                vector_delete_result = vector_service.delete_memories(
+                    memory_ids, user_id
+                )
+
+                if not vector_delete_result["success"]:
+                    logger.error(
+                        f"Failed to delete vectors for user {user_id}: {vector_delete_result['error']}"
+                    )
+                    return Response(
+                        {
+                            "success": False,
+                            "error": f"Failed to delete from vector database: {vector_delete_result['error']}",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                # Delete from main database
+                memories_to_delete.delete()
+
+                logger.info(f"Deleted {count} memories for user {user_id}")
+                return Response(
+                    {
+                        "success": True,
+                        "message": f"Successfully deleted {count} memories for user {user_id}",
+                        "deleted_count": count,
+                        "user_id": user_id,
+                    }
+                )
+            else:
+                # Delete ALL memories (admin operation)
+                total_count = Memory.objects.count()
+
+                if total_count == 0:
+                    return Response(
+                        {
+                            "success": True,
+                            "message": "No memories found in database",
+                            "deleted_count": 0,
+                        }
+                    )
+
+                # Clear entire vector database
+                vector_clear_result = vector_service.clear_all_memories()
+
+                if not vector_clear_result["success"]:
+                    logger.error(
+                        f"Failed to clear vector database: {vector_clear_result['error']}"
+                    )
+                    return Response(
+                        {
+                            "success": False,
+                            "error": f"Failed to clear vector database: {vector_clear_result['error']}",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                # Delete all memories from main database
+                Memory.objects.all().delete()
+
+                logger.warning(
+                    f"ADMIN ACTION: Deleted ALL {total_count} memories from database"
+                )
+                return Response(
+                    {
+                        "success": True,
+                        "message": f"Successfully deleted ALL {total_count} memories",
+                        "deleted_count": total_count,
+                    }
+                )
+
+        except Exception as e:
+            logger.error(f"Error deleting memories: {e}")
+            return Response(
+                {"success": False, "error": "An unexpected error occurred"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

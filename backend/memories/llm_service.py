@@ -342,8 +342,8 @@ class LLMService:
             ],
             "options": {
                 "temperature": temperature,
-                "top_p": int(self.settings.llm_top_p),
-                "top_k": float(self.settings.llm_top_k),
+                "top_p": float(self.settings.llm_top_p),
+                "top_k": int(self.settings.llm_top_k),
                 "num_predict": max_tokens,
             },
             "stream": False,
@@ -376,8 +376,8 @@ class LLMService:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
-            "top_p": int(self.settings.llm_top_p),
-            "top_k": float(self.settings.llm_top_k),
+            "top_p": float(self.settings.llm_top_p),
+            "top_k": int(self.settings.llm_top_k),
             "stream": False,
         }
 

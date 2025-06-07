@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { getSettings, updateSettings } from "../services/api";
+import {
+    getPromptTokenCounts,
+    getSettings,
+    updateSettings,
+} from "../services/api";
 import { LLMSettings } from "../types";
 
 type SettingsTab = "prompts" | "llm" | "embeddings" | "parameters" | "search";
@@ -19,6 +23,15 @@ const SettingsPage: React.FC = () => {
     const extractionPromptRef = useRef<HTMLTextAreaElement>(null);
     const searchPromptRef = useRef<HTMLTextAreaElement>(null);
 
+    // Token counts state
+    const [tokenCounts, setTokenCounts] = useState<{
+        memory_extraction_prompt: number;
+        memory_search_prompt: number;
+        semantic_connection_prompt: number;
+        memory_summarization_prompt: number;
+    } | null>(null);
+    const [tokenCountsLoading, setTokenCountsLoading] = useState(false);
+
     useEffect(() => {
         const fetchSettings = async () => {
             try {
@@ -34,6 +47,28 @@ const SettingsPage: React.FC = () => {
 
         fetchSettings();
     }, []);
+
+    const fetchTokenCounts = async () => {
+        if (!settings) return;
+
+        setTokenCountsLoading(true);
+        try {
+            const result = await getPromptTokenCounts();
+            if (result.success && result.token_counts) {
+                setTokenCounts(result.token_counts);
+            }
+        } catch (error) {
+            console.error("Error fetching token counts:", error);
+        } finally {
+            setTokenCountsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (settings) {
+            fetchTokenCounts();
+        }
+    }, [settings?.extraction_model]); // Refetch when model changes
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -68,6 +103,40 @@ const SettingsPage: React.FC = () => {
         { id: "parameters" as SettingsTab, name: "LLM Parameters", icon: "⚙️" },
         { id: "search" as SettingsTab, name: "Search Config", icon: "🎯" },
     ];
+
+    const TokenCountBadge: React.FC<{
+        count: number | undefined;
+        loading: boolean;
+        label: string;
+    }> = ({ count, loading, label }) => {
+        if (loading) {
+            return (
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
+                    <div className="animate-spin rounded-full h-3 w-3 border-b border-gray-600 mr-1"></div>
+                    Calculating...
+                </span>
+            );
+        }
+
+        if (count === undefined) return null;
+
+        const getColorClass = (tokenCount: number) => {
+            if (tokenCount < 1000) return "bg-green-100 text-green-800";
+            if (tokenCount < 2000) return "bg-yellow-100 text-yellow-800";
+            if (tokenCount < 4000) return "bg-orange-100 text-orange-800";
+            return "bg-red-100 text-red-800";
+        };
+
+        return (
+            <span
+                className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${getColorClass(
+                    count
+                )}`}
+            >
+                {label}: {count.toLocaleString()} tokens
+            </span>
+        );
+    };
 
     if (loading) {
         return (
@@ -176,13 +245,66 @@ const SettingsPage: React.FC = () => {
                         {/* Prompts Tab */}
                         {activeTab === "prompts" && (
                             <div className="space-y-8">
+                                {/* Add refresh button for token counts */}
+                                <div className="flex justify-between items-center">
+                                    <div>
+                                        <h2 className="text-xl font-semibold text-gray-900">
+                                            System Prompts
+                                        </h2>
+                                        <p className="text-sm text-gray-600">
+                                            Configure the prompts used for
+                                            memory extraction, search, and
+                                            analysis.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={fetchTokenCounts}
+                                        disabled={tokenCountsLoading}
+                                        className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                                    >
+                                        {tokenCountsLoading ? (
+                                            <>
+                                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-700 mr-2"></div>
+                                                Calculating...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <svg
+                                                    className="w-4 h-4 mr-2"
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                >
+                                                    <path
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                        strokeWidth={2}
+                                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                                    />
+                                                </svg>
+                                                Refresh Token Counts
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+
                                 {/* Memory Extraction Prompt */}
                                 <div>
                                     <div className="flex items-center justify-between mb-4">
-                                        <div>
-                                            <h3 className="text-lg font-medium text-gray-900">
-                                                Memory Extraction Prompt
-                                            </h3>
+                                        <div className="flex-1">
+                                            <div className="flex items-center space-x-3">
+                                                <h3 className="text-lg font-medium text-gray-900">
+                                                    Memory Extraction Prompt
+                                                </h3>
+                                                <TokenCountBadge
+                                                    count={
+                                                        tokenCounts?.memory_extraction_prompt
+                                                    }
+                                                    loading={tokenCountsLoading}
+                                                    label="Size"
+                                                />
+                                            </div>
                                             <p className="text-sm text-gray-600">
                                                 Prompt used to extract memories
                                                 from conversations with flexible
@@ -209,12 +331,12 @@ const SettingsPage: React.FC = () => {
                                         value={
                                             settings.memory_extraction_prompt
                                         }
-                                        onChange={(e) =>
+                                        onChange={(e) => {
                                             handleInputChange(
                                                 "memory_extraction_prompt",
                                                 e.target.value
-                                            )
-                                        }
+                                            );
+                                        }}
                                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
                                         rows={20}
                                         placeholder="Prompt for the LLM to extract memories from conversations"
@@ -244,10 +366,19 @@ const SettingsPage: React.FC = () => {
                                 {/* Memory Search Prompt */}
                                 <div className="border-t pt-8">
                                     <div className="flex items-center justify-between mb-4">
-                                        <div>
-                                            <h3 className="text-lg font-medium text-gray-900">
-                                                Memory Search Prompt
-                                            </h3>
+                                        <div className="flex-1">
+                                            <div className="flex items-center space-x-3">
+                                                <h3 className="text-lg font-medium text-gray-900">
+                                                    Memory Search Prompt
+                                                </h3>
+                                                <TokenCountBadge
+                                                    count={
+                                                        tokenCounts?.memory_search_prompt
+                                                    }
+                                                    loading={tokenCountsLoading}
+                                                    label="Size"
+                                                />
+                                            </div>
                                             <p className="text-sm text-gray-600">
                                                 Prompt used to generate search
                                                 queries for retrieving relevant
@@ -304,9 +435,18 @@ const SettingsPage: React.FC = () => {
 
                                 {/* Semantic Connection Prompt */}
                                 <div className="border-t pt-8">
-                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                        Semantic Connection Analysis Prompt
-                                    </h3>
+                                    <div className="flex items-center space-x-3 mb-4">
+                                        <h3 className="text-lg font-medium text-gray-900">
+                                            Semantic Connection Analysis Prompt
+                                        </h3>
+                                        <TokenCountBadge
+                                            count={
+                                                tokenCounts?.semantic_connection_prompt
+                                            }
+                                            loading={tokenCountsLoading}
+                                            label="Size"
+                                        />
+                                    </div>
                                     <textarea
                                         value={
                                             settings.semantic_connection_prompt
@@ -324,9 +464,18 @@ const SettingsPage: React.FC = () => {
 
                                 {/* Memory Summarization Prompt */}
                                 <div className="border-t pt-8">
-                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                        Memory Summarization Prompt
-                                    </h3>
+                                    <div className="flex items-center space-x-3 mb-4">
+                                        <h3 className="text-lg font-medium text-gray-900">
+                                            Memory Summarization Prompt
+                                        </h3>
+                                        <TokenCountBadge
+                                            count={
+                                                tokenCounts?.memory_summarization_prompt
+                                            }
+                                            loading={tokenCountsLoading}
+                                            label="Size"
+                                        />
+                                    </div>
                                     <textarea
                                         value={
                                             settings.memory_summarization_prompt

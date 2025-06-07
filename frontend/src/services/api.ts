@@ -155,3 +155,23 @@ export const updateSettings = async (settings: Partial<LLMSettings>): Promise<LL
         throw error;
     }
 };
+
+export const getPromptTokenCounts = async (): Promise<{
+    success: boolean;
+    token_counts?: {
+        memory_extraction_prompt: number;
+        memory_search_prompt: number;
+        semantic_connection_prompt: number;
+        memory_summarization_prompt: number;
+    };
+    model_name?: string;
+    error?: string;
+}> => {
+    const response = await fetch(`${API_BASE_URL}/api/settings/prompt-token-counts/`);
+    
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    return response.json();
+};

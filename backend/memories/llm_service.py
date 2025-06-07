@@ -6,6 +6,8 @@ import requests
 from django.utils import timezone
 from settings_app.models import LLMSettings
 
+from .token_utils import TokenCounter  # Add this import
+
 logger = logging.getLogger(__name__)
 
 # Define format schemas
@@ -334,6 +336,21 @@ class LLMService:
     ) -> Dict[str, Any]:
         """Prepare request data for Ollama API with settings"""
 
+        # Calculate required context size
+        required_context = TokenCounter.calculate_required_context(
+            prompt=system_prompt,
+            user_input=user_prompt,
+            model_name=model,
+            safety_margin=max_tokens + 512,  # Add extra margin for response
+        )
+
+        logger.info(
+            "Token analysis - System prompt: %d tokens, User prompt: %d tokens, Required context: %d",
+            TokenCounter.estimate_tokens(system_prompt, model),
+            TokenCounter.estimate_tokens(user_prompt, model),
+            required_context,
+        )
+
         data = {
             "model": model,
             "messages": [
@@ -345,6 +362,7 @@ class LLMService:
                 "top_p": float(self.settings.llm_top_p),
                 "top_k": int(self.settings.llm_top_k),
                 "num_predict": max_tokens,
+                "num_ctx": required_context,  # Set context size dynamically
             },
             "stream": False,
         }
@@ -356,7 +374,11 @@ class LLMService:
             elif response_format == "json":
                 data["format"] = {"type": "object"}
 
-        logger.info("Prepared Ollama request data: %s", data)
+        logger.info(
+            "Prepared Ollama request data with context size %d: %s",
+            required_context,
+            data,
+        )
         return data
 
     def _prepare_openai_request(
@@ -601,6 +623,32 @@ class LLMService:
             results["embeddings_error"] = str(e)
 
         return results
+
+    def get_prompt_token_info(
+        self, prompt: str, user_input: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Get token information for a given prompt and user input.
+
+        Returns:
+            Dictionary containing token counts and context requirements
+        """
+        model_name = self.settings.extraction_model if self.settings else ""
+
+        prompt_tokens = TokenCounter.estimate_tokens(prompt, model_name)
+        input_tokens = TokenCounter.estimate_tokens(user_input, model_name)
+        total_tokens = prompt_tokens + input_tokens
+        required_context = TokenCounter.calculate_required_context(
+            prompt, user_input, model_name
+        )
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "input_tokens": input_tokens,
+            "total_input_tokens": total_tokens,
+            "required_context": required_context,
+            "model_family": TokenCounter._get_model_family(model_name.lower()),
+        }
 
 
 # Global instance

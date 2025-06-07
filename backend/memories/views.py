@@ -504,13 +504,14 @@ class MemoryStatsView(APIView):
                 tags = metadata.get("tags", [])
                 for tag in tags:
                     tags_count[tag] = tags_count.get(tag, 0) + 1
-                    
+
                     # Optionally group domain tags for insights
                     if tag in ["personal", "professional", "academic", "creative"]:
                         domain_tags[tag] = domain_tags.get(tag, 0) + 1
 
             # Get vector service stats
             from .vector_service import vector_service
+
             collection_info = vector_service.get_collection_info()
 
             return Response(
@@ -519,7 +520,9 @@ class MemoryStatsView(APIView):
                     "total_memories": total_memories,
                     "domain_distribution": domain_tags,  # Replace memory_banks with domain_distribution
                     "top_tags": dict(
-                        sorted(tags_count.items(), key=lambda x: x[1], reverse=True)[:20]  # Show more tags
+                        sorted(
+                            tags_count.items(), key=lambda x: x[1], reverse=True
+                        )  # Show more tags
                     ),
                     "vector_collection_info": collection_info,
                 }

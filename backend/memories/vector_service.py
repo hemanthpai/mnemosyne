@@ -217,6 +217,7 @@ class VectorService:
                 "vector_count": collection_info.config.params.vectors.size,  # type: ignore
                 "distance": collection_info.config.params.vectors.distance,  # type: ignore
                 "optimizer_status": collection_info.optimizer_status,
+                "points_count": collection_info.points_count,
             }
         except Exception as e:
             logger.error("Failed to get collection info: %s", e)

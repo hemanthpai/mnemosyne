@@ -120,7 +120,7 @@ export interface MemoryStatsData {
     top_tags: Record<string, number>;
     vector_collection_info?: {
         points_count: number;
-        vectors_count?: number;
+        vector_count?: number;
         status?: string;
         config?: Record<string, any>;
     };

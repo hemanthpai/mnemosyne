@@ -1,0 +1,199 @@
+# Create docker-compose.ai-server.yml
+version: '3.8'
+
+services:
+  # PostgreSQL Database optimized for AI workloads
+  postgres:
+    image: postgres:15-alpine
+    container_name: mnemosyne-postgres
+    environment:
+      POSTGRES_DB: mnemosyne
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mnemosyne_secure_pass}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"  # Expose for external tools if needed
+    restart: unless-stopped
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mnemosyne"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant Vector Database with RAM optimization
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: mnemosyne-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"  # gRPC port
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./qdrant-config.yaml:/qdrant/config/production.yaml
+    environment:
+      QDRANT__SERVICE__MAX_REQUEST_SIZE_MB: 32
+      QDRANT__SERVICE__MAX_WORKERS: 0
+      QDRANT__SERVICE__ENABLE_CORS: true
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for caching and session storage
+  redis:
+    image: redis:7-alpine
+    container_name: mnemosyne-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Mnemosyne Application
+  mnemosyne:
+    build: .
+    container_name: mnemosyne-app
+    ports:
+      - "${MNEMOSYNE_PORT:-8000}:8000"
+    environment:
+      # Core Django settings
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:-please_change_this_secret_key_in_production}
+      ALLOWED_HOSTS: "localhost,127.0.0.1,${SERVER_IP:-192.168.1.100},${HOSTNAME:-mnemosyne}"
+      
+      # Database
+      DATABASE_URL: "postgresql://postgres:${POSTGRES_PASSWORD:-mnemosyne_secure_pass}@postgres:5432/mnemosyne"
+      
+      # Vector Database
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_COLLECTION_NAME: memories
+      
+      # Cache
+      REDIS_URL: "redis://redis:6379/0"
+      
+      # LLM Configuration for local AI server
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      
+      # Performance settings
+      DJANGO_WORKERS: 2
+      QDRANT_RAM_OPTIMIZED: "True"
+      VECTOR_BATCH_SIZE: 50
+      
+      # Open WebUI Integration
+      OPENWEBUI_INTEGRATION: "True"
+      CORS_ALLOW_ALL_ORIGINS: "True"
+      
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/app/scripts/health-check.sh"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # Optional: Monitoring with Prometheus metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mnemosyne-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+  # Optional: Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mnemosyne-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: "grafana-clock-panel,grafana-simple-json-datasource"
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+networks:
+  default:
+    name: mnemosyne-ai-network
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: mnemosyne-postgres-data
+  qdrant_data:
+    name: mnemosyne-qdrant-data
+  redis_data:
+    name: mnemosyne-redis-data
+  prometheus_data:
+    name: mnemosyne-prometheus-data
+  grafana_data:
+    name: mnemosyne-grafana-data

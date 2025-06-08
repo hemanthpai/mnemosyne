@@ -509,6 +509,325 @@ docker-compose -f docker-compose.homeserver.yml restart app
 4. **Storage**: Monitor disk usage, especially for Qdrant vectors and database
 5. **Performance**: Adjust Docker memory limits based on your server capacity
 
+## Local AI Server Deployment
+
+Perfect for home labs, edge computing, and local AI environments. This setup integrates seamlessly with local LLM servers like Ollama and Open WebUI.
+
+### Quick Start for Local AI Server
+
+This is the recommended setup for local AI environments with Ollama and Open WebUI.
+
+#### Prerequisites
+- Docker and Docker Compose
+- Minimum 4 GB RAM (8 GB recommended)
+- Ollama running locally with embedding model
+- 20 GB free disk space
+
+#### Installation
+
+1. **Clone and setup**
+```bash
+git clone https://github.com/your-repo/mnemosyne.git
+cd mnemosyne
+```
+
+2. **Configure environment**
+```bash
+cp .env.ai-server .env
+nano .env  # Edit with your server IP and preferences
+```
+
+3. **Install required Ollama models**
+```bash
+# On your Ollama server
+ollama pull llama3.1:8b         # For memory processing
+ollama pull nomic-embed-text     # For embeddings (required)
+```
+
+4. **Deploy the stack**
+```bash
+# Start all services
+docker-compose -f docker-compose.ai-server.yml up -d
+
+# Check deployment status
+docker-compose -f docker-compose.ai-server.yml ps
+
+# View logs
+docker-compose -f docker-compose.ai-server.yml logs -f mnemosyne
+```
+
+5. **Verify installation**
+```bash
+# Check health status
+curl http://localhost:8000/api/health/
+
+# Test LLM connection
+curl -X POST http://localhost:8000/api/memories/test-connection/ \
+  -H "Content-Type: application/json"
+
+# Access the web interface
+open http://localhost:8000
+```
+
+#### Integration with Open WebUI
+
+After deployment, you can integrate with Open WebUI using the function we'll create next.
+
+1. **Access Mnemosyne from your local network:**
+   - Web Interface: `http://YOUR_SERVER_IP:8000`
+   - API Endpoint: `http://YOUR_SERVER_IP:8000/api/`
+   - Qdrant Dashboard: `http://YOUR_SERVER_IP:6333/dashboard`
+
+2. **API endpoints for Open WebUI integration:**
+   - Store memories: `POST /api/memories/extract/`
+   - Retrieve memories: `POST /api/memories/retrieve/`
+   - List memories: `GET /api/memories/`
+
+### Local AI Server Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Open WebUI    │    │    Ollama       │    │   Mnemosyne     │
+│   Port: 8080    │◄──►│   Port: 11434   │◄──►│   Port: 8000    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────────────┐
+                    │     Local Network       │
+                    │  (192.168.1.0/24)      │
+                    └─────────────────────────┘
+                                 │
+              ┌──────────────────┴──────────────────┐
+              │                                     │
+    ┌─────────────────┐                   ┌─────────────────┐
+    │   PostgreSQL    │                   │     Qdrant      │
+    │   Port: 5432    │                   │   Port: 6333    │
+    └─────────────────┘                   └─────────────────┘
+```
+
+### Configuration for Different Setups
+
+#### Option 1: Single Machine Setup
+All services on one machine (recommended for development/testing):
+
+```bash
+# .env configuration
+SERVER_IP=127.0.0.1
+OLLAMA_BASE_URL=http://localhost:11434
+OPENWEBUI_URL=http://localhost:8080
+```
+
+#### Option 2: Distributed Setup
+Services across multiple machines (recommended for production):
+
+```bash
+# .env configuration
+SERVER_IP=192.168.1.100               # Mnemosyne server IP
+OLLAMA_BASE_URL=http://192.168.1.101:11434  # Ollama on different machine
+OPENWEBUI_URL=http://192.168.1.102:8080     # Open WebUI on different machine
+```
+
+#### Option 3: Docker Network Setup
+All services in Docker with custom network:
+
+```bash
+# Add to docker-compose.ai-server.yml
+networks:
+  ai-network:
+    external: true
+
+# Create shared network first
+docker network create ai-network
+
+# Use service names in .env
+OLLAMA_BASE_URL=http://ollama:11434
+OPENWEBUI_URL=http://openwebui:8080
+```
+
+### Performance Optimization for Local AI
+
+#### 1. RAM Optimization
+```yaml
+# Add to docker-compose.ai-server.yml
+services:
+  mnemosyne:
+    environment:
+      QDRANT_RAM_OPTIMIZED: "True"
+      VECTOR_BATCH_SIZE: 100
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+```
+
+#### 2. SSD Storage Optimization
+```bash
+# Use SSD for vector storage
+mkdir -p /fast-storage/mnemosyne/qdrant
+mkdir -p /fast-storage/mnemosyne/postgres
+
+# Update docker-compose volumes
+volumes:
+  qdrant_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /fast-storage/mnemosyne/qdrant
+```
+
+#### 3. Model Optimization
+```bash
+# Use quantized models for better performance
+ollama pull llama3.1:8b-instruct-q4_0    # Quantized version
+ollama pull nomic-embed-text:latest       # Latest embedding model
+```
+
+### Monitoring and Management
+
+#### Container Management
+```bash
+# Start/stop services
+docker-compose -f docker-compose.ai-server.yml up -d
+docker-compose -f docker-compose.ai-server.yml down
+
+# View resource usage
+docker stats
+
+# Update to latest version
+git pull
+docker-compose -f docker-compose.ai-server.yml up -d --build
+```
+
+#### Health Monitoring
+```bash
+# Check all services
+./scripts/health-check-all.sh
+
+# Monitor logs in real-time
+docker-compose -f docker-compose.ai-server.yml logs -f
+
+# Check memory usage
+curl http://localhost:8000/api/memories/stats/
+```
+
+#### Backup and Restore
+```bash
+# Backup script for local AI server
+./scripts/backup-ai-server.sh
+
+# Restore from backup
+./scripts/restore-ai-server.sh backup-20241207.tar.gz
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Ollama Connection Failed**
+```bash
+# Check Ollama is running
+curl http://localhost:11434/api/tags
+
+# Test from container
+docker-compose -f docker-compose.ai-server.yml exec mnemosyne \
+  curl http://host.docker.internal:11434/api/tags
+```
+
+2. **Out of Memory Errors**
+```bash
+# Check memory usage
+free -h
+docker stats
+
+# Reduce batch size
+echo "VECTOR_BATCH_SIZE=25" >> .env
+docker-compose -f docker-compose.ai-server.yml restart mnemosyne
+```
+
+3. **Slow Vector Search**
+```bash
+# Optimize Qdrant collection
+docker-compose -f docker-compose.ai-server.yml exec mnemosyne \
+  python manage.py optimize_qdrant --recreate
+```
+
+#### Performance Tuning
+
+1. **For Lower-End Hardware (< 8GB RAM):**
+```bash
+# Reduce resource allocation
+DJANGO_WORKERS=1
+VECTOR_BATCH_SIZE=25
+QDRANT_MAX_SEGMENT_SIZE=1000000
+```
+
+2. **For High-End Hardware (> 16GB RAM):**
+```bash
+# Increase performance
+DJANGO_WORKERS=4
+VECTOR_BATCH_SIZE=100
+QDRANT_RAM_OPTIMIZED=True
+```
+
+### Integration Examples
+
+#### Basic Memory Storage
+```bash
+# Store a conversation
+curl -X POST http://localhost:8000/api/memories/extract/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation_text": "I love hiking in the mountains every weekend.",
+    "user_id": "user-123"
+  }'
+```
+
+#### Memory Retrieval
+```bash
+# Retrieve relevant memories
+curl -X POST http://localhost:8000/api/memories/retrieve/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "What outdoor activities does the user enjoy?",
+    "user_id": "user-123"
+  }'
+```
+
+### Next Steps
+
+After completing this setup, you can:
+
+1. **Create Open WebUI Function**: Use the provided API endpoints to create a custom function for Open WebUI
+2. **Customize Memory Processing**: Modify prompts and thresholds in the settings
+3. **Scale Horizontally**: Add more Mnemosyne instances behind a load balancer
+4. **Add Custom Models**: Integrate with other local LLM providers
+5. **Implement Advanced Features**: Add memory categories, auto-tagging, etc.
+
+### Security for Local AI Servers
+
+Even for local deployments, consider these security practices:
+
+```bash
+# 1. Change default passwords
+POSTGRES_PASSWORD=your_secure_password
+SECRET_KEY=your_secure_secret_key
+
+# 2. Use internal networks only
+ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.100
+
+# 3. Enable basic auth for sensitive endpoints
+ENABLE_BASIC_AUTH=True
+BASIC_AUTH_USERNAME=admin
+BASIC_AUTH_PASSWORD=secure_password
+
+# 4. Restrict Qdrant dashboard access
+QDRANT_DASHBOARD_ENABLED=False  # Disable in production
+```
+
+This local AI server setup provides a robust foundation for memory-enabled AI conversations while maintaining privacy and control over your data.
+
 ## Production Deployment
 
 ### Prerequisites

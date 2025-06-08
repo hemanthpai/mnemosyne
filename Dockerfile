@@ -1,66 +1,57 @@
-# Multi-stage build for React frontend and Django backend
-
-# Stage 1: Build React frontend
-FROM node:18-alpine as frontend-builder
+# Multi-stage build for production-ready local AI server deployment
+FROM node:18-alpine AS frontend-builder
 
 WORKDIR /app/frontend
-
-# Copy package files
 COPY frontend/package*.json ./
-
-# Install dependencies
 RUN npm ci --only=production
-
-# Copy frontend source
-COPY frontend/ ./
-
-# Build the React app
+COPY frontend/ .
 RUN npm run build
 
-# Stage 2: Python backend with static files
+FROM python:3.11-slim as backend-builder
+
+WORKDIR /app
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
 FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV DJANGO_SETTINGS_MODULE=memory_service.settings
-
-# Install system dependencies
+# Install system dependencies for local AI server
 RUN apt-get update && apt-get install -y \
-    gcc \
+    curl \
     postgresql-client \
+    redis-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
+# Create app user for security
+RUN useradd --create-home --shell /bin/bash app
+
 WORKDIR /app
 
-# Install Python dependencies
-COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy Python dependencies
+COPY --from=backend-builder /root/.local /home/app/.local
+ENV PATH=/home/app/.local/bin:$PATH
 
 # Copy backend code
-COPY backend/ ./
+COPY backend/ ./backend/
+COPY --from=frontend-builder /app/frontend/build ./frontend/build/
 
-# Copy built frontend from previous stage
-COPY --from=frontend-builder /app/frontend/build ./staticfiles/
+# Copy startup scripts
+COPY scripts/ ./scripts/
+RUN chmod +x ./scripts/*.sh
 
-# Create directory for static files
-RUN mkdir -p /app/static
+# Create necessary directories
+RUN mkdir -p logs data/uploads \
+    && chown -R app:app /app
 
-# Collect static files (if using Django's static file handling)
-RUN python manage.py collectstatic --noinput --clear || echo "Static files collection skipped"
+USER app
 
-# Create a non-root user
-RUN adduser --disabled-password --gecos '' appuser && \
-    chown -R appuser:appuser /app
-USER appuser
+# Health check for container orchestration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health/ || exit 1
 
-# Expose the port
+WORKDIR /app/backend
+
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health/ || exit 1
-
-# Command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "memory_service.wsgi:application"]
+# Use startup script for proper initialization
+CMD ["/app/scripts/start-server.sh"]

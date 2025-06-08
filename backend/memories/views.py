@@ -1,13 +1,14 @@
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from settings_app.models import LLMSettings
 
+from .batch_service import batch_memory_service
 from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_service
 from .memory_search_service import memory_search_service
 from .models import Memory
@@ -25,7 +26,7 @@ class MemoryViewSet(viewsets.ModelViewSet):
     serializer_class = MemorySerializer
     queryset = Memory.objects.all()
 
-    def get_queryset(self):
+    def get_queryset(self):  # type: ignore
         """Filter memories by user_id if provided in query params"""
         user_id = self.request.GET.get("user_id")
         if user_id:
@@ -98,7 +99,7 @@ class MemoryViewSet(viewsets.ModelViewSet):
 
 class ExtractMemoriesView(APIView):
     """
-    API endpoint to extract memories from conversation text using LLM
+    API endpoint to extract memories from conversation text using LLM with batch processing
     """
 
     def post(self, request):
@@ -177,8 +178,19 @@ class ExtractMemoriesView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
-            # Store extracted memories
-            stored_memories = []
+            if not memories_data:
+                return Response(
+                    {
+                        "success": True,
+                        "memories_extracted": 0,
+                        "memories": [],
+                        "message": "No memories extracted from conversation",
+                        "model_used": llm_result.get("model", "unknown"),
+                    }
+                )
+
+            # Prepare batch data for efficient storage
+            memory_batch_data = []
             for memory_data in memories_data:
                 if not isinstance(memory_data, dict):
                     continue
@@ -187,41 +199,90 @@ class ExtractMemoriesView(APIView):
                 if not content:
                     continue
 
-                # Prepare metadata without memory_bank
+                # Prepare metadata
                 metadata = {
                     "tags": memory_data.get("tags", []),
                     "confidence": memory_data.get("confidence", 0.5),
                     "context": memory_data.get("context", ""),
                     "connections": memory_data.get("connections", []),
                     "extraction_source": "conversation",
+                    "extraction_timestamp": datetime.now(timezone.utc).isoformat(),
                     "model_used": llm_result.get("model", "unknown"),
                 }
 
-                memory = memory_search_service.store_memory_with_embedding(
-                    content=content, user_id=user_id, metadata=metadata
-                )
+                memory_batch_data.append({"content": content, "metadata": metadata})
 
-                stored_memories.append(
-                    {
-                        "id": str(memory.id),
-                        "content": memory.content,
-                        "metadata": memory.metadata,
-                        "created_at": memory.created_at.isoformat(),
-                    }
-                )
+            logger.info(f"Prepared {len(memory_batch_data)} memories for batch storage")
 
-            logger.info(
-                "Successfully extracted and stored %d memories", len(stored_memories)
+            # Use batch storage for efficiency
+            batch_result = batch_memory_service.batch_store_memories_with_embeddings(
+                memories_data=memory_batch_data,
+                user_id=user_id,
+                batch_size=20,  # Smaller batches for memory extraction
             )
 
-            return Response(
-                {
+            if batch_result["success"]:
+                created_count = batch_result["created_count"]
+                failed_count = batch_result["failed_count"]
+
+                logger.info(
+                    f"Successfully extracted and stored {created_count} memories "
+                    f"({failed_count} failed) for user {user_id}"
+                )
+
+                # Format response memories
+                formatted_memories = []
+                for memory_info in batch_result["created_memories"]:
+                    formatted_memories.append(
+                        {
+                            "id": memory_info["id"],
+                            "content": memory_info["content"],
+                            "metadata": memory_info["metadata"],
+                            "created_at": memory_info["created_at"],
+                        }
+                    )
+
+                response_data = {
                     "success": True,
-                    "memories_extracted": len(stored_memories),
-                    "memories": stored_memories,
+                    "memories_extracted": created_count,
+                    "memories_failed": failed_count,
+                    "memories": formatted_memories,
                     "model_used": llm_result.get("model", "unknown"),
+                    "extraction_details": {
+                        "total_parsed": len(memories_data),
+                        "total_prepared": len(memory_batch_data),
+                        "successfully_stored": created_count,
+                        "failed_to_store": failed_count,
+                    },
                 }
-            )
+
+                # Add warnings if some memories failed
+                if failed_count > 0:
+                    response_data["warnings"] = [
+                        f"{failed_count} memories failed to store properly"
+                    ]
+                    response_data["failed_memories"] = batch_result["failed_memories"]
+
+                return Response(response_data)
+
+            else:
+                logger.error(
+                    f"Batch storage failed: {batch_result.get('error', 'Unknown error')}"
+                )
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Failed to store extracted memories: {batch_result.get('error', 'Unknown error')}",
+                        "memories_extracted": 0,
+                        "extraction_details": {
+                            "total_parsed": len(memories_data),
+                            "total_prepared": len(memory_batch_data),
+                            "successfully_stored": 0,
+                            "failed_to_store": len(memory_batch_data),
+                        },
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
         except Exception as e:
             logger.error("Unexpected error during memory extraction: %s", e)

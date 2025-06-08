@@ -1,0 +1,33 @@
+service:
+  max_request_size_mb: 32
+  max_workers: 0  # Use all available CPU cores
+  enable_cors: true
+  
+storage:
+  # Optimize storage for performance
+  on_disk_payload: false  # Keep payload in RAM
+  optimizers:
+    deleted_threshold: 0.2
+    vacuum_min_vector_number: 1000
+    default_segment_number: 0
+    max_segment_size: null
+    memmap_threshold: null  # Keep everything in RAM
+    indexing_threshold: 20000
+    flush_interval_sec: 5
+    max_optimization_threads: 0  # Use all threads
+
+hnsw:
+  # HNSW algorithm optimizations
+  m: 16
+  ef_construct: 200
+  full_scan_threshold: 10000
+  max_indexing_threads: 0
+  on_disk: false  # Keep HNSW index in RAM
+
+cluster:
+  # Single node configuration
+  enabled: false
+
+telemetry:
+  # Disable telemetry for performance
+  disabled: true

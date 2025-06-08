@@ -5,7 +5,7 @@ import {
     LLMSettings,
     Memory,
     RetrieveMemoriesResponse
-} from '../types';
+} from '../types/index';
 
 
 const API_BASE_URL = 'http://localhost:8000';

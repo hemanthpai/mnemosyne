@@ -71,7 +71,7 @@ class MemorySearchService:
         self, query: str, user_id: str, limit: int = 10, threshold: float = 0.7
     ) -> List[Memory]:
         """
-        Search for relevant memories (synchronous)
+        Search for relevant memories using optimized vector search
 
         Args:
             query: Search query text
@@ -82,34 +82,40 @@ class MemorySearchService:
         Returns:
             List[Memory]: List of relevant memories ordered by similarity
         """
-        # Get query embedding (with caching)
-        cache_key = f"embedding:{hash(query)}"
-        if cache_key in self.embedding_cache:
-            query_embedding = self.embedding_cache[cache_key]
+        # Generate query embedding
+        embedding_result = llm_service.get_embeddings([query])
+        if not embedding_result["success"]:
+            logger.error(
+                "Failed to generate query embedding: %s", embedding_result["error"]
+            )
+            return []
+
+        query_embedding = embedding_result["embeddings"][0]
+
+        # Use optimized search with dynamic ef parameter based on query complexity
+        ef_value = self._calculate_optimal_ef(query, limit)
+
+        # Use optimized search if available, fallback to regular search
+        if hasattr(vector_service, "search_similar_optimized"):
+            vector_results = vector_service.search_similar_optimized(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                limit=limit,
+                score_threshold=threshold,
+                ef=ef_value,
+            )
         else:
-            embedding_result = llm_service.get_embeddings([query])
-            if not embedding_result["success"]:
-                logger.error(
-                    "Failed to generate query embedding: %s", embedding_result["error"]
-                )
-                return []
-            query_embedding = embedding_result["embeddings"][0]
-            self.embedding_cache[cache_key] = query_embedding
+            # Fallback to regular search
+            vector_results = vector_service.search_similar(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                limit=limit,
+            )
+            # Filter by threshold manually if using fallback
+            vector_results = [r for r in vector_results if r["score"] >= threshold]
 
-        # Search vector DB
-        vector_results = vector_service.search_similar(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            limit=limit,
-            score_threshold=threshold,
-        )
-
-        # Filter by threshold and get Memory objects
-        memory_ids = [
-            result["memory_id"]
-            for result in vector_results
-            if result["score"] >= threshold
-        ]
+        # Get Memory objects maintaining order
+        memory_ids = [result["memory_id"] for result in vector_results]
 
         if not memory_ids:
             return []
@@ -129,10 +135,10 @@ class MemorySearchService:
         self,
         search_queries: List[Dict[str, Any]],
         user_id: str,
-        limit: int = 20,  # Increase to get more candidates
-        threshold: float = 0.5,  # Lower threshold for broader search
+        limit: int = 20,
+        threshold: float = 0.5,
     ) -> List[Memory]:
-        """Enhanced search with multiple similarity approaches"""
+        """Enhanced search with multiple similarity approaches using optimized search"""
 
         all_memory_results = {}
 
@@ -144,7 +150,7 @@ class MemorySearchService:
             if not search_query:
                 continue
 
-            # Get multiple embeddings for broader semantic search
+            # Generate search variations
             search_variations = self._generate_search_variations(
                 search_query, search_type
             )
@@ -161,14 +167,17 @@ class MemorySearchService:
                     else:
                         continue
 
-                # Search with different thresholds based on search type
+                # Calculate optimal ef based on search type and query complexity
+                ef_value = self._calculate_optimal_ef_for_type(search_type, variation)
                 search_threshold = self._get_threshold_for_search_type(search_type)
 
-                vector_results = vector_service.search_similar(
+                # Use optimized search
+                vector_results = vector_service.search_similar_optimized(
                     query_embedding=query_embedding,
                     user_id=user_id,
                     limit=limit,
                     score_threshold=search_threshold,
+                    ef=ef_value,
                 )
 
                 # Process results with type-based confidence adjustment
@@ -196,6 +205,49 @@ class MemorySearchService:
 
         # Enhanced ranking that considers semantic connections
         return self._rank_and_filter_results(all_memory_results, limit)
+
+    def _calculate_optimal_ef(self, query: str, limit: int) -> int:
+        """
+        Calculate optimal ef parameter based on query complexity and desired results
+
+        Args:
+            query: Search query text
+            limit: Number of results requested
+
+        Returns:
+            Optimal ef value for HNSW search
+        """
+        # Base ef should be at least 2x the limit for good results
+        base_ef = max(limit * 2, 64)
+
+        # Adjust based on query complexity
+        query_words = len(query.split())
+
+        if query_words <= 2:
+            # Simple queries can use lower ef
+            return min(base_ef, 128)
+        elif query_words <= 5:
+            # Medium complexity
+            return int(min(base_ef * 1.5, 200))
+        else:
+            # Complex queries need higher ef for accuracy
+            return int(min(base_ef * 2, 300))
+
+    def _calculate_optimal_ef_for_type(self, search_type: str, query: str) -> int:
+        """Calculate ef based on search type requirements"""
+        base_ef = self._calculate_optimal_ef(query, 20)
+
+        # Different search types have different accuracy requirements
+        type_multipliers = {
+            "direct": 1.0,  # Standard accuracy
+            "semantic": 1.5,  # Need higher accuracy for semantic search
+            "experiential": 1.2,  # Slightly higher for experiences
+            "contextual": 1.3,  # Higher for contextual understanding
+            "interest": 1.1,  # Slightly higher for interests
+        }
+
+        multiplier = type_multipliers.get(search_type, 1.0)
+        return int(base_ef * multiplier)
 
     def _generate_search_variations(self, query: str, search_type: str) -> List[str]:
         """Generate variations of the search query for broader coverage"""

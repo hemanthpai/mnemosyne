@@ -501,6 +501,20 @@ Before finalizing your analysis, verify you have:
 **MANDATE:** Provide comprehensive, accurate analysis that gives the assistant every piece of relevant information needed to help the user effectively. Missing or incorrect analysis = Poor user experience."""
     )
 
+    # Vector optimization settings
+    vector_batch_size = models.IntegerField(
+        default=50, help_text="Batch size for vector operations"
+    )
+    search_ef_base = models.IntegerField(
+        default=128, help_text="Base ef parameter for HNSW search optimization"
+    )
+    enable_optimized_search = models.BooleanField(
+        default=True, help_text="Use optimized search with dynamic ef calculation"
+    )
+    cache_embeddings = models.BooleanField(
+        default=True, help_text="Cache query embeddings for faster repeated searches"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

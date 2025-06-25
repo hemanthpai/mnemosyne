@@ -279,7 +279,7 @@ mnemosyne.your-tailnet.ts.net {
 
     # Optional: Basic auth for extra security
     # basicauth {
-    #     admin $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNqq9qAQx4YF/v8N5UKW.NMjq  # password: secure123
+    #     admin  # password
     # }
 
     # Rate limiting

@@ -1,10 +1,10 @@
 import logging
+import os
 import time
-from typing import Any, Dict, List, Optional, Union  # Add Union import
+from typing import Any, Dict, List, Optional, Union  # Add Tuple import
 
 import requests
 from django.utils import timezone
-from settings_app.models import LLMSettings
 
 from .token_utils import TokenCounter  # Add this import
 
@@ -111,19 +111,52 @@ class LLMService:
     """
 
     def __init__(self):
-        self._load_settings()
+        self.session = requests.Session()
+        self._settings = None
+        self._settings_loaded = False
+
+    @property
+    def settings(self):
+        """Lazy load settings when first accessed"""
+        if not self._settings_loaded:
+            self._load_settings()
+        return self._settings
 
     def _load_settings(self):
-        """Load current LLM settings from database"""
+        """Load settings from database with proper error handling"""
         try:
-            self.settings = LLMSettings.get_settings()
-            logger.info(
-                "LLM settings loaded successfully: %s",
-                self.settings.extraction_provider_type,
-            )
+            from django.db import connection
+
+            # Check if we can connect to database
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+
+            # Check if the table exists
+            from django.db import transaction
+
+            with transaction.atomic():
+                from settings_app.models import LLMSettings
+
+                self._settings = LLMSettings.get_settings()
+                self._settings_loaded = True
+                print("LLM settings loaded from database")
+
         except Exception as e:
-            logger.error("Failed to load LLM settings: %s", e)
-            raise
+            print(f"Could not load LLM settings from database: {e}")
+            print("Using environment variables and defaults")
+
+            # Create a fallback settings object from environment variables
+            from types import SimpleNamespace
+
+            self._settings = SimpleNamespace(
+                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                model=os.getenv("LLM_MODEL", "llama3.1:8b"),
+                embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
+                temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
+                max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4000")),
+                timeout=int(os.getenv("LLM_TIMEOUT", "120")),
+            )
+            self._settings_loaded = True
 
     def refresh_settings(self):
         """Refresh settings from database"""

@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { extractMemories, retrieveMemories } from "../services/api";
-import { ExtractMemoriesResponse, RetrieveMemoriesResponse } from "../types";
+import {
+    ExtractMemoriesResponse,
+    RetrieveMemoriesResponse,
+} from "../types/index";
 
 const DevToolsPage: React.FC = () => {
     // Extraction state

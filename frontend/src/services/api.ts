@@ -7,8 +7,20 @@ import {
     RetrieveMemoriesResponse
 } from '../types/index';
 
+// Auto-detect API base URL based on environment
+const getApiBaseUrl = (): string => {
+    // Check if we're in a browser environment first
+    if (typeof window === 'undefined') {
+        return 'http://localhost:8000'; // Fallback for SSR
+    }
+    
+    // Use relative URLs - this will work for both development and production
+    // In development: proxied through Vite dev server
+    // In production: served by Django on the same host/port
+    return '';
+};
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = getApiBaseUrl();
 
 // Memory extraction and retrieval endpoints
 export const extractMemories = async (

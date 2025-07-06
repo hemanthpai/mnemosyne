@@ -5,7 +5,7 @@ import {
     getSettings,
     updateSettings,
 } from "../services/api";
-import { LLMSettings } from "../types";
+import { LLMSettings } from "../types/index";
 
 type SettingsTab = "prompts" | "llm" | "embeddings" | "parameters" | "search";
 

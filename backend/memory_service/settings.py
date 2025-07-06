@@ -19,6 +19,15 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)  # Optional
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "memories")
 
+STATIC_URL = "/static/"
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+
+STATICFILES_DIRS = [
+    (BASE_DIR / "../frontend/build/static").resolve(),
+    (BASE_DIR / "../frontend/build/assets").resolve(),  # Vite builds assets here
+]
+
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -48,7 +57,7 @@ ROOT_URLCONF = "memory_service.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [os.path.join(BASE_DIR, "../frontend/build")],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -125,8 +134,6 @@ USE_I18N = True
 USE_L10N = True
 
 USE_TZ = True
-
-STATIC_URL = "/static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

@@ -1,3 +1,5 @@
+import { Memory } from './types/index';
+
 export interface MemorySummary {
     summary: string;
     key_points: string[];

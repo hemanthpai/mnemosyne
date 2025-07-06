@@ -5,31 +5,35 @@ set -e
 echo "=== Mnemosyne AI Memory Service Startup ==="
 echo "Timestamp: $(date)"
 
-# Wait for database
+# Wait for database connection (basic connectivity only)
 echo "Waiting for database connection..."
-until python manage.py check --database default; do
+until pg_isready -h ${DATABASE_HOST:-db} -p ${DATABASE_PORT:-5432} -U ${DATABASE_USER:-postgres}; do
     echo "Database unavailable - sleeping"
     sleep 2
 done
 echo "Database connected successfully"
 
+# Run migrations FIRST (before any Django operations that might access models)
+echo "Running database migrations..."
+python manage.py migrate --noinput
+
+# Now we can safely do Django operations that access the database
+echo "Checking Django database configuration..."
+python manage.py check --database default
+
 # Wait for Qdrant
 echo "Waiting for Qdrant connection..."
-until python manage.py test_qdrant_connection; do
+until python manage.py test_qdrant; do
     echo "Qdrant unavailable - sleeping"
     sleep 2
 done
 echo "Qdrant connected successfully"
 
-# Run migrations
-echo "Running database migrations..."
-python manage.py migrate --noinput
-
 # Initialize Qdrant collection
 echo "Initializing Qdrant collection..."
 python manage.py init_qdrant
 
-# Create default settings if they don't exist
+# Create default settings if they don't exist (now safe after migrations)
 echo "Ensuring default settings exist..."
 python manage.py shell -c "
 from settings_app.models import LLMSettings
@@ -42,19 +46,16 @@ else:
 
 # Collect static files
 echo "Collecting static files..."
-python manage.py collectstatic --noinput
+python manage.py collectstatic --noinput --clear || echo "Static files collection skipped"
 
 echo "=== Starting Gunicorn Server ==="
+# Minimal but production-ready gunicorn config
 exec gunicorn memory_service.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers 2 \
-    --worker-class gevent \
-    --worker-connections 1000 \
     --timeout 120 \
-    --keep-alive 2 \
-    --max-requests 1000 \
-    --max-requests-jitter 100 \
-    --preload \
     --access-logfile - \
     --error-logfile - \
     --log-level info
+
+echo "=== Mnemosyne AI Memory Service Started Successfully ==="

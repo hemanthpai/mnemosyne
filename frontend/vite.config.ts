@@ -16,15 +16,13 @@ export default defineConfig({
     port: 3000,
     host: true,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-        secure: false,
-      },
-    },
+      '/api': 'http://localhost:8000',
+      '/admin': 'http://localhost:8000',
+      '/health': 'http://localhost:8000',
+    }
   },
   build: {
-    outDir: 'dist',
+    outDir: 'build',
     sourcemap: true,
     rollupOptions: {
       output: {

@@ -3,7 +3,7 @@
 # Health check script for monitoring
 
 # Check if server is responding
-if ! curl -f http://localhost:8000/api/health/ > /dev/null 2>&1; then
+if ! curl -f http://localhost:8000/health > /dev/null 2>&1; then
     echo "UNHEALTHY: Server not responding"
     exit 1
 fi

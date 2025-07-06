@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { deleteMemory, getMemory, updateMemory } from "../services/api";
-import { Memory } from "../types";
+import { Memory } from "../types/index";
 
 const MemoryDetailPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();

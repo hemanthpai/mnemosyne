@@ -1,13 +1,19 @@
 # Multi-stage build for production-ready local AI server deployment
-FROM node:18-alpine AS frontend-builder
+FROM node:18 AS frontend-builder
 
 WORKDIR /app/frontend
+
+# Copy package files
 COPY frontend/package*.json ./
-RUN npm ci --only=production
+
+# Install dependencies
+RUN npm ci
+
+# Copy source and build
 COPY frontend/ .
 RUN npm run build
 
-FROM python:3.11-slim as backend-builder
+FROM python:3.11-slim AS backend-builder
 
 WORKDIR /app
 COPY backend/requirements.txt .
@@ -20,6 +26,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     postgresql-client \
     redis-tools \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user for security
@@ -35,9 +42,10 @@ ENV PATH=/home/app/.local/bin:$PATH
 COPY backend/ ./backend/
 COPY --from=frontend-builder /app/frontend/build ./frontend/build/
 
-# Copy startup scripts
+# Copy startup scripts and fix line endings
 COPY scripts/ ./scripts/
-RUN chmod +x ./scripts/*.sh
+RUN dos2unix ./scripts/*.sh 2>/dev/null || true && \
+    chmod +x ./scripts/*.sh
 
 # Create necessary directories
 RUN mkdir -p logs data/uploads \
@@ -47,11 +55,12 @@ USER app
 
 # Health check for container orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health/ || exit 1
+    CMD /app/scripts/health-check-all.sh || exit 1
 
 WORKDIR /app/backend
 
 EXPOSE 8000
 
 # Use startup script for proper initialization
-CMD ["/app/scripts/start-server.sh"]
+# CMD ["/app/scripts/start-server.sh"]
+CMD ["/bin/bash", "-c", "/app/scripts/start-server.sh"]

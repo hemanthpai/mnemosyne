@@ -1,9 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+    fetchModels,
     getPromptTokenCounts,
     getSettings,
     updateSettings,
+    validateEndpoint,
 } from "../services/api";
 import { LLMSettings } from "../types/index";
 
@@ -31,6 +33,31 @@ const SettingsPage: React.FC = () => {
         memory_summarization_prompt: number;
     } | null>(null);
     const [tokenCountsLoading, setTokenCountsLoading] = useState(false);
+
+    // URL validation and model fetching state
+    const [endpointValidation, setEndpointValidation] = useState<{
+        extraction: { isValid: boolean | null; error?: string; isValidating: boolean };
+        embeddings: { isValid: boolean | null; error?: string; isValidating: boolean };
+    }>({
+        extraction: { isValid: null, error: undefined, isValidating: false },
+        embeddings: { isValid: null, error: undefined, isValidating: false }
+    });
+
+    const [availableModels, setAvailableModels] = useState<{
+        extraction: string[];
+        embeddings: string[];
+    }>({
+        extraction: [],
+        embeddings: []
+    });
+
+    const [modelsLoading, setModelsLoading] = useState<{
+        extraction: boolean;
+        embeddings: boolean;
+    }>({
+        extraction: false,
+        embeddings: false
+    });
 
     useEffect(() => {
         const fetchSettings = async () => {
@@ -96,6 +123,109 @@ const SettingsPage: React.FC = () => {
         setSettings({ ...settings, [field]: value });
     };
 
+    // Debounced URL validation
+    const validateEndpointUrl = useCallback(
+        async (type: 'extraction' | 'embeddings', url: string, providerType: string, apiKey?: string) => {
+            if (!url.trim()) {
+                setEndpointValidation(prev => ({
+                    ...prev,
+                    [type]: { isValid: null, error: undefined, isValidating: false }
+                }));
+                return;
+            }
+
+            setEndpointValidation(prev => ({
+                ...prev,
+                [type]: { isValid: null, error: undefined, isValidating: true }
+            }));
+
+            try {
+                const result = await validateEndpoint(url, providerType, apiKey);
+                setEndpointValidation(prev => ({
+                    ...prev,
+                    [type]: { 
+                        isValid: result.success, 
+                        error: result.error, 
+                        isValidating: false 
+                    }
+                }));
+
+                // If validation successful, fetch models
+                if (result.success) {
+                    await fetchModelsForEndpoint(type, url, providerType, apiKey);
+                }
+            } catch (error: any) {
+                setEndpointValidation(prev => ({
+                    ...prev,
+                    [type]: { 
+                        isValid: false, 
+                        error: error.message || 'Failed to validate endpoint', 
+                        isValidating: false 
+                    }
+                }));
+            }
+        },
+        []
+    );
+
+    const fetchModelsForEndpoint = useCallback(
+        async (type: 'extraction' | 'embeddings', url: string, providerType: string, apiKey?: string) => {
+            setModelsLoading(prev => ({ ...prev, [type]: true }));
+            
+            try {
+                const result = await fetchModels(url, providerType, apiKey);
+                if (result.success && result.models) {
+                    setAvailableModels(prev => ({
+                        ...prev,
+                        [type]: result.models || []
+                    }));
+                } else {
+                    console.warn(`Failed to fetch models for ${type}:`, result.error);
+                }
+            } catch (error: any) {
+                console.error(`Error fetching models for ${type}:`, error);
+            } finally {
+                setModelsLoading(prev => ({ ...prev, [type]: false }));
+            }
+        },
+        []
+    );
+
+    // Debounced validation with timeout
+    useEffect(() => {
+        if (!settings) return;
+
+        const timeoutId = setTimeout(() => {
+            if (settings.extraction_endpoint_url) {
+                validateEndpointUrl(
+                    'extraction',
+                    settings.extraction_endpoint_url,
+                    settings.extraction_provider_type,
+                    settings.extraction_endpoint_api_key
+                );
+            }
+        }, 1000);
+
+        return () => clearTimeout(timeoutId);
+    }, [settings?.extraction_endpoint_url, settings?.extraction_provider_type, settings?.extraction_endpoint_api_key, validateEndpointUrl]);
+
+    useEffect(() => {
+        if (!settings) return;
+
+        const timeoutId = setTimeout(() => {
+            if (settings.embeddings_endpoint_url) {
+                validateEndpointUrl(
+                    'embeddings',
+                    settings.embeddings_endpoint_url,
+                    settings.embeddings_provider_type,
+                    settings.embeddings_endpoint_api_key
+                );
+            }
+        }, 1000);
+
+        return () => clearTimeout(timeoutId);
+    }, [settings?.embeddings_endpoint_url, settings?.embeddings_provider_type, settings?.embeddings_endpoint_api_key, validateEndpointUrl]);
+
     const tabs = [
         { id: "prompts" as SettingsTab, name: "Prompts", icon: "📝" },
         { id: "llm" as SettingsTab, name: "LLM Endpoints", icon: "🤖" },
@@ -103,6 +233,46 @@ const SettingsPage: React.FC = () => {
         { id: "parameters" as SettingsTab, name: "LLM Parameters", icon: "⚙️" },
         { id: "search" as SettingsTab, name: "Search Config", icon: "🎯" },
     ];
+
+    // URL validation indicator component
+    const ValidationIndicator: React.FC<{
+        isValid: boolean | null;
+        error?: string;
+        isValidating: boolean;
+    }> = ({ isValid, error, isValidating }) => {
+        if (isValidating) {
+            return (
+                <div className="flex items-center space-x-2 text-sm text-blue-600">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    <span>Validating...</span>
+                </div>
+            );
+        }
+
+        if (isValid === null) {
+            return null;
+        }
+
+        if (isValid) {
+            return (
+                <div className="flex items-center space-x-2 text-sm text-green-600">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    <span>Endpoint valid</span>
+                </div>
+            );
+        }
+
+        return (
+            <div className="flex items-center space-x-2 text-sm text-red-600">
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+                <span>{error || 'Endpoint invalid'}</span>
+            </div>
+        );
+    };
 
     const TokenCountBadge: React.FC<{
         count: number | undefined;
@@ -529,26 +699,6 @@ const SettingsPage: React.FC = () => {
                                             </select>
                                         </div>
 
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Model
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={
-                                                    settings.extraction_model
-                                                }
-                                                onChange={(e) =>
-                                                    handleInputChange(
-                                                        "extraction_model",
-                                                        e.target.value
-                                                    )
-                                                }
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                                placeholder="e.g., gpt-4, llama3"
-                                            />
-                                        </div>
-
                                         <div className="md:col-span-2">
                                             <label className="block text-sm font-medium text-gray-700 mb-1">
                                                 Endpoint URL
@@ -567,6 +717,13 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 placeholder="http://localhost:11434"
                                             />
+                                            <div className="mt-2">
+                                                <ValidationIndicator
+                                                    isValid={endpointValidation.extraction.isValid}
+                                                    error={endpointValidation.extraction.error}
+                                                    isValidating={endpointValidation.extraction.isValidating}
+                                                />
+                                            </div>
                                         </div>
 
                                         <div className="md:col-span-2">
@@ -587,6 +744,49 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 placeholder="Your API key (leave empty if not needed)"
                                             />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Model
+                                                {modelsLoading.extraction && (
+                                                    <span className="ml-2 text-xs text-blue-600">
+                                                        Loading models...
+                                                    </span>
+                                                )}
+                                            </label>
+                                            {availableModels.extraction.length > 0 ? (
+                                                <select
+                                                    value={settings.extraction_model}
+                                                    onChange={(e) =>
+                                                        handleInputChange(
+                                                            "extraction_model",
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    <option value="">Select a model</option>
+                                                    {availableModels.extraction.map((model) => (
+                                                        <option key={model} value={model}>
+                                                            {model}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            ) : (
+                                                <input
+                                                    type="text"
+                                                    value={settings.extraction_model}
+                                                    onChange={(e) =>
+                                                        handleInputChange(
+                                                            "extraction_model",
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="e.g., gpt-4, llama3 (validate endpoint to see available models)"
+                                                />
+                                            )}
                                         </div>
 
                                         <div>
@@ -646,26 +846,6 @@ const SettingsPage: React.FC = () => {
                                             </select>
                                         </div>
 
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Model
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={
-                                                    settings.embeddings_model
-                                                }
-                                                onChange={(e) =>
-                                                    handleInputChange(
-                                                        "embeddings_model",
-                                                        e.target.value
-                                                    )
-                                                }
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                                placeholder="e.g., text-embedding-ada-002, nomic-embed-text"
-                                            />
-                                        </div>
-
                                         <div className="md:col-span-2">
                                             <label className="block text-sm font-medium text-gray-700 mb-1">
                                                 Endpoint URL
@@ -684,6 +864,13 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 placeholder="http://localhost:11434"
                                             />
+                                            <div className="mt-2">
+                                                <ValidationIndicator
+                                                    isValid={endpointValidation.embeddings.isValid}
+                                                    error={endpointValidation.embeddings.error}
+                                                    isValidating={endpointValidation.embeddings.isValidating}
+                                                />
+                                            </div>
                                         </div>
 
                                         <div className="md:col-span-2">
@@ -704,6 +891,49 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 placeholder="Your API key (leave empty if not needed)"
                                             />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Model
+                                                {modelsLoading.embeddings && (
+                                                    <span className="ml-2 text-xs text-blue-600">
+                                                        Loading models...
+                                                    </span>
+                                                )}
+                                            </label>
+                                            {availableModels.embeddings.length > 0 ? (
+                                                <select
+                                                    value={settings.embeddings_model}
+                                                    onChange={(e) =>
+                                                        handleInputChange(
+                                                            "embeddings_model",
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    <option value="">Select a model</option>
+                                                    {availableModels.embeddings.map((model) => (
+                                                        <option key={model} value={model}>
+                                                            {model}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            ) : (
+                                                <input
+                                                    type="text"
+                                                    value={settings.embeddings_model}
+                                                    onChange={(e) =>
+                                                        handleInputChange(
+                                                            "embeddings_model",
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    placeholder="e.g., text-embedding-ada-002, nomic-embed-text (validate endpoint to see available models)"
+                                                />
+                                            )}
                                         </div>
 
                                         <div>

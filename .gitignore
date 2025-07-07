@@ -25,7 +25,7 @@ staticfiles/
 instance/
 .settings/
 local_settings.py
-
+!.env.example
 # VSCode
 .history/
 

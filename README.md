@@ -2,30 +2,6 @@
 
 This project is a service that allows persisting and retrieving memories to enable AI models to remember important items from their past interactions with users. The application consists of a Django backend and a React frontend.
 
-## Project Structure
-
-```
-mnemosyne
-├── backend
-│   ├── memory_service
-│   ├── memories
-│   ├── settings_app
-│   ├── manage.py
-│   ├── requirements.txt
-│   └── .env
-├── frontend
-│   ├── public
-│   ├── src
-│   └── .env
-├── docker-compose.yml
-├── docker-compose.prod.yml
-├── docker-compose.homeserver.yml
-├── Dockerfile
-├── nginx.conf
-├── Caddyfile
-└── qdrant_storage
-```
-
 ## Backend
 
 The backend is built using Django and provides REST API endpoints for memory management. Key components include:

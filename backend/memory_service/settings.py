@@ -10,8 +10,15 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "your-secret-key")
 # DEBUG = os.environ.get("DJANGO_DEBUG", "False") == "True"
 DEBUG = True  # Set to False in production
 
-# Fix ALLOWED_HOSTS - add localhost with port
+# Get ALLOWED_HOSTS from environment variable
+allowed_hosts_env = os.environ.get("ALLOWED_HOSTS", "")
+env_hosts = (
+    [host.strip() for host in allowed_hosts_env.split(",")] if allowed_hosts_env else []
+)
+
+# Combine with default hosts
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "localhost:8000", "127.0.0.1:8000"]
+ALLOWED_HOSTS.extend([host for host in env_hosts if host and host not in ALLOWED_HOSTS])
 
 # Qdrant Configuration
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")

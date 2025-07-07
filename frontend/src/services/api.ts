@@ -188,7 +188,7 @@ export const getPromptTokenCounts = async (): Promise<{
     return response.json();
 };
 
-// Direct endpoint validation and model fetching
+// Backend proxy endpoint validation and model fetching
 export const validateEndpoint = async (
     url: string,
     provider_type: string,
@@ -198,40 +198,17 @@ export const validateEndpoint = async (
     error?: string;
 }> => {
     try {
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json'
-        };
-        
-        if (api_key) {
-            headers['Authorization'] = `Bearer ${api_key}`;
-        }
-
-        let endpoint: string;
-        if (provider_type === 'ollama') {
-            endpoint = `${url.replace(/\/$/, '')}/api/tags`;
-        } else {
-            // OpenAI compatible
-            endpoint = `${url.replace(/\/$/, '')}/v1/models`;
-        }
-
-        const response = await fetch(endpoint, {
-            method: 'GET',
-            headers,
-            signal: AbortSignal.timeout(10000) // 10 second timeout
+        const response = await axios.post(`${API_BASE_URL}/api/settings/validate-endpoint/`, {
+            url,
+            provider_type,
+            api_key
         });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        return {
-            success: true
-        };
+        return response.data;
     } catch (error: any) {
         console.error('Error validating endpoint:', error);
         return {
             success: false,
-            error: error.name === 'AbortError' ? 'Request timed out' : (error.message || 'Failed to validate endpoint')
+            error: error.response?.data?.error || error.message || 'Failed to validate endpoint'
         };
     }
 };
@@ -246,56 +223,17 @@ export const fetchModels = async (
     error?: string;
 }> => {
     try {
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json'
-        };
-        
-        if (api_key) {
-            headers['Authorization'] = `Bearer ${api_key}`;
-        }
-
-        let endpoint: string;
-        if (provider_type === 'ollama') {
-            endpoint = `${url.replace(/\/$/, '')}/api/tags`;
-        } else {
-            // OpenAI compatible
-            endpoint = `${url.replace(/\/$/, '')}/v1/models`;
-        }
-
-        const response = await fetch(endpoint, {
-            method: 'GET',
-            headers,
-            signal: AbortSignal.timeout(15000) // 15 second timeout
+        const response = await axios.post(`${API_BASE_URL}/api/settings/fetch-models/`, {
+            url,
+            provider_type,
+            api_key
         });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        let models: string[] = [];
-
-        if (provider_type === 'ollama') {
-            // Ollama format: { models: [{ name: "model-name", ... }, ...] }
-            if (data.models && Array.isArray(data.models)) {
-                models = data.models.map((model: any) => model.name).filter(Boolean);
-            }
-        } else {
-            // OpenAI compatible format: { data: [{ id: "model-id", ... }, ...] }
-            if (data.data && Array.isArray(data.data)) {
-                models = data.data.map((model: any) => model.id).filter(Boolean);
-            }
-        }
-
-        return {
-            success: true,
-            models: models.sort()
-        };
+        return response.data;
     } catch (error: any) {
         console.error('Error fetching models:', error);
         return {
             success: false,
-            error: error.name === 'AbortError' ? 'Request timed out' : (error.message || 'Failed to fetch models')
+            error: error.response?.data?.error || error.message || 'Failed to fetch models'
         };
     }
 };

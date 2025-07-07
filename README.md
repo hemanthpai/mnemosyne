@@ -1,6 +1,12 @@
 # Mnemosyne - AI Memory Management
 
-This project is a service that allows persisting and retrieving memories to enable AI models to remember important items from their past interactions with users. The application consists of a Django backend and a React frontend.
+<img align="left" src="https://upload.wikimedia.org/wikipedia/commons/3/32/Mnemosyne_Rossetti.jpg" width="75" style="margin-right: 20px;"/>
+
+*Mnemosyne, the Greek goddess of memory and remembrance*
+
+Mnemosyne is a service that allows persisting and retrieving memories to enable AI models to remember important items from their past interactions with users. The application consists of a Django backend and a React frontend.
+
+<br clear="left"/>
 
 ## Backend
 
@@ -108,8 +114,8 @@ OLLAMA_BASE_URL=http://192.168.1.50:11434  # Replace with your Ollama server IP
 The provided `docker-compose.homeserver.yml` includes:
 * PostgreSQL database with persistent storage
 * Qdrant vector database exposed on port 6333
-* The backend APIs exposed on port 8080
-* The frontend exposed on port 8080
+* The backend APIs exposed on port 8000
+* The frontend exposed on port 8000
 
 4. **Deploy the application**
 ```bash
@@ -118,10 +124,87 @@ docker-compose -f docker-compose.homeserver.yml up -d
 ```
 
 5. **Access your application**
-- Visit `http://YOUR_SERVER_IP:8080` from any device on your network
+- Visit `http://YOUR_SERVER_IP:8000` from any device on your network
 - Qdrant dashboard: `http://YOUR_SERVER_IP:6333/dashboard`
 
-### Home Server Management
+
+## Open WebUI Integration
+
+Mnemosyne can be integrated with Open WebUI to provide long-term memory capabilities to your chat interface.
+
+1. **Copy the integration file to Open WebUI**
+
+   Copy the `openwebui_mnemosyne_integration.py` file to your Open WebUI filters directory (typically `/path/to/openwebui/extensions/filters/`).
+
+2. **Configure the connection endpoint**
+
+   The connection method depends on your deployment scenario:
+
+   > ⚠️ **Important:** The `mnemosyne_endpoint` URL must be set correctly based on your deployment configuration:
+   >
+   > - **If both services are running in Docker on the same host:**
+   >   ```
+   >   mnemosyne_endpoint = "http://host.docker.internal:8000"
+   >   ```
+   >   You must also add `host.docker.internal` to your `ALLOWED_HOSTS` in `.env.homeserver`
+   >
+   > - **If running on separate machines:**
+   >   ```
+   >   mnemosyne_endpoint = "http://your-mnemosyne-server-ip:8000"
+   >   ```
+   >
+   > - **If running OpenWebUI outside Docker:**
+   >   ```
+   >   mnemosyne_endpoint = "http://localhost:8000"
+   >   ```
+
+3. **Update Mnemosyne's ALLOWED_HOSTS**
+
+   Edit your `.env.homeserver` file to include all hosts that will connect to Mnemosyne:
+
+   ```bash
+   # Add all connection hosts
+   ALLOWED_HOSTS=localhost,127.0.0.1,your-server-ip,host.docker.internal
+   ```
+
+4. **Activate in Open WebUI**
+
+    In Open WebUI interface:
+    * Go to Settings > Filters
+    * Enable "Mnemosyne Memory Integration"
+    * Configure options like memory limit and threshold as needed
+
+5. **Test the integration**
+
+    Start a conversation in Open WebUI. The integration will:
+    * Extract memories from your conversations automatically
+    * Provide relevant memories when related topics arise
+    * Use your configured user ID to maintain separate memory contexts
+
+## Home Server Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Open WebUI    │    │    Ollama       │    │   Mnemosyne     │
+│   Port: 8000    │◄──►│   Port: 11434   │◄──►│   Port: 8000    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────────────┐
+                    │     Local Network       │
+                    │  (192.168.1.0/24)      │
+                    └─────────────────────────┘
+                                 │
+              ┌──────────────────┴──────────────────┐
+              │                                     │
+    ┌─────────────────┐                   ┌─────────────────┐
+    │   PostgreSQL    │                   │     Qdrant      │
+    │   Port: 5432    │                   │   Port: 6333    │
+    └─────────────────┘                   └─────────────────┘
+```
+
+## Home Server Management
 
 #### System Service (Optional)
 Create a systemd service for automatic startup:
@@ -209,82 +292,6 @@ docker-compose -f docker-compose.homeserver.yml restart app
 3. **Notifications**: Set up monitoring with Uptime Kuma or similar
 4. **Storage**: Monitor disk usage, especially for Qdrant vectors and database
 5. **Performance**: Adjust Docker memory limits based on your server capacity
-
-## Open WebUI Integration
-
-Mnemosyne can be integrated with Open WebUI to provide long-term memory capabilities to your chat interface.
-
-1. **Copy the integration file to Open WebUI**
-
-   Copy the `openwebui_mnemosyne_integration.py` file to your Open WebUI filters directory (typically `/path/to/openwebui/extensions/filters/`).
-
-2. **Configure the connection endpoint**
-
-   The connection method depends on your deployment scenario:
-
-   > ⚠️ **Important:** The `mnemosyne_endpoint` URL must be set correctly based on your deployment configuration:
-   >
-   > - **If both services are running in Docker on the same host:**
-   >   ```
-   >   mnemosyne_endpoint = "http://host.docker.internal:8080"
-   >   ```
-   >   You must also add `host.docker.internal` to your `ALLOWED_HOSTS` in `.env.homeserver`
-   >
-   > - **If running on separate machines:**
-   >   ```
-   >   mnemosyne_endpoint = "http://your-mnemosyne-server-ip:8080"
-   >   ```
-   >
-   > - **If running OpenWebUI outside Docker:**
-   >   ```
-   >   mnemosyne_endpoint = "http://localhost:8080"
-   >   ```
-
-3. **Update Mnemosyne's ALLOWED_HOSTS**
-
-   Edit your `.env.homeserver` file to include all hosts that will connect to Mnemosyne:
-
-   ```bash
-   # Add all connection hosts
-   ALLOWED_HOSTS=localhost,127.0.0.1,your-server-ip,host.docker.internal
-   ```
-
-4. **Activate in Open WebUI**
-
-    In Open WebUI interface:
-    * Go to Settings > Filters
-    * Enable "Mnemosyne Memory Integration"
-    * Configure options like memory limit and threshold as needed
-
-5. **Test the integration**
-
-    Start a conversation in Open WebUI. The integration will:
-    * Extract memories from your conversations automatically
-    * Provide relevant memories when related topics arise
-    * Use your configured user ID to maintain separate memory contexts
-
-## Home Server Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Open WebUI    │    │    Ollama       │    │   Mnemosyne     │
-│   Port: 8080    │◄──►│   Port: 11434   │◄──►│   Port: 8000    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                    ┌─────────────────────────┐
-                    │     Local Network       │
-                    │  (192.168.1.0/24)      │
-                    └─────────────────────────┘
-                                 │
-              ┌──────────────────┴──────────────────┐
-              │                                     │
-    ┌─────────────────┐                   ┌─────────────────┐
-    │   PostgreSQL    │                   │     Qdrant      │
-    │   Port: 5432    │                   │   Port: 6333    │
-    └─────────────────┘                   └─────────────────┘
-```
 
 ## Troubleshooting
 

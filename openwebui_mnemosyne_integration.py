@@ -292,11 +292,15 @@ class Filter:
             
             if memory_result and memory_result.get("memories"):
                 memories = memory_result["memories"]
+                memory_summary = memory_result.get("memory_summary", {})
                 
                 # Step 3: Found memories - preparing context
                 await self._emit_status(__event_emitter__, f"✨ Found {len(memories)} relevant memories! Preparing context...", False)
                 
-                memory_context = self._format_memories_for_context(memories)
+                # Use relevant_context from memory summary if available, otherwise fall back to formatted memories
+                memory_context = memory_summary.get("relevant_context", "")
+                if not memory_context:
+                    memory_context = self._format_memories_for_context(memories)
                 
                 if memory_context:
                     # Add memory context to the conversation

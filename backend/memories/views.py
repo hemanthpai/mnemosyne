@@ -142,11 +142,12 @@ class ExtractMemoriesView(APIView):
             except Exception as e:
                 logger.warning("Could not add date to system prompt: %s", e)
 
-            # Query LLM to extract memories
+            # Query LLM to extract memories with higher token limit
             llm_result = llm_service.query_llm(
                 system_prompt=system_prompt_with_date,
                 prompt=conversation_text,
                 response_format=MEMORY_EXTRACTION_FORMAT,
+                max_tokens=16384,  # Increased token limit for memory extraction
             )
 
             if not llm_result["success"]:
@@ -160,22 +161,74 @@ class ExtractMemoriesView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
-            # Parse the JSON response
+            # Parse the JSON response with robust error handling
             try:
-                memories_data = json.loads(llm_result["response"])
+                response_text = llm_result["response"].strip()
+                memories_data = json.loads(response_text)
                 if not isinstance(memories_data, list):
                     raise ValueError("Expected a JSON array")
+
             except (json.JSONDecodeError, ValueError) as e:
                 logger.error("Failed to parse LLM response as JSON: %s", e)
-                logger.debug("LLM response: %s", llm_result["response"])
-                return Response(
-                    {
-                        "success": False,
-                        "error": "Failed to parse memory extraction results",
-                        "memories_extracted": 0,
-                    },
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                logger.debug(
+                    "LLM response length: %d chars", len(llm_result.get("response", ""))
                 )
+                logger.debug(
+                    "LLM response preview: %s...", llm_result.get("response", "")[:500]
+                )
+
+                # Try to recover partial results from truncated JSON
+                try:
+                    response_text = llm_result["response"].strip()
+
+                    # Handle truncated JSON array by finding the last complete object
+                    if response_text.startswith("[") and "{" in response_text:
+                        # Find the position of the last complete JSON object
+                        last_complete_brace = response_text.rfind("}")
+                        if last_complete_brace != -1:
+                            # Try to create valid JSON by truncating after the last complete object
+                            truncated_json = response_text[: last_complete_brace + 1]
+                            if not truncated_json.endswith("]"):
+                                truncated_json += "]"
+
+                            memories_data = json.loads(truncated_json)
+                            if (
+                                isinstance(memories_data, list)
+                                and len(memories_data) > 0
+                            ):
+                                logger.warning(
+                                    "Recovered %d memories from truncated JSON response",
+                                    len(memories_data),
+                                )
+                            else:
+                                raise ValueError(
+                                    "No valid memories found in truncated response"
+                                )
+                        else:
+                            raise ValueError("Could not find any complete JSON objects")
+                    else:
+                        raise ValueError(
+                            "Response does not appear to contain a JSON array"
+                        )
+
+                except Exception as recovery_error:
+                    logger.error(
+                        "Failed to recover memories from malformed JSON: %s",
+                        recovery_error,
+                    )
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to parse memory extraction results. The response may have been truncated due to token limits.",
+                            "memories_extracted": 0,
+                            "debug_info": {
+                                "response_length": len(llm_result.get("response", "")),
+                                "parse_error": str(e),
+                                "recovery_error": str(recovery_error),
+                            },
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
 
             # Store extracted memories
             stored_memories = []

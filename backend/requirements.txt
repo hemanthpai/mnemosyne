@@ -12,3 +12,8 @@ qdrant_client==1.14.2
 pylint-django==2.6.1
 requests>=2.31.0
 gunicorn==23.0.0
+neo4j==5.28.0
+langchain-core==0.3.68
+langchain-experimental==0.3.5rc1
+langchain-community==0.3.27
+langchain-openai==0.3.27

@@ -13,6 +13,7 @@ from .memory_search_service import memory_search_service
 from .models import Memory
 from .serializers import MemorySerializer
 from .vector_service import vector_service
+from .graph_service import graph_service
 
 logger = logging.getLogger(__name__)
 
@@ -702,5 +703,215 @@ class DeleteAllMemoriesView(APIView):
             logger.error(f"Error deleting memories: {e}")
             return Response(
                 {"success": False, "error": "An unexpected error occurred"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class TextToGraphView(APIView):
+    """
+    API endpoint to convert text to graph documents and store in Neo4j
+    """
+
+    def post(self, request):
+        text = request.data.get("text", "")
+        user_id = request.data.get("user_id")
+
+        if not text:
+            return Response(
+                {"success": False, "error": "text is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate user_id format
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            logger.info("Converting text to graph for user %s", user_id)
+            
+            # Convert text to graph and store in Neo4j
+            result = graph_service.text_to_graph(text, user_id)
+            
+            if result["success"]:
+                return Response(
+                    {
+                        "success": True,
+                        "message": "Text successfully converted to graph",
+                        "nodes_created": result["nodes_created"],
+                        "relationships_created": result["relationships_created"],
+                        "graph_documents_count": result["graph_documents_count"],
+                        "user_id": user_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                logger.error("Graph conversion failed: %s", result["error"])
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Graph conversion failed: {result['error']}",
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        except Exception as e:
+            logger.error("Unexpected error during text to graph conversion: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during graph conversion",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class GraphStatsView(APIView):
+    """
+    API endpoint to get graph statistics for a user
+    """
+
+    def get(self, request):
+        user_id = request.query_params.get("user_id")
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # Get user-specific graph statistics
+            stats = graph_service.get_user_graph_stats(user_id)
+            
+            if "error" in stats:
+                return Response(
+                    {"success": False, "error": stats["error"]},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            
+            # Get overall database info
+            db_info = graph_service.get_database_info()
+            
+            return Response(
+                {
+                    "success": True,
+                    "user_stats": stats,
+                    "database_info": db_info,
+                }
+            )
+
+        except Exception as e:
+            logger.error("Error getting graph stats: %s", e)
+            return Response(
+                {"success": False, "error": "Failed to get graph statistics"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class GraphHealthView(APIView):
+    """
+    API endpoint to check graph database health
+    """
+
+    def get(self, request):
+        try:
+            health_check = graph_service.health_check()
+            
+            if health_check["healthy"]:
+                return Response(
+                    {
+                        "success": True,
+                        "healthy": True,
+                        "message": health_check["message"],
+                        "database_info": graph_service.get_database_info(),
+                    }
+                )
+            else:
+                return Response(
+                    {
+                        "success": False,
+                        "healthy": False,
+                        "error": health_check["error"],
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        except Exception as e:
+            logger.error("Error checking graph health: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "healthy": False,
+                    "error": "Failed to check graph database health",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class GraphQueryView(APIView):
+    """
+    API endpoint to execute Cypher queries against the graph database
+    """
+
+    def post(self, request):
+        query = request.data.get("query", "")
+
+        if not query:
+            return Response(
+                {"success": False, "error": "query is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            logger.info("Executing graph query: %s", query)
+            
+            # Execute the Cypher query
+            result = graph_service.query_graph(query)
+            
+            if result["success"]:
+                return Response(
+                    {
+                        "success": True,
+                        "results": result["results"],
+                        "count": result["count"],
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                logger.error("Graph query failed: %s", result["error"])
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Graph query failed: {result['error']}",
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        except Exception as e:
+            logger.error("Unexpected error during graph query: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during graph query execution",
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

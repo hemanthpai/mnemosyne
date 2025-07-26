@@ -4,9 +4,9 @@ import time
 from typing import Any, Dict
 
 from django.conf import settings
-from langchain_community.graphs import Neo4jGraph
 from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
+from langchain_neo4j import Neo4jGraph
 from neo4j import GraphDatabase
 
 from .llm_service import llm_service
@@ -183,6 +183,13 @@ class GraphService:
                     "error": "Graph transformer or Neo4j connection not initialized",
                 }
 
+            # Check for empty text input
+            if not text.strip():
+                return {
+                    "success": False,
+                    "error": "Empty text input provided",
+                }
+
             # Create LangChain document from text
             document = Document(
                 page_content=text,
@@ -211,11 +218,11 @@ class GraphService:
             for graph_doc in graph_documents:
                 # Add user_id property to all nodes in the graph document
                 for node in graph_doc.nodes:
-                    if not hasattr(node, 'properties'):
+                    if not hasattr(node, "properties"):
                         node.properties = {}
-                    node.properties['user_id'] = user_id
-                    node.properties['extraction_timestamp'] = str(int(time.time()))
-                
+                    node.properties["user_id"] = user_id
+                    node.properties["extraction_timestamp"] = str(int(time.time()))
+
                 # Add graph document to Neo4j
                 self.graph.add_graph_documents([graph_doc])
 

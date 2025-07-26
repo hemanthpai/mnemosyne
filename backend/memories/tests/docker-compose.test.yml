@@ -1,0 +1,29 @@
+version: '3'
+
+services:
+  neo4j-test:
+    image: neo4j:latest
+    ports:
+      - "7688:7687"  # Bolt protocol
+      - "7475:7474"  # HTTP
+    environment:
+      - NEO4J_AUTH=neo4j/testpassword
+      - NEO4J_dbms_memory_pagecache_size=256M
+      - NEO4J_dbms_memory_heap_initial__size=256M
+      - NEO4J_dbms_memory_heap_max__size=512M
+      # APOC plugin configuration
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j-test-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:7474"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  neo4j-test-data:
+    driver: local

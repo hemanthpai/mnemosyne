@@ -15,6 +15,7 @@ from .serializers import MemorySerializer
 from .vector_service import vector_service
 from .graph_service import graph_service
 from .conflict_resolution_service import conflict_resolution_service
+from .memory_consolidation_service import memory_consolidation_service
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +233,10 @@ class ExtractMemoriesView(APIView):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
-            # Store extracted memories with conflict resolution
+            # Store extracted memories with conflict resolution and deduplication
             stored_memories = []
             conflicts_resolved = 0
+            duplicates_consolidated = 0
             
             # Get existing active memories for the user to check for conflicts
             existing_memories = list(Memory.objects.filter(
@@ -299,6 +301,35 @@ class ExtractMemoriesView(APIView):
                             memory, conflicting_memory, conflict_type
                         )
 
+                # Check for duplicates after conflict resolution
+                duplicates = memory_consolidation_service.find_duplicates(
+                    memory, user_id
+                )
+                
+                if duplicates:
+                    # Filter duplicates that might be suitable for consolidation
+                    consolidation_candidates = [
+                        (dup_memory, score, dup_type) for dup_memory, score, dup_type in duplicates
+                        if dup_type in ['exact_duplicate', 'near_duplicate'] and score >= 0.90
+                    ]
+                    
+                    if consolidation_candidates:
+                        duplicates_consolidated += len(consolidation_candidates)
+                        
+                        # Consolidate with the most similar duplicate
+                        memories_to_consolidate = [memory] + [dup[0] for dup in consolidation_candidates[:2]]  # Limit to avoid over-consolidation
+                        
+                        consolidated_memory = memory_consolidation_service.merge_memories(
+                            memories_to_consolidate, 
+                            consolidation_strategy="llm_guided"
+                        )
+                        
+                        if consolidated_memory:
+                            memory = consolidated_memory
+                            logger.info(
+                                f"Consolidated {len(memories_to_consolidate)} duplicate memories into {memory.id}"
+                            )
+
                 stored_memories.append(
                     {
                         "id": str(memory.id),
@@ -316,8 +347,8 @@ class ExtractMemoriesView(APIView):
                 )
 
             logger.info(
-                "Successfully extracted and stored %d memories with %d conflicts resolved", 
-                len(stored_memories), conflicts_resolved
+                "Successfully extracted and stored %d memories with %d conflicts resolved and %d duplicates consolidated", 
+                len(stored_memories), conflicts_resolved, duplicates_consolidated
             )
 
             return Response(
@@ -325,6 +356,7 @@ class ExtractMemoriesView(APIView):
                     "success": True,
                     "memories_extracted": len(stored_memories),
                     "conflicts_resolved": conflicts_resolved,
+                    "duplicates_consolidated": duplicates_consolidated,
                     "memories": stored_memories,
                     "model_used": llm_result.get("model", "unknown"),
                 }

@@ -618,6 +618,38 @@ Before finalizing your analysis, verify you have:
 **MANDATE:** Provide comprehensive, accurate analysis that gives the assistant every piece of relevant information needed to help the user effectively. Missing or incorrect analysis = Poor user experience."""
     )
 
+    # Memory Consolidation Settings
+    enable_memory_consolidation = models.BooleanField(
+        default=True,
+        help_text="Enable automatic memory deduplication and consolidation"
+    )
+    consolidation_similarity_threshold = models.FloatField(
+        default=0.85,
+        help_text="Similarity threshold for duplicate detection (0.0-1.0)"
+    )
+    consolidation_auto_threshold = models.FloatField(
+        default=0.90,
+        help_text="Similarity threshold for automatic consolidation (0.0-1.0)"
+    )
+    consolidation_strategy = models.CharField(
+        max_length=20,
+        default='llm_guided',
+        choices=[
+            ('automatic', 'Automatic'),
+            ('llm_guided', 'LLM Guided'),
+            ('manual', 'Manual')
+        ],
+        help_text="Strategy for consolidating duplicate memories"
+    )
+    consolidation_max_group_size = models.IntegerField(
+        default=3,
+        help_text="Maximum number of memories to consolidate in a single group"
+    )
+    consolidation_batch_size = models.IntegerField(
+        default=100,
+        help_text="Number of memories to process in each consolidation batch"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -28,6 +28,10 @@ local_settings.py
 !.env.example
 # VSCode
 .history/
+.vscode/
+.vscode/*
+
+IMPROVEMENTS_ROADMAP.md
 
 # Node/React
 node_modules/

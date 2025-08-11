@@ -114,16 +114,22 @@ class MemorySearchService:
         if not memory_ids:
             return []
 
-        # Batch fetch memories maintaining order
-        memories = Memory.objects.filter(id__in=memory_ids)
+        # Batch fetch only active memories maintaining order
+        memories = Memory.objects.filter(id__in=memory_ids, is_active=True)
         memory_dict = {str(m.id): m for m in memories}
 
-        # Return in similarity order
-        return [
-            memory_dict[memory_id]
-            for memory_id in memory_ids
-            if memory_id in memory_dict
-        ]
+        # Apply temporal decay and return in similarity order
+        from .conflict_resolution_service import conflict_resolution_service
+        
+        result_memories = []
+        for memory_id in memory_ids:
+            if memory_id in memory_dict:
+                memory = memory_dict[memory_id]
+                # Apply temporal decay to update confidence
+                conflict_resolution_service.apply_temporal_decay(memory)
+                result_memories.append(memory)
+                
+        return result_memories
 
     def search_memories_with_queries(
         self,
@@ -246,46 +252,106 @@ class MemorySearchService:
             "interest": 0.7,
         }
         return multipliers.get(search_type, 0.8)
+    
+    def _get_inference_level_multiplier(self, memory: Memory) -> float:
+        """Get reliability multiplier based on inference level"""
+        inference_level = memory.metadata.get("inference_level", "stated")
+        certainty = memory.metadata.get("certainty", 0.5)
+        
+        # Base multipliers by inference level
+        base_multipliers = {
+            "stated": 1.0,      # Highest reliability - direct user statements
+            "inferred": 0.85,   # High reliability - logical conclusions
+            "implied": 0.7,     # Moderate reliability - reading between lines
+        }
+        
+        # Apply certainty factor
+        base_multiplier = base_multipliers.get(inference_level, 0.8)
+        
+        # Boost by certainty level (certainty acts as additional confidence)
+        certainty_boost = certainty * 0.2  # Up to 20% boost from high certainty
+        
+        return min(1.0, base_multiplier + certainty_boost)
 
     def _rank_and_filter_results(self, results: Dict, limit: int) -> List[Memory]:
-        """Enhanced ranking that considers semantic diversity"""
-        # Sort by boosted score
+        """Enhanced ranking that considers semantic diversity and inference levels"""
+        # Get Memory objects to access metadata for inference-level scoring
+        memory_ids = list(results.keys())
+        memories = Memory.objects.filter(id__in=memory_ids, is_active=True)
+        memory_dict = {str(m.id): m for m in memories}
+        
+        # Apply inference-level scoring
+        for memory_id, result in results.items():
+            if memory_id in memory_dict:
+                memory = memory_dict[memory_id]
+                inference_multiplier = self._get_inference_level_multiplier(memory)
+                result["inference_boosted_score"] = result["score"] * inference_multiplier
+                result["inference_level"] = memory.metadata.get("inference_level", "stated")
+            else:
+                result["inference_boosted_score"] = result["score"]
+                result["inference_level"] = "stated"
+        
+        # Sort by inference-boosted score
         sorted_results = sorted(
-            results.values(), key=lambda x: x["score"], reverse=True
+            results.values(), key=lambda x: x["inference_boosted_score"], reverse=True
         )
 
-        # Take top results but ensure diversity of search types
+        # Take top results ensuring diversity of search types and inference levels
         final_results = []
         type_counts = {}
+        inference_counts = {}
 
         for result in sorted_results:
             search_type = result.get("search_type", "direct")
+            inference_level = result.get("inference_level", "stated")
+            
             type_count = type_counts.get(search_type, 0)
+            inference_count = inference_counts.get(inference_level, 0)
 
-            # Allow more direct results, but ensure semantic diversity
+            # Allow more direct results and stated facts, but ensure diversity
             max_per_type = {
                 "direct": limit // 2,
                 "semantic": limit // 3,
                 "experiential": limit // 4,
             }
+            
+            # Prioritize stated facts, but allow some inferred/implied for completeness
+            max_per_inference = {
+                "stated": int(limit * 0.6),      # Up to 60% stated facts
+                "inferred": int(limit * 0.3),    # Up to 30% inferred facts  
+                "implied": int(limit * 0.2),     # Up to 20% implied facts
+            }
 
-            if type_count < max_per_type.get(search_type, limit // 4):
+            # Check both constraints
+            type_ok = type_count < max_per_type.get(search_type, limit // 4)
+            inference_ok = inference_count < max_per_inference.get(inference_level, limit // 5)
+            
+            if type_ok and inference_ok:
                 final_results.append(result)
                 type_counts[search_type] = type_count + 1
+                inference_counts[inference_level] = inference_count + 1
 
             if len(final_results) >= limit:
                 break
 
-        # Fetch and return Memory objects
+        # Fetch and return only active Memory objects
         memory_ids = [r["memory_id"] for r in final_results]
-        memories = Memory.objects.filter(id__in=memory_ids)
+        memories = Memory.objects.filter(id__in=memory_ids, is_active=True)
         memory_dict = {str(m.id): m for m in memories}
 
-        return [
-            memory_dict[r["memory_id"]]
-            for r in final_results
-            if r["memory_id"] in memory_dict
-        ]
+        # Apply temporal decay to all retrieved memories
+        from .conflict_resolution_service import conflict_resolution_service
+        
+        result_memories = []
+        for r in final_results:
+            memory_id = r["memory_id"]
+            if memory_id in memory_dict:
+                memory = memory_dict[memory_id]
+                # Apply temporal decay to update confidence
+                conflict_resolution_service.apply_temporal_decay(memory)
+                result_memories.append(memory)
+                
+        return result_memories
 
     def clear_cache(self):
         """Clear embedding cache (useful when settings change)"""
@@ -390,20 +456,58 @@ class MemorySearchService:
                 },
             }
 
-        # Prepare memory content for analysis
+        # Prepare memory content for analysis with inference level information
         memory_content = []
+        inference_stats = {"stated": 0, "inferred": 0, "implied": 0}
+        
         for i, memory in enumerate(memories[:20]):  # Limit to prevent prompt overflow
-            memory_content.append(f"{i + 1}. {memory.content}")
+            inference_level = memory.metadata.get("inference_level", "stated")
+            certainty = memory.metadata.get("certainty", 0.5)
+            evidence = memory.metadata.get("evidence", "")
+            
+            inference_stats[inference_level] += 1
+            
+            # Include reliability indicators in summary
+            reliability_indicator = {
+                "stated": "🟢",  # High reliability
+                "inferred": "🟡",  # Moderate reliability  
+                "implied": "🟠"    # Lower reliability
+            }.get(inference_level, "⚪")
+            
+            memory_line = f"{i + 1}. {reliability_indicator} {memory.content}"
+            if certainty < 0.7:
+                memory_line += f" (Certainty: {certainty:.1f})"
+            if evidence and len(evidence) < 100:
+                memory_line += f" | Evidence: {evidence}"
+                
+            memory_content.append(memory_line)
 
         memories_text = "\n".join(memory_content)
+        
+        # Add inference level breakdown to the prompt
+        inference_breakdown = f"""
+INFERENCE LEVEL BREAKDOWN:
+- 🟢 Stated facts (direct quotes): {inference_stats['stated']}
+- 🟡 Inferred facts (logical conclusions): {inference_stats['inferred']}
+- 🟠 Implied facts (contextual reading): {inference_stats['implied']}
+"""
 
         # Use the configurable prompt
         summarization_prompt = f"""{settings.memory_summarization_prompt}
 
 **USER QUERY:** {user_query}
 
+{inference_breakdown}
+
 **MEMORIES TO ANALYZE:**
-{memories_text}"""
+{memories_text}
+
+**ANALYSIS INSTRUCTIONS:**
+When analyzing these memories, consider the inference levels:
+- 🟢 Stated facts have highest reliability and should be prioritized in your summary
+- 🟡 Inferred facts are logical conclusions and generally reliable
+- 🟠 Implied facts are contextual interpretations and should be noted as such
+- Pay attention to certainty scores and evidence provided"""
 
         from .llm_service import MEMORY_SUMMARY_FORMAT, llm_service
 

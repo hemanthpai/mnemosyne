@@ -4,6 +4,12 @@ from django.db import models
 
 
 class Memory(models.Model):
+    FACT_TYPE_CHOICES = [
+        ('mutable', 'Mutable'),      # Can change over time (preferences, location, status)
+        ('immutable', 'Immutable'),  # Fixed facts (birthdate, past events)
+        ('temporal', 'Temporal'),    # Time-bound facts (current job, current location)
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user_id = models.UUIDField()
     content = models.TextField()
@@ -21,6 +27,39 @@ class Memory(models.Model):
     search_tags = models.JSONField(
         default=list, help_text="Searchable tags for this memory"
     )
+    
+    # New fields for conflict resolution and temporal tracking
+    supersedes = models.ForeignKey(
+        'self', 
+        null=True, 
+        blank=True, 
+        on_delete=models.SET_NULL,
+        related_name='superseded_by',
+        help_text="Memory that this one replaces/updates"
+    )
+    fact_type = models.CharField(
+        max_length=20, 
+        choices=FACT_TYPE_CHOICES, 
+        default='mutable',
+        help_text="Type of fact - whether it can change over time"
+    )
+    original_confidence = models.FloatField(
+        default=0.5,
+        help_text="Original confidence score when memory was created"
+    )
+    temporal_confidence = models.FloatField(
+        default=0.5,
+        help_text="Current confidence after temporal decay"
+    )
+    last_validated = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time this memory was validated or confirmed"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this memory is currently active (not superseded)"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -31,6 +70,8 @@ class Memory(models.Model):
             models.Index(fields=["user_id"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["vector_id"]),
+            models.Index(fields=["user_id", "is_active"]),
+            models.Index(fields=["fact_type", "is_active"]),
         ]
 
     def __str__(self):

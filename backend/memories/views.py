@@ -14,6 +14,7 @@ from .models import Memory
 from .serializers import MemorySerializer
 from .vector_service import vector_service
 from .graph_service import graph_service
+from .conflict_resolution_service import conflict_resolution_service
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +232,16 @@ class ExtractMemoriesView(APIView):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
-            # Store extracted memories
+            # Store extracted memories with conflict resolution
             stored_memories = []
+            conflicts_resolved = 0
+            
+            # Get existing active memories for the user to check for conflicts
+            existing_memories = list(Memory.objects.filter(
+                user_id=user_id, 
+                is_active=True
+            ))
+            
             for memory_data in memories_data:
                 if not isinstance(memory_data, dict):
                     continue
@@ -241,37 +250,81 @@ class ExtractMemoriesView(APIView):
                 if not content:
                     continue
 
-                # Prepare metadata without memory_bank
+                # Extract fact type, confidence, and inference information
+                fact_type = memory_data.get("fact_type", "mutable")
+                confidence = memory_data.get("confidence", 0.5)
+                inference_level = memory_data.get("inference_level", "stated")
+                evidence = memory_data.get("evidence", "")
+                certainty = memory_data.get("certainty", confidence)
+
+                # Prepare enhanced metadata with inference information
                 metadata = {
                     "tags": memory_data.get("tags", []),
-                    "confidence": memory_data.get("confidence", 0.5),
+                    "confidence": confidence,
                     "context": memory_data.get("context", ""),
                     "connections": memory_data.get("connections", []),
                     "extraction_source": "conversation",
                     "model_used": llm_result.get("model", "unknown"),
+                    "fact_type": fact_type,
+                    "inference_level": inference_level,
+                    "evidence": evidence,
+                    "certainty": certainty,
                 }
 
+                # Detect conflicts before storing
+                conflicts = conflict_resolution_service.detect_conflicts(
+                    content, metadata, existing_memories
+                )
+
+                # Store memory with embedding
                 memory = memory_search_service.store_memory_with_embedding(
                     content=content, user_id=user_id, metadata=metadata
                 )
+                
+                # Set additional fields for conflict resolution
+                memory.fact_type = fact_type
+                memory.original_confidence = confidence
+                memory.temporal_confidence = confidence
+                memory.save()
+
+                # Resolve any detected conflicts
+                if conflicts:
+                    conflicts_resolved += len(conflicts)
+                    for conflicting_memory, similarity, conflict_type in conflicts:
+                        logger.info(
+                            f"Resolving {conflict_type} conflict (similarity: {similarity:.2f}) "
+                            f"between new memory {memory.id} and existing memory {conflicting_memory.id}"
+                        )
+                        memory = conflict_resolution_service.resolve_conflict(
+                            memory, conflicting_memory, conflict_type
+                        )
 
                 stored_memories.append(
                     {
                         "id": str(memory.id),
                         "content": memory.content,
                         "metadata": memory.metadata,
+                        "fact_type": memory.fact_type,
+                        "inference_level": memory.metadata.get("inference_level", "stated"),
+                        "evidence": memory.metadata.get("evidence", ""),
+                        "certainty": memory.metadata.get("certainty", memory.temporal_confidence),
+                        "confidence": memory.temporal_confidence,
+                        "is_active": memory.is_active,
                         "created_at": memory.created_at.isoformat(),
+                        "supersedes": str(memory.supersedes.id) if memory.supersedes else None,
                     }
                 )
 
             logger.info(
-                "Successfully extracted and stored %d memories", len(stored_memories)
+                "Successfully extracted and stored %d memories with %d conflicts resolved", 
+                len(stored_memories), conflicts_resolved
             )
 
             return Response(
                 {
                     "success": True,
                     "memories_extracted": len(stored_memories),
+                    "conflicts_resolved": conflicts_resolved,
                     "memories": stored_memories,
                     "model_used": llm_result.get("model", "unknown"),
                 }

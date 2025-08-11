@@ -27,8 +27,18 @@ MEMORY_EXTRACTION_FORMAT = {
                 "type": "array",
                 "items": {"type": "string"},
             },
+            "fact_type": {
+                "type": "string",
+                "enum": ["mutable", "immutable", "temporal"],
+            },
+            "inference_level": {
+                "type": "string",
+                "enum": ["stated", "inferred", "implied"],
+            },
+            "evidence": {"type": "string"},
+            "certainty": {"type": "number", "minimum": 0, "maximum": 1},
         },
-        "required": ["content", "tags", "confidence"],
+        "required": ["content", "tags", "confidence", "fact_type", "inference_level", "evidence", "certainty"],
     },
 }
 

@@ -35,5 +35,7 @@
         "source.organizeLinkDefinitions": "always"
     },
     "prettier.enable": true,
-    "prettier.tabWidth": 4
+    "prettier.tabWidth": 4,
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
 }

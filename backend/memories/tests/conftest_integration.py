@@ -50,6 +50,27 @@ def is_openai_api_available():
     # For non-HTTP endpoints, just return True if the URL is valid
     return True
 
+def is_qdrant_available():
+    """Check if Qdrant vector database is available"""
+    # Get Qdrant connection details from environment
+    host = os.environ.get('QDRANT_HOST', 'localhost')
+    port = os.environ.get('QDRANT_PORT', '6333')
+    
+    # Try to connect to Qdrant
+    try:
+        logger.info(f'Testing Qdrant connection: {host}:{port}')
+        from qdrant_client import QdrantClient
+        
+        client = QdrantClient(host=host, port=port, timeout=3)
+        # Test connection by getting collections
+        _ = client.get_collections()
+        client.close()
+        logger.info('Qdrant connection successful')
+        return True
+    except Exception as e:
+        logger.warning(f'Error connecting to Qdrant: {e}')
+        return False
+
 @pytest.fixture(scope="session", autouse=True)
 def django_settings():
     """Setup Django settings for tests that require it"""
@@ -68,3 +89,8 @@ def django_settings():
 def openai_api_available():
     """Check if an OpenAI API endpoint is available for tests"""
     return is_openai_api_available()
+
+@pytest.fixture(scope="session")
+def qdrant_available():
+    """Check if Qdrant vector database is available for tests"""
+    return is_qdrant_available()

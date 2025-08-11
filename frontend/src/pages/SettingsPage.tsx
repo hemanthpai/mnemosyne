@@ -9,7 +9,7 @@ import {
 } from "../services/api";
 import { LLMSettings } from "../types/index";
 
-type SettingsTab = "prompts" | "llm" | "embeddings" | "parameters" | "search";
+type SettingsTab = "prompts" | "llm" | "embeddings" | "parameters" | "search" | "consolidation";
 
 const SettingsPage: React.FC = () => {
     const [settings, setSettings] = useState<LLMSettings | null>(null);
@@ -232,6 +232,7 @@ const SettingsPage: React.FC = () => {
         { id: "embeddings" as SettingsTab, name: "Embeddings", icon: "🔍" },
         { id: "parameters" as SettingsTab, name: "LLM Parameters", icon: "⚙️" },
         { id: "search" as SettingsTab, name: "Search Config", icon: "🎯" },
+        { id: "consolidation" as SettingsTab, name: "Memory Consolidation", icon: "🔗" },
     ];
 
     // URL validation indicator component
@@ -1256,6 +1257,235 @@ const SettingsPage: React.FC = () => {
                                                 Threshold for general interests
                                             </p>
                                         </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Memory Consolidation Tab */}
+                        {activeTab === "consolidation" && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Memory Consolidation Settings
+                                    </h3>
+                                    <p className="text-sm text-gray-600 mb-6">
+                                        Configure automatic detection and merging of duplicate or highly similar memories to prevent information redundancy.
+                                    </p>
+                                    
+                                    {/* Enable Consolidation */}
+                                    <div className="bg-gray-50 p-4 rounded-lg mb-6">
+                                        <div className="flex items-center">
+                                            <label className="flex items-center cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={settings.enable_memory_consolidation}
+                                                    onChange={(e) =>
+                                                        handleInputChange(
+                                                            "enable_memory_consolidation",
+                                                            e.target.checked.toString()
+                                                        )
+                                                    }
+                                                    className="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50 h-5 w-5"
+                                                />
+                                                <span className="ml-3 text-base font-medium text-gray-900">
+                                                    Enable Memory Consolidation
+                                                </span>
+                                            </label>
+                                        </div>
+                                        <p className="text-sm text-gray-600 mt-2 ml-8">
+                                            Automatically detect and merge duplicate or highly similar memories during the extraction process.
+                                        </p>
+                                    </div>
+
+                                    {/* Consolidation Settings Grid */}
+                                    <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${!settings.enable_memory_consolidation ? 'opacity-50 pointer-events-none' : ''}`}>
+                                        {/* Similarity Threshold */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Duplicate Detection Threshold
+                                                <span className="ml-1 text-blue-600 text-xs">
+                                                    {(settings.consolidation_similarity_threshold * 100).toFixed(0)}%
+                                                </span>
+                                            </label>
+                                            <input
+                                                type="range"
+                                                min="0.5"
+                                                max="1.0"
+                                                step="0.05"
+                                                value={settings.consolidation_similarity_threshold}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "consolidation_similarity_threshold",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                            />
+                                            <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                                <span>50% (More duplicates)</span>
+                                                <span>100% (Fewer duplicates)</span>
+                                            </div>
+                                            <p className="text-xs text-gray-600 mt-2">
+                                                How similar memories must be to be considered duplicates. Higher values are more strict.
+                                            </p>
+                                        </div>
+
+                                        {/* Auto-Consolidation Threshold */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Auto-Consolidation Threshold
+                                                <span className="ml-1 text-green-600 text-xs">
+                                                    {(settings.consolidation_auto_threshold * 100).toFixed(0)}%
+                                                </span>
+                                            </label>
+                                            <input
+                                                type="range"
+                                                min="0.8"
+                                                max="1.0"
+                                                step="0.02"
+                                                value={settings.consolidation_auto_threshold}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "consolidation_auto_threshold",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                            />
+                                            <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                                <span>80% (More automatic)</span>
+                                                <span>100% (Less automatic)</span>
+                                            </div>
+                                            <p className="text-xs text-gray-600 mt-2">
+                                                Similarity threshold for automatic consolidation without manual review.
+                                            </p>
+                                        </div>
+
+                                        {/* Consolidation Strategy */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Consolidation Strategy
+                                            </label>
+                                            <select
+                                                value={settings.consolidation_strategy}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "consolidation_strategy",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="automatic">Automatic (Rule-based merging)</option>
+                                                <option value="llm_guided">LLM Guided (AI-powered consolidation)</option>
+                                                <option value="manual">Manual (Simple superseding)</option>
+                                            </select>
+                                            <div className="text-xs text-gray-600 mt-2">
+                                                {settings.consolidation_strategy === 'automatic' && (
+                                                    <p>Uses predefined rules to merge similar memories automatically.</p>
+                                                )}
+                                                {settings.consolidation_strategy === 'llm_guided' && (
+                                                    <p>Uses AI to intelligently consolidate memories while preserving important information.</p>
+                                                )}
+                                                {settings.consolidation_strategy === 'manual' && (
+                                                    <p>Simply marks duplicates as superseded without changing content.</p>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Max Group Size */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Max Group Size
+                                                <span className="ml-1 text-purple-600 text-xs">
+                                                    {settings.consolidation_max_group_size} memories
+                                                </span>
+                                            </label>
+                                            <input
+                                                type="range"
+                                                min="2"
+                                                max="10"
+                                                step="1"
+                                                value={settings.consolidation_max_group_size}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "consolidation_max_group_size",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                            />
+                                            <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                                <span>2</span>
+                                                <span>5</span>
+                                                <span>10</span>
+                                            </div>
+                                            <p className="text-xs text-gray-600 mt-2">
+                                                Maximum number of memories that can be consolidated into a single group.
+                                            </p>
+                                        </div>
+
+                                        {/* Batch Size */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Processing Batch Size
+                                                <span className="ml-1 text-orange-600 text-xs">
+                                                    {settings.consolidation_batch_size}
+                                                </span>
+                                            </label>
+                                            <input
+                                                type="range"
+                                                min="10"
+                                                max="1000"
+                                                step="10"
+                                                value={settings.consolidation_batch_size}
+                                                onChange={(e) =>
+                                                    handleInputChange(
+                                                        "consolidation_batch_size",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                            />
+                                            <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                                <span>10</span>
+                                                <span>500</span>
+                                                <span>1000</span>
+                                            </div>
+                                            <p className="text-xs text-gray-600 mt-2">
+                                                Number of memories to process in each consolidation batch for better performance.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Validation Warning */}
+                                    {settings.consolidation_similarity_threshold >= settings.consolidation_auto_threshold && (
+                                        <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mt-6">
+                                            <div className="flex">
+                                                <div className="flex-shrink-0">
+                                                    <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+                                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                    </svg>
+                                                </div>
+                                                <div className="ml-3">
+                                                    <p className="text-sm text-amber-700">
+                                                        <strong>Warning:</strong> Auto-consolidation threshold should be higher than the detection threshold for proper operation.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Performance Tips */}
+                                    <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mt-6">
+                                        <h4 className="text-sm font-medium text-blue-900 mb-2">💡 Tips for Optimal Performance</h4>
+                                        <ul className="text-sm text-blue-800 space-y-1">
+                                            <li>• <strong>Detection Threshold:</strong> Start with 85% and adjust based on your needs</li>
+                                            <li>• <strong>LLM Guided:</strong> Recommended strategy for best quality consolidation</li>
+                                            <li>• <strong>Batch Size:</strong> Higher values improve performance but use more memory</li>
+                                            <li>• <strong>Group Size:</strong> Keep low (3-5) to avoid over-consolidation</li>
+                                        </ul>
                                     </div>
                                 </div>
                             </div>

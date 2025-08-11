@@ -46,6 +46,14 @@ export interface LLMSettings {
     search_threshold_contextual: number;
     search_threshold_interest: number;
     
+    // Memory Consolidation
+    enable_memory_consolidation: boolean;
+    consolidation_similarity_threshold: number;
+    consolidation_auto_threshold: number;
+    consolidation_strategy: 'automatic' | 'llm_guided' | 'manual';
+    consolidation_max_group_size: number;
+    consolidation_batch_size: number;
+    
     // Prompts
     memory_extraction_prompt: string;
     memory_search_prompt: string;

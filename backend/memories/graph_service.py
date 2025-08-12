@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from django.conf import settings
 from langchain_core.documents import Document
@@ -38,6 +38,8 @@ class GraphService:
             neo4j_password = getattr(
                 settings, "NEO4J_PASSWORD", os.getenv("NEO4J_PASSWORD", "password")
             )
+
+            logger.info(f"Neo4J URI: {neo4j_uri}")
 
             # Initialize Neo4j driver
             self.driver = GraphDatabase.driver(
@@ -182,6 +184,9 @@ class GraphService:
                     "success": False,
                     "error": "Graph transformer or Neo4j connection not initialized",
                 }
+            
+            # Convert UUID to string if needed
+            user_id = str(user_id)
 
             # Check for empty text input
             if not text.strip():
@@ -283,6 +288,9 @@ class GraphService:
         try:
             if not self.driver:
                 return {"error": "Neo4j driver not initialized"}
+            
+            # Convert UUID to string if needed
+            user_id = str(user_id)
 
             with self.driver.session() as session:
                 # Get nodes created by this user
@@ -328,6 +336,9 @@ class GraphService:
         try:
             if not self.driver:
                 return {"success": False, "error": "Neo4j driver not initialized"}
+            
+            # Convert UUID to string if needed
+            user_id = str(user_id)
 
             with self.driver.session() as session:
                 # Delete all nodes and relationships for the user
@@ -349,6 +360,491 @@ class GraphService:
         except Exception as e:
             logger.error(f"Failed to clear user graph: {e}")
             return {"success": False, "error": str(e)}
+
+    def build_memory_graph(
+        self, user_id: str, incremental: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Build relationship graph for user's memories using semantic connections
+
+        Args:
+            user_id: User ID to build graph for
+            incremental: If True, only process new memories since last build
+
+        Returns:
+            Dict containing graph building results
+        """
+        try:
+            if not self.driver:
+                return {"success": False, "error": "Neo4j driver not initialized"}
+            
+            # Convert UUID to string if needed
+            user_id = str(user_id)
+
+            from settings_app.models import LLMSettings
+
+            from .models import Memory
+
+            # Get settings to check last build time
+            settings = LLMSettings.get_settings()
+
+            # Determine which memories to process
+            if incremental and settings.graph_last_build:
+                # Only process memories created/modified after last build
+                memories = Memory.objects.filter(
+                    user_id=user_id,
+                    is_active=True,
+                    created_at__gt=settings.graph_last_build,
+                )
+                logger.info(
+                    f"Incremental build: processing memories created after {settings.graph_last_build}"
+                )
+            else:
+                # Full rebuild - process all memories
+                memories = Memory.objects.filter(user_id=user_id, is_active=True)
+                logger.info("Full build: processing all active memories")
+
+            memory_count = memories.count()
+            if memory_count == 0:
+                return {
+                    "success": True,
+                    "message": "No memories to process",
+                    "nodes_created": 0,
+                    "relationships_created": 0,
+                    "incremental": incremental,
+                }
+            
+            # Even with 1 memory, we should create the node for future relationships
+            logger.info(
+                f"Building memory graph for {memory_count} memories of user {user_id}"
+            )
+
+            nodes_created = 0
+            relationships_created = 0
+
+            with self.driver.session() as session:
+                # Create memory nodes with enhanced metadata
+                for memory in memories:
+                    # Create memory node
+                    node_query = """
+                    MERGE (m:Memory {memory_id: $memory_id, user_id: $user_id})
+                    SET m.content = $content,
+                        m.created_at = $created_at,
+                        m.inference_level = $inference_level,
+                        m.certainty = $certainty,
+                        m.confidence = $confidence,
+                        m.tags = $tags,
+                        m.fact_type = $fact_type
+                    """
+
+                    session.run(
+                        node_query,
+                        {
+                            "memory_id": str(memory.id),
+                            "user_id": user_id,
+                            "content": memory.content,
+                            "created_at": memory.created_at.isoformat(),
+                            "inference_level": memory.metadata.get(
+                                "inference_level", "stated"
+                            ),
+                            "certainty": memory.metadata.get("certainty", 0.5),
+                            "confidence": memory.temporal_confidence,
+                            "tags": memory.metadata.get("tags", []),
+                            "fact_type": memory.fact_type or "mutable",
+                        },
+                    )
+                    nodes_created += 1
+
+                # Create semantic similarity relationships using vector similarity
+                from .llm_service import llm_service
+                from .vector_service import vector_service
+
+                for memory in memories:
+                    # Get embedding for this memory
+                    embedding_result = llm_service.get_embeddings([memory.content])
+                    if not embedding_result["success"]:
+                        continue
+
+                    memory_embedding = embedding_result["embeddings"][0]
+
+                    # Find similar memories
+                    similar_memories = vector_service.search_similar(
+                        query_embedding=memory_embedding,
+                        user_id=user_id,
+                        limit=10,
+                        score_threshold=0.7,  # High similarity for graph connections
+                    )
+
+                    # Create relationships to similar memories
+                    for result in similar_memories:
+                        similar_id = result["memory_id"]
+                        similarity_score = result["score"]
+
+                        if similar_id != str(memory.id):  # Don't connect to self
+                            rel_query = """
+                            MATCH (m1:Memory {memory_id: $memory1_id, user_id: $user_id})
+                            MATCH (m2:Memory {memory_id: $memory2_id, user_id: $user_id})
+                            MERGE (m1)-[r:SIMILAR_TO]-(m2)
+                            SET r.similarity_score = $similarity_score,
+                                r.connection_type = 'semantic',
+                                r.created_at = datetime()
+                            """
+
+                            session.run(
+                                rel_query,
+                                {
+                                    "memory1_id": str(memory.id),
+                                    "memory2_id": similar_id,
+                                    "user_id": user_id,
+                                    "similarity_score": similarity_score,
+                                },
+                            )
+                            relationships_created += 1
+
+                # Create tag-based relationships
+                memories_with_tags = [
+                    (m, m.metadata.get("tags", []))
+                    for m in memories
+                    if m.metadata.get("tags")
+                ]
+
+                for i, (memory1, tags1) in enumerate(memories_with_tags):
+                    for memory2, tags2 in memories_with_tags[i + 1 :]:
+                        if memory1.id != memory2.id:
+                            # Find common tags
+                            common_tags = set(tags1) & set(tags2)
+                            if common_tags:
+                                rel_query = """
+                                MATCH (m1:Memory {memory_id: $memory1_id, user_id: $user_id})
+                                MATCH (m2:Memory {memory_id: $memory2_id, user_id: $user_id})
+                                MERGE (m1)-[r:RELATED_BY_TAG]-(m2)
+                                SET r.common_tags = $common_tags,
+                                    r.connection_type = 'tag_based',
+                                    r.strength = $strength,
+                                    r.created_at = datetime()
+                                """
+
+                                strength = len(common_tags) / max(
+                                    len(tags1), len(tags2)
+                                )
+
+                                session.run(
+                                    rel_query,
+                                    {
+                                        "memory1_id": str(memory1.id),
+                                        "memory2_id": str(memory2.id),
+                                        "user_id": user_id,
+                                        "common_tags": list(common_tags),
+                                        "strength": strength,
+                                    },
+                                )
+                                relationships_created += 1
+
+                # Create temporal relationships (for sequential memories)
+                temporal_memories = memories.order_by("created_at")
+                for i in range(len(temporal_memories) - 1):
+                    current = temporal_memories[i]
+                    next_mem = temporal_memories[i + 1]
+
+                    # Only create temporal links if memories are close in time (within 24 hours)
+                    time_diff = (
+                        next_mem.created_at - current.created_at
+                    ).total_seconds()
+                    if time_diff < 86400:  # 24 hours
+                        rel_query = """
+                        MATCH (m1:Memory {memory_id: $memory1_id, user_id: $user_id})
+                        MATCH (m2:Memory {memory_id: $memory2_id, user_id: $user_id})
+                        MERGE (m1)-[r:TEMPORAL_SEQUENCE]->(m2)
+                        SET r.time_difference = $time_diff,
+                            r.connection_type = 'temporal',
+                            r.created_at = datetime()
+                        """
+
+                        session.run(
+                            rel_query,
+                            {
+                                "memory1_id": str(current.id),
+                                "memory2_id": str(next_mem.id),
+                                "user_id": user_id,
+                                "time_diff": time_diff,
+                            },
+                        )
+                        relationships_created += 1
+
+            logger.info(
+                f"Built memory graph: {nodes_created} nodes, {relationships_created} relationships"
+            )
+
+            # Update settings with successful build timestamp
+            from django.utils import timezone
+
+            settings.graph_last_build = timezone.now()
+            settings.graph_build_status = "built"
+            settings.save()
+
+            return {
+                "success": True,
+                "nodes_created": nodes_created,
+                "relationships_created": relationships_created,
+                "incremental": incremental,
+                "user_id": user_id,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to build memory graph: {e}")
+
+            # Update settings with failed build status
+            try:
+                from settings_app.models import LLMSettings
+
+                settings = LLMSettings.get_settings()
+                settings.graph_build_status = "failed"
+                settings.save()
+            except Exception as settings_error:
+                logger.error(f"Failed to update build status: {settings_error}")
+
+            return {"success": False, "error": str(e)}
+
+    def traverse_related_memories(
+        self, memory_id: str, user_id: str, depth: int = 2
+    ) -> List[Dict[str, Any]]:
+        """
+        Get related memories through graph traversal
+
+        Args:
+            memory_id: Starting memory ID
+            user_id: User ID for filtering
+            depth: Maximum traversal depth
+
+        Returns:
+            List of related memory data with relationship information
+        """
+        try:
+            if not self.driver:
+                return []
+            
+            # Convert UUIDs to strings if needed
+            user_id = str(user_id)
+            memory_id = str(memory_id)
+
+            with self.driver.session() as session:
+                # Multi-hop traversal query with relationship strength
+                query = (
+                    """
+                MATCH path = (start:Memory {memory_id: $memory_id, user_id: $user_id})
+                -[r*1.."""
+                    + str(depth)
+                    + """]-
+                (related:Memory {user_id: $user_id})
+                WHERE start <> related
+                WITH related, r, 
+                     CASE 
+                         WHEN any(rel IN r WHERE type(rel) = 'SIMILAR_TO') THEN 1.0
+                         WHEN any(rel IN r WHERE type(rel) = 'RELATED_BY_TAG') THEN 0.8  
+                         WHEN any(rel IN r WHERE type(rel) = 'TEMPORAL_SEQUENCE') THEN 0.6
+                         ELSE 0.5
+                     END as base_score,
+                     length(path) as path_length,
+                     [rel IN r | {type: type(rel), properties: properties(rel)}] as relationships
+                RETURN DISTINCT 
+                       related.memory_id as memory_id,
+                       related.content as content,
+                       related.inference_level as inference_level,
+                       related.certainty as certainty,
+                       related.confidence as confidence,
+                       related.tags as tags,
+                       related.fact_type as fact_type,
+                       related.created_at as created_at,
+                       base_score / path_length as relevance_score,
+                       path_length,
+                       relationships
+                ORDER BY relevance_score DESC, related.certainty DESC
+                LIMIT 50
+                """
+                )
+
+                result = session.run(
+                    query, {"memory_id": memory_id, "user_id": user_id}
+                )
+
+                related_memories = []
+                for record in result:
+                    related_memories.append(
+                        {
+                            "memory_id": record["memory_id"],
+                            "content": record["content"],
+                            "inference_level": record["inference_level"],
+                            "certainty": record["certainty"],
+                            "confidence": record["confidence"],
+                            "tags": record["tags"],
+                            "fact_type": record["fact_type"],
+                            "created_at": record["created_at"],
+                            "relevance_score": record["relevance_score"],
+                            "path_length": record["path_length"],
+                            "relationships": record["relationships"],
+                        }
+                    )
+
+                logger.info(
+                    f"Found {len(related_memories)} related memories for {memory_id}"
+                )
+                return related_memories
+
+        except Exception as e:
+            logger.error(f"Failed to traverse related memories: {e}")
+            return []
+
+    def get_memory_clusters(self, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Identify memory clusters/topics using community detection
+
+        Args:
+            user_id: User ID to analyze
+
+        Returns:
+            Dict of clusters with their memories
+        """
+        try:
+            if not self.driver:
+                return {}
+            
+            # Convert UUID to string if needed
+            user_id = str(user_id)
+
+            with self.driver.session() as session:
+                # Use Louvain community detection algorithm
+                community_query = """
+                CALL gds.graph.project(
+                    'memoryGraph_' + $user_id,
+                    {Memory: {properties: ['certainty', 'confidence']}},
+                    {
+                        SIMILAR_TO: {orientation: 'UNDIRECTED', properties: ['similarity_score']},
+                        RELATED_BY_TAG: {orientation: 'UNDIRECTED', properties: ['strength']},
+                        TEMPORAL_SEQUENCE: {orientation: 'DIRECTED'}
+                    },
+                    {nodeQuery: 'MATCH (n:Memory) WHERE n.user_id = "' + $user_id + '" RETURN id(n) AS id', 
+                     relationshipQuery: 'MATCH (n:Memory)-[r]-(m:Memory) WHERE n.user_id = "' + $user_id + '" AND m.user_id = "' + $user_id + '" RETURN id(n) AS source, id(m) AS target, type(r) AS type'}
+                )
+                YIELD graphName
+                RETURN graphName
+                """
+
+                try:
+                    # This is a simplified approach since GDS might not be available
+                    # Instead, use tag-based clustering as a fallback
+                    cluster_query = """
+                    MATCH (m:Memory {user_id: $user_id})
+                    WITH m, m.tags as tags
+                    UNWIND tags as tag
+                    WITH tag, collect({
+                        memory_id: m.memory_id,
+                        content: m.content,
+                        certainty: m.certainty,
+                        confidence: m.confidence,
+                        inference_level: m.inference_level,
+                        created_at: m.created_at
+                    }) as memories
+                    WHERE size(memories) >= 2
+                    RETURN tag as cluster_name, memories
+                    ORDER BY size(memories) DESC
+                    LIMIT 10
+                    """
+
+                    result = session.run(cluster_query, {"user_id": user_id})
+
+                    clusters = {}
+                    for record in result:
+                        cluster_name = record["cluster_name"]
+                        memories = record["memories"]
+                        clusters[f"tag_cluster_{cluster_name}"] = memories
+
+                    # Add temporal clusters (memories from same day/period)
+                    temporal_query = """
+                    MATCH (m:Memory {user_id: $user_id})
+                    WITH date(m.created_at) as creation_date, collect({
+                        memory_id: m.memory_id,
+                        content: m.content,
+                        certainty: m.certainty,
+                        confidence: m.confidence,
+                        inference_level: m.inference_level,
+                        created_at: m.created_at
+                    }) as memories
+                    WHERE size(memories) >= 2
+                    RETURN creation_date, memories
+                    ORDER BY creation_date DESC
+                    LIMIT 5
+                    """
+
+                    temporal_result = session.run(temporal_query, {"user_id": user_id})
+
+                    for record in temporal_result:
+                        creation_date = record["creation_date"]
+                        memories = record["memories"]
+                        clusters[f"temporal_cluster_{creation_date}"] = memories
+
+                    logger.info(
+                        f"Found {len(clusters)} memory clusters for user {user_id}"
+                    )
+                    return clusters
+
+                except Exception as e:
+                    logger.warning(
+                        f"Advanced clustering failed, using simple tag-based clustering: {e}"
+                    )
+                    return {}
+
+        except Exception as e:
+            logger.error(f"Failed to get memory clusters: {e}")
+            return {}
+
+    def get_memory_centrality_scores(self, user_id: str) -> Dict[str, float]:
+        """
+        Calculate centrality scores for memories to identify important/central memories
+
+        Args:
+            user_id: User ID to analyze
+
+        Returns:
+            Dict mapping memory_id to centrality score
+        """
+        try:
+            if not self.driver:
+                return {}
+            
+            # Convert UUID to string if needed
+            user_id = str(user_id)
+
+            with self.driver.session() as session:
+                # Calculate degree centrality (number of connections)
+                centrality_query = """
+                MATCH (m:Memory {user_id: $user_id})-[r]-(connected:Memory {user_id: $user_id})
+                WITH m, count(r) as degree, 
+                     avg(CASE 
+                         WHEN type(r) = 'SIMILAR_TO' THEN r.similarity_score 
+                         WHEN type(r) = 'RELATED_BY_TAG' THEN r.strength
+                         ELSE 0.5 
+                     END) as avg_connection_strength
+                RETURN m.memory_id as memory_id, 
+                       degree,
+                       avg_connection_strength,
+                       degree * avg_connection_strength as centrality_score
+                ORDER BY centrality_score DESC
+                """
+
+                result = session.run(centrality_query, {"user_id": user_id})
+
+                centrality_scores = {}
+                for record in result:
+                    centrality_scores[record["memory_id"]] = record["centrality_score"]
+
+                logger.info(
+                    f"Calculated centrality scores for {len(centrality_scores)} memories"
+                )
+                return centrality_scores
+
+        except Exception as e:
+            logger.error(f"Failed to calculate centrality scores: {e}")
+            return {}
 
     def close(self):
         """Close the Neo4j connection"""

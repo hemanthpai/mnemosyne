@@ -53,6 +53,11 @@ export interface LLMSettings {
     consolidation_strategy: 'automatic' | 'llm_guided' | 'manual';
     consolidation_max_group_size: number;
     consolidation_batch_size: number;
+
+    // Graph-Enhanced Retrieval
+    enable_graph_enhanced_retrieval: boolean;
+    graph_build_status: 'not_built' | 'building' | 'built' | 'failed' | 'outdated' | 'partial';
+    graph_last_build: string | null;
     
     // Prompts
     memory_extraction_prompt: string;

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+    buildMemoryGraphForAllUsers,
     fetchModels,
     getPromptTokenCounts,
     getSettings,
@@ -9,7 +10,14 @@ import {
 } from "../services/api";
 import { LLMSettings } from "../types/index";
 
-type SettingsTab = "prompts" | "llm" | "embeddings" | "parameters" | "search" | "consolidation";
+type SettingsTab =
+    | "prompts"
+    | "llm"
+    | "embeddings"
+    | "parameters"
+    | "search"
+    | "consolidation"
+    | "graph";
 
 const SettingsPage: React.FC = () => {
     const [settings, setSettings] = useState<LLMSettings | null>(null);
@@ -20,6 +28,15 @@ const SettingsPage: React.FC = () => {
     const [activeTab, setActiveTab] = useState<SettingsTab>("prompts");
     const [showExtractionPreview, setShowExtractionPreview] = useState(false);
     const [showSearchPreview, setShowSearchPreview] = useState(false);
+
+    // Graph build state
+    const [buildingGraph, setBuildingGraph] = useState<boolean>(false);
+    const [graphBuildStatus, setGraphBuildStatus] = useState<string | null>(
+        null
+    );
+    const [graphBuildError, setGraphBuildError] = useState<string | null>(null);
+    const [pollingInterval, setPollingInterval] =
+        useState<NodeJS.Timeout | null>(null);
 
     // Refs for textareas
     const extractionPromptRef = useRef<HTMLTextAreaElement>(null);
@@ -36,11 +53,19 @@ const SettingsPage: React.FC = () => {
 
     // URL validation and model fetching state
     const [endpointValidation, setEndpointValidation] = useState<{
-        extraction: { isValid: boolean | null; error?: string; isValidating: boolean };
-        embeddings: { isValid: boolean | null; error?: string; isValidating: boolean };
+        extraction: {
+            isValid: boolean | null;
+            error?: string;
+            isValidating: boolean;
+        };
+        embeddings: {
+            isValid: boolean | null;
+            error?: string;
+            isValidating: boolean;
+        };
     }>({
         extraction: { isValid: null, error: undefined, isValidating: false },
-        embeddings: { isValid: null, error: undefined, isValidating: false }
+        embeddings: { isValid: null, error: undefined, isValidating: false },
     });
 
     const [availableModels, setAvailableModels] = useState<{
@@ -48,7 +73,7 @@ const SettingsPage: React.FC = () => {
         embeddings: string[];
     }>({
         extraction: [],
-        embeddings: []
+        embeddings: [],
     });
 
     const [modelsLoading, setModelsLoading] = useState<{
@@ -56,7 +81,7 @@ const SettingsPage: React.FC = () => {
         embeddings: boolean;
     }>({
         extraction: false,
-        embeddings: false
+        embeddings: false,
     });
 
     useEffect(() => {
@@ -64,6 +89,11 @@ const SettingsPage: React.FC = () => {
             try {
                 const fetchedSettings = await getSettings();
                 setSettings(fetchedSettings);
+
+                // If graph is currently building, start polling for status
+                if (fetchedSettings.graph_build_status === "building") {
+                    startPollingGraphStatus();
+                }
             } catch (err) {
                 setError("Failed to fetch settings");
                 console.error("Error fetching settings:", err);
@@ -74,6 +104,15 @@ const SettingsPage: React.FC = () => {
 
         fetchSettings();
     }, []);
+
+    // Cleanup polling interval on unmount
+    useEffect(() => {
+        return () => {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
+        };
+    }, [pollingInterval]);
 
     const fetchTokenCounts = async () => {
         if (!settings) return;
@@ -123,45 +162,199 @@ const SettingsPage: React.FC = () => {
         setSettings({ ...settings, [field]: value });
     };
 
+    // Graph-related functions
+    const startPollingGraphStatus = () => {
+        // Clear any existing interval
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+        }
+
+        const interval = setInterval(async () => {
+            try {
+                // Check the global build status from settings
+                const updatedSettings = await getSettings();
+                setSettings(updatedSettings);
+
+                if (updatedSettings.graph_build_status !== "building") {
+                    setBuildingGraph(false);
+                    clearInterval(interval);
+                    setPollingInterval(null);
+
+                    if (updatedSettings.graph_build_status === "failed") {
+                        setGraphBuildError(
+                            "Graph build failed. Please check your Neo4j connection and try again."
+                        );
+                    } else if (updatedSettings.graph_build_status === "built") {
+                        setGraphBuildStatus("Graph built successfully!");
+                        setTimeout(() => setGraphBuildStatus(null), 5000);
+                    } else if (
+                        updatedSettings.graph_build_status === "partial"
+                    ) {
+                        setGraphBuildStatus(
+                            "Graph partially built - some users failed."
+                        );
+                        setTimeout(() => setGraphBuildStatus(null), 5000);
+                    }
+                }
+            } catch (error) {
+                console.error("Error polling graph status:", error);
+            }
+        }, 2000); // Poll every 2 seconds
+
+        setPollingInterval(interval);
+    };
+
+    const handleGraphToggle = async () => {
+        if (!settings) return;
+
+        if (!settings.enable_graph_enhanced_retrieval) {
+            // Enable and trigger build for ALL users
+            setBuildingGraph(true);
+            setGraphBuildError(null);
+            setGraphBuildStatus("Initiating graph build for all users...");
+
+            try {
+                // First, update the setting to enable graph retrieval
+                const updatedSettings = {
+                    ...settings,
+                    enable_graph_enhanced_retrieval: true,
+                    graph_build_status: "building" as const,
+                };
+
+                await updateSettings(updatedSettings);
+                setSettings(updatedSettings);
+
+                // Then trigger the graph build for ALL users (full build when first enabling)
+                console.log("About to call buildMemoryGraphForAllUsers...");
+                const buildResult = await buildMemoryGraphForAllUsers(false);
+                console.log("Build result:", buildResult);
+
+                if (buildResult.success) {
+                    // Build is complete! Update status immediately
+                    setBuildingGraph(false);
+                    setGraphBuildStatus("Graph built successfully!");
+                    
+                    // Update settings to reflect completed build
+                    const completedSettings = {
+                        ...settings,
+                        enable_graph_enhanced_retrieval: true,
+                        graph_build_status: "built" as const,
+                    };
+                    console.log("Setting completed settings:", completedSettings);
+                    setSettings(completedSettings);
+                    
+                    // Clear status message after a few seconds
+                    setTimeout(() => setGraphBuildStatus(null), 5000);
+                } else {
+                    setBuildingGraph(false);
+                    const errorMessage = buildResult.error || "Failed to start graph build";
+                    
+                    // Check for Neo4j-specific error
+                    if (errorMessage.includes("Neo4j database connection failed")) {
+                        setGraphBuildError(
+                            "Neo4j database connection failed. Please ensure Neo4j is running on localhost:7687 with correct credentials (neo4j/password)."
+                        );
+                    } else {
+                        setGraphBuildError(errorMessage);
+                    }
+                    
+                    // Revert the setting
+                    const revertedSettings = {
+                        ...settings,
+                        enable_graph_enhanced_retrieval: false,
+                        graph_build_status: "failed" as const,
+                    };
+                    await updateSettings(revertedSettings);
+                    setSettings(revertedSettings);
+                }
+            } catch (error) {
+                console.error("Error enabling graph retrieval:", error);
+                setBuildingGraph(false);
+                setGraphBuildError("Failed to enable graph retrieval");
+                // Revert the setting
+                const revertedSettings = {
+                    ...settings,
+                    enable_graph_enhanced_retrieval: false,
+                    graph_build_status: "failed" as const,
+                };
+                await updateSettings(revertedSettings);
+                setSettings(revertedSettings);
+            }
+        } else {
+            // Disable graph retrieval
+            try {
+                const updatedSettings = {
+                    ...settings,
+                    enable_graph_enhanced_retrieval: false,
+                };
+                await updateSettings(updatedSettings);
+                setSettings(updatedSettings);
+                setGraphBuildStatus("Graph retrieval disabled");
+                setTimeout(() => setGraphBuildStatus(null), 3000);
+            } catch (error) {
+                console.error("Error disabling graph retrieval:", error);
+                setError("Failed to disable graph retrieval");
+            }
+        }
+    };
+
     // Debounced URL validation
     const validateEndpointUrl = useCallback(
-        async (type: 'extraction' | 'embeddings', url: string, providerType: string, apiKey?: string) => {
+        async (
+            type: "extraction" | "embeddings",
+            url: string,
+            providerType: string,
+            apiKey?: string
+        ) => {
             if (!url.trim()) {
-                setEndpointValidation(prev => ({
+                setEndpointValidation((prev) => ({
                     ...prev,
-                    [type]: { isValid: null, error: undefined, isValidating: false }
+                    [type]: {
+                        isValid: null,
+                        error: undefined,
+                        isValidating: false,
+                    },
                 }));
                 return;
             }
 
-            setEndpointValidation(prev => ({
+            setEndpointValidation((prev) => ({
                 ...prev,
-                [type]: { isValid: null, error: undefined, isValidating: true }
+                [type]: { isValid: null, error: undefined, isValidating: true },
             }));
 
             try {
-                const result = await validateEndpoint(url, providerType, apiKey);
-                setEndpointValidation(prev => ({
+                const result = await validateEndpoint(
+                    url,
+                    providerType,
+                    apiKey
+                );
+                setEndpointValidation((prev) => ({
                     ...prev,
-                    [type]: { 
-                        isValid: result.success, 
-                        error: result.error, 
-                        isValidating: false 
-                    }
+                    [type]: {
+                        isValid: result.success,
+                        error: result.error,
+                        isValidating: false,
+                    },
                 }));
 
                 // If validation successful, fetch models
                 if (result.success) {
-                    await fetchModelsForEndpoint(type, url, providerType, apiKey);
+                    await fetchModelsForEndpoint(
+                        type,
+                        url,
+                        providerType,
+                        apiKey
+                    );
                 }
             } catch (error: any) {
-                setEndpointValidation(prev => ({
+                setEndpointValidation((prev) => ({
                     ...prev,
-                    [type]: { 
-                        isValid: false, 
-                        error: error.message || 'Failed to validate endpoint', 
-                        isValidating: false 
-                    }
+                    [type]: {
+                        isValid: false,
+                        error: error.message || "Failed to validate endpoint",
+                        isValidating: false,
+                    },
                 }));
             }
         },
@@ -169,23 +362,31 @@ const SettingsPage: React.FC = () => {
     );
 
     const fetchModelsForEndpoint = useCallback(
-        async (type: 'extraction' | 'embeddings', url: string, providerType: string, apiKey?: string) => {
-            setModelsLoading(prev => ({ ...prev, [type]: true }));
-            
+        async (
+            type: "extraction" | "embeddings",
+            url: string,
+            providerType: string,
+            apiKey?: string
+        ) => {
+            setModelsLoading((prev) => ({ ...prev, [type]: true }));
+
             try {
                 const result = await fetchModels(url, providerType, apiKey);
                 if (result.success && result.models) {
-                    setAvailableModels(prev => ({
+                    setAvailableModels((prev) => ({
                         ...prev,
-                        [type]: result.models || []
+                        [type]: result.models || [],
                     }));
                 } else {
-                    console.warn(`Failed to fetch models for ${type}:`, result.error);
+                    console.warn(
+                        `Failed to fetch models for ${type}:`,
+                        result.error
+                    );
                 }
             } catch (error: any) {
                 console.error(`Error fetching models for ${type}:`, error);
             } finally {
-                setModelsLoading(prev => ({ ...prev, [type]: false }));
+                setModelsLoading((prev) => ({ ...prev, [type]: false }));
             }
         },
         []
@@ -198,7 +399,7 @@ const SettingsPage: React.FC = () => {
         const timeoutId = setTimeout(() => {
             if (settings.extraction_endpoint_url) {
                 validateEndpointUrl(
-                    'extraction',
+                    "extraction",
                     settings.extraction_endpoint_url,
                     settings.extraction_provider_type,
                     settings.extraction_endpoint_api_key
@@ -207,7 +408,12 @@ const SettingsPage: React.FC = () => {
         }, 1000);
 
         return () => clearTimeout(timeoutId);
-    }, [settings?.extraction_endpoint_url, settings?.extraction_provider_type, settings?.extraction_endpoint_api_key, validateEndpointUrl]);
+    }, [
+        settings?.extraction_endpoint_url,
+        settings?.extraction_provider_type,
+        settings?.extraction_endpoint_api_key,
+        validateEndpointUrl,
+    ]);
 
     useEffect(() => {
         if (!settings) return;
@@ -215,7 +421,7 @@ const SettingsPage: React.FC = () => {
         const timeoutId = setTimeout(() => {
             if (settings.embeddings_endpoint_url) {
                 validateEndpointUrl(
-                    'embeddings',
+                    "embeddings",
                     settings.embeddings_endpoint_url,
                     settings.embeddings_provider_type,
                     settings.embeddings_endpoint_api_key
@@ -224,7 +430,12 @@ const SettingsPage: React.FC = () => {
         }, 1000);
 
         return () => clearTimeout(timeoutId);
-    }, [settings?.embeddings_endpoint_url, settings?.embeddings_provider_type, settings?.embeddings_endpoint_api_key, validateEndpointUrl]);
+    }, [
+        settings?.embeddings_endpoint_url,
+        settings?.embeddings_provider_type,
+        settings?.embeddings_endpoint_api_key,
+        validateEndpointUrl,
+    ]);
 
     const tabs = [
         { id: "prompts" as SettingsTab, name: "Prompts", icon: "📝" },
@@ -232,7 +443,16 @@ const SettingsPage: React.FC = () => {
         { id: "embeddings" as SettingsTab, name: "Embeddings", icon: "🔍" },
         { id: "parameters" as SettingsTab, name: "LLM Parameters", icon: "⚙️" },
         { id: "search" as SettingsTab, name: "Search Config", icon: "🎯" },
-        { id: "consolidation" as SettingsTab, name: "Memory Consolidation", icon: "🔗" },
+        {
+            id: "consolidation" as SettingsTab,
+            name: "Memory Consolidation",
+            icon: "🔗",
+        },
+        {
+            id: "graph" as SettingsTab,
+            name: "Graph-Enhanced Retrieval",
+            icon: "🕸️",
+        },
     ];
 
     // URL validation indicator component
@@ -257,8 +477,16 @@ const SettingsPage: React.FC = () => {
         if (isValid) {
             return (
                 <div className="flex items-center space-x-2 text-sm text-green-600">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    <svg
+                        className="w-4 h-4"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                    >
+                        <path
+                            fillRule="evenodd"
+                            d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                            clipRule="evenodd"
+                        />
                     </svg>
                     <span>Endpoint valid</span>
                 </div>
@@ -267,10 +495,18 @@ const SettingsPage: React.FC = () => {
 
         return (
             <div className="flex items-center space-x-2 text-sm text-red-600">
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                <svg
+                    className="w-4 h-4"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                >
+                    <path
+                        fillRule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                        clipRule="evenodd"
+                    />
                 </svg>
-                <span>{error || 'Endpoint invalid'}</span>
+                <span>{error || "Endpoint invalid"}</span>
             </div>
         );
     };
@@ -720,9 +956,19 @@ const SettingsPage: React.FC = () => {
                                             />
                                             <div className="mt-2">
                                                 <ValidationIndicator
-                                                    isValid={endpointValidation.extraction.isValid}
-                                                    error={endpointValidation.extraction.error}
-                                                    isValidating={endpointValidation.extraction.isValidating}
+                                                    isValid={
+                                                        endpointValidation
+                                                            .extraction.isValid
+                                                    }
+                                                    error={
+                                                        endpointValidation
+                                                            .extraction.error
+                                                    }
+                                                    isValidating={
+                                                        endpointValidation
+                                                            .extraction
+                                                            .isValidating
+                                                    }
                                                 />
                                             </div>
                                         </div>
@@ -756,9 +1002,12 @@ const SettingsPage: React.FC = () => {
                                                     </span>
                                                 )}
                                             </label>
-                                            {availableModels.extraction.length > 0 ? (
+                                            {availableModels.extraction.length >
+                                            0 ? (
                                                 <select
-                                                    value={settings.extraction_model}
+                                                    value={
+                                                        settings.extraction_model
+                                                    }
                                                     onChange={(e) =>
                                                         handleInputChange(
                                                             "extraction_model",
@@ -767,17 +1016,26 @@ const SettingsPage: React.FC = () => {
                                                     }
                                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 >
-                                                    <option value="">Select a model</option>
-                                                    {availableModels.extraction.map((model) => (
-                                                        <option key={model} value={model}>
-                                                            {model}
-                                                        </option>
-                                                    ))}
+                                                    <option value="">
+                                                        Select a model
+                                                    </option>
+                                                    {availableModels.extraction.map(
+                                                        (model) => (
+                                                            <option
+                                                                key={model}
+                                                                value={model}
+                                                            >
+                                                                {model}
+                                                            </option>
+                                                        )
+                                                    )}
                                                 </select>
                                             ) : (
                                                 <input
                                                     type="text"
-                                                    value={settings.extraction_model}
+                                                    value={
+                                                        settings.extraction_model
+                                                    }
                                                     onChange={(e) =>
                                                         handleInputChange(
                                                             "extraction_model",
@@ -867,9 +1125,19 @@ const SettingsPage: React.FC = () => {
                                             />
                                             <div className="mt-2">
                                                 <ValidationIndicator
-                                                    isValid={endpointValidation.embeddings.isValid}
-                                                    error={endpointValidation.embeddings.error}
-                                                    isValidating={endpointValidation.embeddings.isValidating}
+                                                    isValid={
+                                                        endpointValidation
+                                                            .embeddings.isValid
+                                                    }
+                                                    error={
+                                                        endpointValidation
+                                                            .embeddings.error
+                                                    }
+                                                    isValidating={
+                                                        endpointValidation
+                                                            .embeddings
+                                                            .isValidating
+                                                    }
                                                 />
                                             </div>
                                         </div>
@@ -903,9 +1171,12 @@ const SettingsPage: React.FC = () => {
                                                     </span>
                                                 )}
                                             </label>
-                                            {availableModels.embeddings.length > 0 ? (
+                                            {availableModels.embeddings.length >
+                                            0 ? (
                                                 <select
-                                                    value={settings.embeddings_model}
+                                                    value={
+                                                        settings.embeddings_model
+                                                    }
                                                     onChange={(e) =>
                                                         handleInputChange(
                                                             "embeddings_model",
@@ -914,17 +1185,26 @@ const SettingsPage: React.FC = () => {
                                                     }
                                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 >
-                                                    <option value="">Select a model</option>
-                                                    {availableModels.embeddings.map((model) => (
-                                                        <option key={model} value={model}>
-                                                            {model}
-                                                        </option>
-                                                    ))}
+                                                    <option value="">
+                                                        Select a model
+                                                    </option>
+                                                    {availableModels.embeddings.map(
+                                                        (model) => (
+                                                            <option
+                                                                key={model}
+                                                                value={model}
+                                                            >
+                                                                {model}
+                                                            </option>
+                                                        )
+                                                    )}
                                                 </select>
                                             ) : (
                                                 <input
                                                     type="text"
-                                                    value={settings.embeddings_model}
+                                                    value={
+                                                        settings.embeddings_model
+                                                    }
                                                     onChange={(e) =>
                                                         handleInputChange(
                                                             "embeddings_model",
@@ -1270,16 +1550,21 @@ const SettingsPage: React.FC = () => {
                                         Memory Consolidation Settings
                                     </h3>
                                     <p className="text-sm text-gray-600 mb-6">
-                                        Configure automatic detection and merging of duplicate or highly similar memories to prevent information redundancy.
+                                        Configure automatic detection and
+                                        merging of duplicate or highly similar
+                                        memories to prevent information
+                                        redundancy.
                                     </p>
-                                    
+
                                     {/* Enable Consolidation */}
                                     <div className="bg-gray-50 p-4 rounded-lg mb-6">
                                         <div className="flex items-center">
                                             <label className="flex items-center cursor-pointer">
                                                 <input
                                                     type="checkbox"
-                                                    checked={settings.enable_memory_consolidation}
+                                                    checked={
+                                                        settings.enable_memory_consolidation
+                                                    }
                                                     onChange={(e) =>
                                                         handleInputChange(
                                                             "enable_memory_consolidation",
@@ -1294,18 +1579,30 @@ const SettingsPage: React.FC = () => {
                                             </label>
                                         </div>
                                         <p className="text-sm text-gray-600 mt-2 ml-8">
-                                            Automatically detect and merge duplicate or highly similar memories during the extraction process.
+                                            Automatically detect and merge
+                                            duplicate or highly similar memories
+                                            during the extraction process.
                                         </p>
                                     </div>
 
                                     {/* Consolidation Settings Grid */}
-                                    <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${!settings.enable_memory_consolidation ? 'opacity-50 pointer-events-none' : ''}`}>
+                                    <div
+                                        className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${
+                                            !settings.enable_memory_consolidation
+                                                ? "opacity-50 pointer-events-none"
+                                                : ""
+                                        }`}
+                                    >
                                         {/* Similarity Threshold */}
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-2">
                                                 Duplicate Detection Threshold
                                                 <span className="ml-1 text-blue-600 text-xs">
-                                                    {(settings.consolidation_similarity_threshold * 100).toFixed(0)}%
+                                                    {(
+                                                        settings.consolidation_similarity_threshold *
+                                                        100
+                                                    ).toFixed(0)}
+                                                    %
                                                 </span>
                                             </label>
                                             <input
@@ -1313,7 +1610,9 @@ const SettingsPage: React.FC = () => {
                                                 min="0.5"
                                                 max="1.0"
                                                 step="0.05"
-                                                value={settings.consolidation_similarity_threshold}
+                                                value={
+                                                    settings.consolidation_similarity_threshold
+                                                }
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "consolidation_similarity_threshold",
@@ -1323,11 +1622,17 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                                             />
                                             <div className="flex justify-between text-xs text-gray-500 mt-1">
-                                                <span>50% (More duplicates)</span>
-                                                <span>100% (Fewer duplicates)</span>
+                                                <span>
+                                                    50% (More duplicates)
+                                                </span>
+                                                <span>
+                                                    100% (Fewer duplicates)
+                                                </span>
                                             </div>
                                             <p className="text-xs text-gray-600 mt-2">
-                                                How similar memories must be to be considered duplicates. Higher values are more strict.
+                                                How similar memories must be to
+                                                be considered duplicates. Higher
+                                                values are more strict.
                                             </p>
                                         </div>
 
@@ -1336,7 +1641,11 @@ const SettingsPage: React.FC = () => {
                                             <label className="block text-sm font-medium text-gray-700 mb-2">
                                                 Auto-Consolidation Threshold
                                                 <span className="ml-1 text-green-600 text-xs">
-                                                    {(settings.consolidation_auto_threshold * 100).toFixed(0)}%
+                                                    {(
+                                                        settings.consolidation_auto_threshold *
+                                                        100
+                                                    ).toFixed(0)}
+                                                    %
                                                 </span>
                                             </label>
                                             <input
@@ -1344,7 +1653,9 @@ const SettingsPage: React.FC = () => {
                                                 min="0.8"
                                                 max="1.0"
                                                 step="0.02"
-                                                value={settings.consolidation_auto_threshold}
+                                                value={
+                                                    settings.consolidation_auto_threshold
+                                                }
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "consolidation_auto_threshold",
@@ -1354,11 +1665,17 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                                             />
                                             <div className="flex justify-between text-xs text-gray-500 mt-1">
-                                                <span>80% (More automatic)</span>
-                                                <span>100% (Less automatic)</span>
+                                                <span>
+                                                    80% (More automatic)
+                                                </span>
+                                                <span>
+                                                    100% (Less automatic)
+                                                </span>
                                             </div>
                                             <p className="text-xs text-gray-600 mt-2">
-                                                Similarity threshold for automatic consolidation without manual review.
+                                                Similarity threshold for
+                                                automatic consolidation without
+                                                manual review.
                                             </p>
                                         </div>
 
@@ -1368,7 +1685,9 @@ const SettingsPage: React.FC = () => {
                                                 Consolidation Strategy
                                             </label>
                                             <select
-                                                value={settings.consolidation_strategy}
+                                                value={
+                                                    settings.consolidation_strategy
+                                                }
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "consolidation_strategy",
@@ -1377,19 +1696,43 @@ const SettingsPage: React.FC = () => {
                                                 }
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                             >
-                                                <option value="automatic">Automatic (Rule-based merging)</option>
-                                                <option value="llm_guided">LLM Guided (AI-powered consolidation)</option>
-                                                <option value="manual">Manual (Simple superseding)</option>
+                                                <option value="automatic">
+                                                    Automatic (Rule-based
+                                                    merging)
+                                                </option>
+                                                <option value="llm_guided">
+                                                    LLM Guided (AI-powered
+                                                    consolidation)
+                                                </option>
+                                                <option value="manual">
+                                                    Manual (Simple superseding)
+                                                </option>
                                             </select>
                                             <div className="text-xs text-gray-600 mt-2">
-                                                {settings.consolidation_strategy === 'automatic' && (
-                                                    <p>Uses predefined rules to merge similar memories automatically.</p>
+                                                {settings.consolidation_strategy ===
+                                                    "automatic" && (
+                                                    <p>
+                                                        Uses predefined rules to
+                                                        merge similar memories
+                                                        automatically.
+                                                    </p>
                                                 )}
-                                                {settings.consolidation_strategy === 'llm_guided' && (
-                                                    <p>Uses AI to intelligently consolidate memories while preserving important information.</p>
+                                                {settings.consolidation_strategy ===
+                                                    "llm_guided" && (
+                                                    <p>
+                                                        Uses AI to intelligently
+                                                        consolidate memories
+                                                        while preserving
+                                                        important information.
+                                                    </p>
                                                 )}
-                                                {settings.consolidation_strategy === 'manual' && (
-                                                    <p>Simply marks duplicates as superseded without changing content.</p>
+                                                {settings.consolidation_strategy ===
+                                                    "manual" && (
+                                                    <p>
+                                                        Simply marks duplicates
+                                                        as superseded without
+                                                        changing content.
+                                                    </p>
                                                 )}
                                             </div>
                                         </div>
@@ -1399,7 +1742,10 @@ const SettingsPage: React.FC = () => {
                                             <label className="block text-sm font-medium text-gray-700 mb-2">
                                                 Max Group Size
                                                 <span className="ml-1 text-purple-600 text-xs">
-                                                    {settings.consolidation_max_group_size} memories
+                                                    {
+                                                        settings.consolidation_max_group_size
+                                                    }{" "}
+                                                    memories
                                                 </span>
                                             </label>
                                             <input
@@ -1407,7 +1753,9 @@ const SettingsPage: React.FC = () => {
                                                 min="2"
                                                 max="10"
                                                 step="1"
-                                                value={settings.consolidation_max_group_size}
+                                                value={
+                                                    settings.consolidation_max_group_size
+                                                }
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "consolidation_max_group_size",
@@ -1422,7 +1770,9 @@ const SettingsPage: React.FC = () => {
                                                 <span>10</span>
                                             </div>
                                             <p className="text-xs text-gray-600 mt-2">
-                                                Maximum number of memories that can be consolidated into a single group.
+                                                Maximum number of memories that
+                                                can be consolidated into a
+                                                single group.
                                             </p>
                                         </div>
 
@@ -1431,7 +1781,9 @@ const SettingsPage: React.FC = () => {
                                             <label className="block text-sm font-medium text-gray-700 mb-2">
                                                 Processing Batch Size
                                                 <span className="ml-1 text-orange-600 text-xs">
-                                                    {settings.consolidation_batch_size}
+                                                    {
+                                                        settings.consolidation_batch_size
+                                                    }
                                                 </span>
                                             </label>
                                             <input
@@ -1439,7 +1791,9 @@ const SettingsPage: React.FC = () => {
                                                 min="10"
                                                 max="1000"
                                                 step="10"
-                                                value={settings.consolidation_batch_size}
+                                                value={
+                                                    settings.consolidation_batch_size
+                                                }
                                                 onChange={(e) =>
                                                     handleInputChange(
                                                         "consolidation_batch_size",
@@ -1454,23 +1808,41 @@ const SettingsPage: React.FC = () => {
                                                 <span>1000</span>
                                             </div>
                                             <p className="text-xs text-gray-600 mt-2">
-                                                Number of memories to process in each consolidation batch for better performance.
+                                                Number of memories to process in
+                                                each consolidation batch for
+                                                better performance.
                                             </p>
                                         </div>
                                     </div>
 
                                     {/* Validation Warning */}
-                                    {settings.consolidation_similarity_threshold >= settings.consolidation_auto_threshold && (
+                                    {settings.consolidation_similarity_threshold >=
+                                        settings.consolidation_auto_threshold && (
                                         <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mt-6">
                                             <div className="flex">
                                                 <div className="flex-shrink-0">
-                                                    <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
-                                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                    <svg
+                                                        className="h-5 w-5 text-amber-400"
+                                                        viewBox="0 0 20 20"
+                                                        fill="currentColor"
+                                                    >
+                                                        <path
+                                                            fillRule="evenodd"
+                                                            d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
+                                                            clipRule="evenodd"
+                                                        />
                                                     </svg>
                                                 </div>
                                                 <div className="ml-3">
                                                     <p className="text-sm text-amber-700">
-                                                        <strong>Warning:</strong> Auto-consolidation threshold should be higher than the detection threshold for proper operation.
+                                                        <strong>
+                                                            Warning:
+                                                        </strong>{" "}
+                                                        Auto-consolidation
+                                                        threshold should be
+                                                        higher than the
+                                                        detection threshold for
+                                                        proper operation.
                                                     </p>
                                                 </div>
                                             </div>
@@ -1479,13 +1851,289 @@ const SettingsPage: React.FC = () => {
 
                                     {/* Performance Tips */}
                                     <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mt-6">
-                                        <h4 className="text-sm font-medium text-blue-900 mb-2">💡 Tips for Optimal Performance</h4>
+                                        <h4 className="text-sm font-medium text-blue-900 mb-2">
+                                            💡 Tips for Optimal Performance
+                                        </h4>
                                         <ul className="text-sm text-blue-800 space-y-1">
-                                            <li>• <strong>Detection Threshold:</strong> Start with 85% and adjust based on your needs</li>
-                                            <li>• <strong>LLM Guided:</strong> Recommended strategy for best quality consolidation</li>
-                                            <li>• <strong>Batch Size:</strong> Higher values improve performance but use more memory</li>
-                                            <li>• <strong>Group Size:</strong> Keep low (3-5) to avoid over-consolidation</li>
+                                            <li>
+                                                •{" "}
+                                                <strong>
+                                                    Detection Threshold:
+                                                </strong>{" "}
+                                                Start with 85% and adjust based
+                                                on your needs
+                                            </li>
+                                            <li>
+                                                • <strong>LLM Guided:</strong>{" "}
+                                                Recommended strategy for best
+                                                quality consolidation
+                                            </li>
+                                            <li>
+                                                • <strong>Batch Size:</strong>{" "}
+                                                Higher values improve
+                                                performance but use more memory
+                                            </li>
+                                            <li>
+                                                • <strong>Group Size:</strong>{" "}
+                                                Keep low (3-5) to avoid
+                                                over-consolidation
+                                            </li>
                                         </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Graph-Enhanced Retrieval Tab */}
+                        {activeTab === "graph" && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-medium text-gray-900 mb-4">
+                                        Graph-Enhanced Retrieval Settings
+                                    </h3>
+                                    <p className="text-sm text-gray-600 mb-6">
+                                        Enable hybrid search that combines
+                                        vector similarity with relationship
+                                        traversal for improved context
+                                        discovery.
+                                    </p>
+
+                                    {/* Enable/Disable Button */}
+                                    <div className="bg-gray-50 p-6 rounded-lg mb-6">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1">
+                                                <h4 className="text-base font-medium text-gray-900 mb-2">
+                                                    Graph-Enhanced Retrieval
+                                                </h4>
+                                                <p className="text-sm text-gray-600 mb-4">
+                                                    Combines vector similarity
+                                                    search with relationship
+                                                    traversal to discover
+                                                    contextually relevant
+                                                    memories.
+                                                </p>
+                                                <div className="text-sm text-gray-500">
+                                                    <strong>Status:</strong>{" "}
+                                                    {buildingGraph ? (
+                                                        <span className="text-blue-600">
+                                                            <span className="animate-spin inline-block mr-1">
+                                                                ⏳
+                                                            </span>
+                                                            Building...
+                                                        </span>
+                                                    ) : settings.enable_graph_enhanced_retrieval ? (
+                                                        <span className="text-green-600">
+                                                            ✓ Enabled
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-gray-500">
+                                                            ○ Disabled
+                                                        </span>
+                                                    )}
+                                                    {settings.graph_last_build &&
+                                                        !buildingGraph && (
+                                                            <span className="ml-4">
+                                                                <strong>
+                                                                    Last Build:
+                                                                </strong>{" "}
+                                                                {new Date(
+                                                                    settings.graph_last_build
+                                                                ).toLocaleDateString()}
+                                                            </span>
+                                                        )}
+                                                </div>
+                                            </div>
+                                            <div className="flex-shrink-0 ml-6">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleGraphToggle}
+                                                    disabled={
+                                                        buildingGraph ||
+                                                        settings.graph_build_status ===
+                                                            "building"
+                                                    }
+                                                    className={`px-4 py-2 rounded-md font-medium transition-all duration-200 ${
+                                                        buildingGraph ||
+                                                        settings.graph_build_status ===
+                                                            "building"
+                                                            ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                                            : settings.enable_graph_enhanced_retrieval
+                                                            ? settings.graph_build_status ===
+                                                              "failed"
+                                                                ? "bg-orange-600 text-white hover:bg-orange-700"
+                                                                : "bg-red-600 text-white hover:bg-red-700"
+                                                            : "bg-blue-600 text-white hover:bg-blue-700"
+                                                    }`}
+                                                >
+                                                    {buildingGraph ||
+                                                    settings.graph_build_status ===
+                                                        "building"
+                                                        ? "Building Graph..."
+                                                        : settings.enable_graph_enhanced_retrieval
+                                                        ? settings.graph_build_status ===
+                                                          "failed"
+                                                            ? "Retry Build"
+                                                            : "Disable Graph Retrieval"
+                                                        : "Enable Graph Retrieval"}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Build Status Indicator */}
+                                        {(settings.enable_graph_enhanced_retrieval ||
+                                            graphBuildStatus ||
+                                            graphBuildError) && (
+                                            <div className="mt-4 p-3 bg-white rounded border">
+                                                <div className="flex items-center">
+                                                    <div className="flex-1">
+                                                        <div className="text-sm font-medium text-gray-900">
+                                                            Build Status:{" "}
+                                                            {buildingGraph ||
+                                                            settings.graph_build_status ===
+                                                                "building" ? (
+                                                                <span className="text-blue-600">
+                                                                    ⏳
+                                                                    Building...
+                                                                </span>
+                                                            ) : settings.graph_build_status ===
+                                                              "built" ? (
+                                                                <span className="text-green-600">
+                                                                    ✓ Built
+                                                                </span>
+                                                            ) : settings.graph_build_status ===
+                                                              "failed" ? (
+                                                                <span className="text-red-600">
+                                                                    ✗ Failed
+                                                                </span>
+                                                            ) : settings.graph_build_status ===
+                                                              "outdated" ? (
+                                                                <span className="text-orange-600">
+                                                                    ⚠ Outdated
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-gray-500">
+                                                                    ○ Not Built
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-xs text-gray-500 mt-1">
+                                                            {graphBuildStatus && (
+                                                                <div className="text-blue-600 font-medium">
+                                                                    {
+                                                                        graphBuildStatus
+                                                                    }
+                                                                </div>
+                                                            )}
+                                                            {graphBuildError && (
+                                                                <div className="text-red-600 font-medium">
+                                                                    {
+                                                                        graphBuildError
+                                                                    }
+                                                                </div>
+                                                            )}
+                                                            {!graphBuildStatus &&
+                                                                !graphBuildError && (
+                                                                    <>
+                                                                        {buildingGraph ||
+                                                                            (settings.graph_build_status ===
+                                                                                "building" &&
+                                                                                "Building relationships between memories...")}
+                                                                        {settings.graph_build_status ===
+                                                                            "built" &&
+                                                                            "Graph relationships are up to date"}
+                                                                        {settings.graph_build_status ===
+                                                                            "failed" &&
+                                                                            "Graph build failed - check Neo4j connection"}
+                                                                        {settings.graph_build_status ===
+                                                                            "outdated" &&
+                                                                            "Graph needs rebuilding for new memories"}
+                                                                        {settings.graph_build_status ===
+                                                                            "not_built" &&
+                                                                            "Click 'Enable Graph Retrieval' to build the graph"}
+                                                                    </>
+                                                                )}
+                                                        </div>
+                                                        {buildingGraph && (
+                                                            <div className="mt-2">
+                                                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                                                    <div
+                                                                        className="bg-blue-600 h-2 rounded-full animate-pulse"
+                                                                        style={{
+                                                                            width: "50%",
+                                                                        }}
+                                                                    ></div>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Information Panel */}
+                                    <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                                        <h4 className="text-sm font-medium text-blue-900 mb-2">
+                                            🕸️ How Graph-Enhanced Retrieval
+                                            Works
+                                        </h4>
+                                        <div className="text-sm text-blue-800 space-y-2">
+                                            <p>
+                                                <strong>Hybrid Search:</strong>{" "}
+                                                Combines traditional vector
+                                                similarity with relationship
+                                                traversal
+                                            </p>
+                                            <p>
+                                                <strong>
+                                                    Automatic Building:
+                                                </strong>{" "}
+                                                Graph relationships are built
+                                                incrementally as you add
+                                                memories
+                                            </p>
+                                            <p>
+                                                <strong>
+                                                    Multiple Connections:
+                                                </strong>{" "}
+                                                Creates semantic, tag-based, and
+                                                temporal relationships
+                                            </p>
+                                            <p>
+                                                <strong>
+                                                    Neo4j Dashboard:
+                                                </strong>{" "}
+                                                Use the Neo4j dashboard to
+                                                explore relationship analytics
+                                                and visualizations
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Neo4j Dashboard Link */}
+                                    <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+                                        <h4 className="text-sm font-medium text-gray-900 mb-2">
+                                            📊 Graph Analytics
+                                        </h4>
+                                        <p className="text-sm text-gray-600 mb-3">
+                                            For advanced graph analytics,
+                                            relationship visualization, and
+                                            cluster analysis, use the Neo4j
+                                            dashboard.
+                                        </p>
+                                        <div className="flex items-center space-x-3">
+                                            <a
+                                                href="http://localhost:7474"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                            >
+                                                🌐 Open Neo4j Dashboard
+                                            </a>
+                                            <span className="text-xs text-gray-500">
+                                                Default: localhost:7474
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

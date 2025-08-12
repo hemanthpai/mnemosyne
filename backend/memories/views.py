@@ -351,16 +351,38 @@ class ExtractMemoriesView(APIView):
                 len(stored_memories), conflicts_resolved, duplicates_consolidated
             )
 
-            return Response(
-                {
-                    "success": True,
-                    "memories_extracted": len(stored_memories),
-                    "conflicts_resolved": conflicts_resolved,
-                    "duplicates_consolidated": duplicates_consolidated,
-                    "memories": stored_memories,
-                    "model_used": llm_result.get("model", "unknown"),
+            # Auto-build graph if graph-enhanced retrieval is enabled and we have new memories
+            graph_build_result = None
+            if settings.enable_graph_enhanced_retrieval and stored_memories:
+                try:
+                    logger.info("Auto-building graph relationships for %d new memories", len(stored_memories))
+                    graph_build_result = graph_service.build_memory_graph(user_id, incremental=True)
+                    if graph_build_result.get("success"):
+                        logger.info("Auto-build successful: %d relationships created", 
+                                  graph_build_result.get("relationships_created", 0))
+                    else:
+                        logger.warning("Auto-build failed: %s", graph_build_result.get("error"))
+                except Exception as e:
+                    logger.error("Error during auto-build: %s", e)
+
+            response_data = {
+                "success": True,
+                "memories_extracted": len(stored_memories),
+                "conflicts_resolved": conflicts_resolved,
+                "duplicates_consolidated": duplicates_consolidated,
+                "memories": stored_memories,
+                "model_used": llm_result.get("model", "unknown"),
+            }
+
+            # Include graph build results if auto-building occurred
+            if graph_build_result:
+                response_data["graph_build_result"] = {
+                    "success": graph_build_result.get("success", False),
+                    "relationships_created": graph_build_result.get("relationships_created", 0),
+                    "incremental": graph_build_result.get("incremental", True)
                 }
-            )
+
+            return Response(response_data)
 
         except Exception as e:
             logger.error("Unexpected error during memory extraction: %s", e)
@@ -430,14 +452,16 @@ class RetrieveMemoriesView(APIView):
             boosted_threshold = 0.5
 
         try:
-            # Step 1: Get LLM settings and generate search queries
+            # Step 1: Get LLM settings and determine graph usage from app-level setting
             settings = LLMSettings.get_settings()
+            use_graph = settings.enable_graph_enhanced_retrieval
             search_prompt = settings.memory_search_prompt
 
             logger.info(
-                "Generating search queries for user %s with prompt: %s...",
+                "Generating search queries for user %s with prompt: %s... (graph: %s)",
                 user_id,
                 prompt,
+                use_graph
             )
 
             # Query LLM to generate search queries
@@ -473,13 +497,22 @@ class RetrieveMemoriesView(APIView):
 
             logger.info("Generated %d search queries", len(search_queries))
 
-            # Step 3: Use memory search service to find relevant memories
-            relevant_memories = memory_search_service.search_memories_with_queries(
-                search_queries=search_queries,
-                user_id=user_id,
-                limit=limit,
-                threshold=threshold,
-            )
+            # Step 3: Use appropriate search method based on app-level setting
+            if use_graph:
+                relevant_memories = memory_search_service.search_with_graph_enhancement(
+                    search_queries=search_queries,
+                    user_id=user_id,
+                    limit=limit,
+                    threshold=threshold,
+                    use_graph=True
+                )
+            else:
+                relevant_memories = memory_search_service.search_memories_with_queries(
+                    search_queries=search_queries,
+                    user_id=user_id,
+                    limit=limit,
+                    threshold=threshold,
+                )
 
             # Step 4: Find additional semantic connections if enabled and we have enough results
             settings = LLMSettings.get_settings()
@@ -997,6 +1030,371 @@ class GraphQueryView(APIView):
                 {
                     "success": False,
                     "error": "An unexpected error occurred during graph query execution",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class BuildMemoryGraphView(APIView):
+    """
+    API endpoint to build memory relationship graph for all users or a specific user
+    """
+    
+    def post(self, request):
+        user_id = request.data.get("user_id")
+        build_for_all = request.data.get("build_for_all", False)
+        incremental = request.data.get("incremental", True)  # Default to incremental
+        
+        # If build_for_all is True, build graph for all users
+        if build_for_all:
+            try:
+                logger.info("Building memory graph for ALL users (incremental: %s)", incremental)
+                
+                # Update build status to building
+                settings = LLMSettings.get_settings()
+                settings.graph_build_status = "building"
+                settings.save()
+                
+                # Get all unique user IDs from Memory model
+                logger.info("Checking total memories in database...")
+                total_memories = Memory.objects.count()
+                active_memories = Memory.objects.filter(is_active=True).count()
+                logger.info("Total memories: %d, Active memories: %d", total_memories, active_memories)
+                
+                unique_user_ids = Memory.objects.filter(is_active=True).values_list('user_id', flat=True).distinct().order_by('user_id')
+                unique_user_list = list(unique_user_ids)
+                logger.info("Found %d unique user IDs to process", len(unique_user_list))
+                logger.info("User IDs: %s", [str(uid) for uid in unique_user_list])
+                
+                total_nodes = 0
+                total_relationships = 0
+                failed_users = []
+                
+                for uid in unique_user_list:
+                    try:
+                        logger.info("Building graph for user %s", uid)
+                        result = graph_service.build_memory_graph(uid, incremental=incremental)
+                        if result["success"]:
+                            total_nodes += result.get("nodes_created", 0)
+                            total_relationships += result.get("relationships_created", 0)
+                        else:
+                            failed_users.append(str(uid))
+                            error_msg = result.get("error", "Unknown error")
+                            logger.error("Failed to build graph for user %s: %s", uid, error_msg)
+                            
+                            # If Neo4j connection fails, fail fast for all users
+                            if "Neo4j driver not initialized" in error_msg:
+                                logger.error("Neo4j connection failed - aborting build for all users")
+                                settings.graph_build_status = "failed"
+                                settings.save()
+                                return Response(
+                                    {
+                                        "success": False,
+                                        "error": "Neo4j database connection failed. Please check Neo4j is running and credentials are correct.",
+                                        "neo4j_error": True
+                                    },
+                                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                )
+                    except Exception as e:
+                        failed_users.append(str(uid))
+                        logger.error("Error building graph for user %s: %s", uid, e)
+                
+                # Update build status
+                logger.info("Build complete - processed %d users, %d failed", len(unique_user_list), len(failed_users))
+                logger.info("Total nodes: %d, Total relationships: %d", total_nodes, total_relationships)
+                
+                if failed_users:
+                    logger.info("Failed users: %s", failed_users)
+                    settings.graph_build_status = "partial"
+                else:
+                    logger.info("All users processed successfully - setting status to 'built'")
+                    settings.graph_build_status = "built"
+                    
+                from django.utils import timezone
+                settings.graph_last_build = timezone.now()
+                settings.save()
+                
+                return Response({
+                    "success": len(failed_users) == 0,
+                    "message": f"Memory graph built for {len(unique_user_list) - len(failed_users)} users",
+                    "nodes_created": total_nodes,
+                    "relationships_created": total_relationships,
+                    "incremental": incremental,
+                    "total_users": len(unique_user_list),
+                    "failed_users": failed_users,
+                }, status=status.HTTP_200_OK)
+                
+            except Exception as e:
+                logger.error("Unexpected error during bulk graph building: %s", e)
+                settings = LLMSettings.get_settings()
+                settings.graph_build_status = "failed"
+                settings.save()
+                return Response(
+                    {
+                        "success": False,
+                        "error": "An unexpected error occurred during graph building",
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        
+        # Build for specific user (original behavior)
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required when build_for_all is False"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Validate user_id format
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            logger.info("Building memory graph for user %s (incremental: %s)", user_id, incremental)
+            
+            # Update build status to building
+            settings = LLMSettings.get_settings()
+            settings.graph_build_status = "building"
+            settings.save()
+            
+            # Build the memory graph
+            result = graph_service.build_memory_graph(user_id, incremental=incremental)
+            
+            if result["success"]:
+                # Update build status to built
+                settings.graph_build_status = "built"
+                from django.utils import timezone
+                settings.graph_last_build = timezone.now()
+                settings.save()
+                
+                return Response(
+                    {
+                        "success": True,
+                        "message": "Memory graph built successfully",
+                        "nodes_created": result["nodes_created"],
+                        "relationships_created": result["relationships_created"],
+                        "incremental": result["incremental"],
+                        "user_id": user_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                # Update build status to failed
+                settings.graph_build_status = "failed"
+                settings.save()
+                
+                logger.error("Graph building failed: %s", result.get("error"))
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Graph building failed: {result.get('error')}",
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+        
+        except Exception as e:
+            logger.error("Unexpected error during graph building: %s", e)
+            # Update build status to failed
+            settings = LLMSettings.get_settings()
+            settings.graph_build_status = "failed"
+            settings.save()
+            
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during graph building",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class TraverseMemoryGraphView(APIView):
+    """
+    API endpoint to traverse memory graph and find related memories
+    """
+    
+    def post(self, request):
+        memory_id = request.data.get("memory_id")
+        user_id = request.data.get("user_id")
+        depth = request.data.get("depth", 2)
+        
+        if not memory_id:
+            return Response(
+                {"success": False, "error": "memory_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Validate parameters
+        try:
+            uuid.UUID(user_id)
+            uuid.UUID(memory_id)
+            depth = int(depth)
+            if depth < 1 or depth > 5:
+                depth = 2
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid parameter format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            logger.info("Traversing memory graph from %s for user %s (depth: %d)", 
+                       memory_id, user_id, depth)
+            
+            # Traverse the graph
+            related_memories = graph_service.traverse_related_memories(
+                memory_id, user_id, depth
+            )
+            
+            return Response(
+                {
+                    "success": True,
+                    "related_memories": related_memories,
+                    "count": len(related_memories),
+                    "starting_memory_id": memory_id,
+                    "traversal_depth": depth,
+                },
+                status=status.HTTP_200_OK,
+            )
+        
+        except Exception as e:
+            logger.error("Unexpected error during graph traversal: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during graph traversal",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class MemoryClustersView(APIView):
+    """
+    API endpoint to get memory clusters for a user
+    """
+    
+    def get(self, request):
+        user_id = request.query_params.get("user_id")
+        
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            logger.info("Getting memory clusters for user %s", user_id)
+            
+            # Get memory clusters
+            clusters = graph_service.get_memory_clusters(user_id)
+            
+            # Get centrality scores
+            centrality_scores = graph_service.get_memory_centrality_scores(user_id)
+            
+            return Response(
+                {
+                    "success": True,
+                    "clusters": clusters,
+                    "centrality_scores": centrality_scores,
+                    "cluster_count": len(clusters),
+                    "user_id": user_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+        
+        except Exception as e:
+            logger.error("Unexpected error getting memory clusters: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred getting memory clusters",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class GraphStatusView(APIView):
+    """
+    API endpoint to check graph build status and requirements
+    """
+    
+    def get(self, request):
+        user_id = request.query_params.get("user_id")
+        
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            logger.info("Checking graph status for user %s", user_id)
+            
+            # Get current settings
+            settings = LLMSettings.get_settings()
+            
+            # Count active memories for the user
+            memory_count = Memory.objects.filter(user_id=user_id, is_active=True).count()
+            
+            # Check graph node count
+            graph_stats = graph_service.get_user_graph_stats(user_id)
+            graph_node_count = graph_stats.get('node_count', 0) if 'error' not in graph_stats else 0
+            
+            # Determine if graph needs building
+            needs_build = memory_count > graph_node_count
+            has_graph = graph_node_count > 0
+            
+            # Check if graph is outdated (more than 10 memories difference)
+            is_outdated = memory_count - graph_node_count > 10
+            
+            return Response(
+                {
+                    "success": True,
+                    "has_graph": has_graph,
+                    "needs_build": needs_build,
+                    "is_outdated": is_outdated,
+                    "memory_count": memory_count,
+                    "graph_node_count": graph_node_count,
+                    "last_build": settings.graph_last_build,
+                    "build_status": settings.graph_build_status,
+                    "enabled": settings.enable_graph_enhanced_retrieval,
+                    "user_id": user_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+        
+        except Exception as e:
+            logger.error("Error checking graph status: %s", e)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred checking graph status",
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

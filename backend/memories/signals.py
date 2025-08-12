@@ -16,6 +16,11 @@ def refresh_services_on_settings_change(sender, instance, created, **kwargs):
         action = "created" if created else "updated"
         logger.info("LLM settings %s, refreshing all services...", action)
 
+        # Skip refresh if we're just updating graph build status to avoid loops
+        if hasattr(instance, '_skip_signals'):
+            logger.info("Skipping service refresh for graph status update")
+            return
+
         # Refresh LLM service
         llm_service.refresh_settings()
 

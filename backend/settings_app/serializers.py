@@ -32,6 +32,9 @@ class LLMSettingsSerializer(serializers.ModelSerializer):
             "search_threshold_experiential",
             "search_threshold_contextual",
             "search_threshold_interest",
+            # Graph-Enhanced Retrieval
+            "enable_graph_enhanced_retrieval",
+            "graph_build_status",
             # Prompts
             "memory_extraction_prompt",
             "memory_search_prompt",

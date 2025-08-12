@@ -237,3 +237,82 @@ export const fetchModels = async (
         };
     }
 };
+
+// Graph-related endpoints
+export const buildMemoryGraph = async (
+    userId: string,
+    incremental: boolean = true
+): Promise<{
+    success: boolean;
+    message?: string;
+    nodes_created?: number;
+    relationships_created?: number;
+    incremental?: boolean;
+    error?: string;
+}> => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/memories/build-graph/`, {
+            user_id: userId,
+            incremental
+        });
+        return response.data;
+    } catch (error: any) {
+        console.error('Error building memory graph:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to build memory graph'
+        };
+    }
+};
+
+export const buildMemoryGraphForAllUsers = async (
+    incremental: boolean = true
+): Promise<{
+    success: boolean;
+    message?: string;
+    nodes_created?: number;
+    relationships_created?: number;
+    incremental?: boolean;
+    total_users?: number;
+    failed_users?: string[];
+    error?: string;
+}> => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/memories/build-graph/`, {
+            build_for_all: true,
+            incremental
+        });
+        return response.data;
+    } catch (error: any) {
+        console.error('Error building memory graph for all users:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to build memory graph for all users'
+        };
+    }
+};
+
+export const checkGraphStatus = async (
+    userId: string
+): Promise<{
+    success: boolean;
+    status?: string;
+    last_build?: string;
+    memory_count?: number;
+    is_enabled?: boolean;
+    needs_rebuild?: boolean;
+    error?: string;
+}> => {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/api/memories/graph-status/`, {
+            params: { user_id: userId }
+        });
+        return response.data;
+    } catch (error: any) {
+        console.error('Error checking graph status:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to check graph status'
+        };
+    }
+};

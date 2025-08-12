@@ -358,6 +358,143 @@ class MemorySearchService:
         self.embedding_cache.clear()
         logger.info("Cleared memory search service cache")
 
+    def search_with_graph_enhancement(
+        self,
+        search_queries: List[Dict[str, Any]],
+        user_id: str,
+        limit: int = 20,
+        threshold: float = 0.5,
+        use_graph: bool = True
+    ) -> List[Memory]:
+        """
+        Enhanced search with graph-based contextual retrieval
+        
+        Args:
+            search_queries: List of search query dictionaries
+            user_id: User ID for filtering
+            limit: Maximum number of results
+            threshold: Similarity threshold
+            use_graph: Whether to use graph enhancement
+            
+        Returns:
+            List of memories enhanced with graph relationships
+        """
+        # First get standard vector-based results
+        vector_memories = self.search_memories_with_queries(
+            search_queries, user_id, limit, threshold
+        )
+        
+        if not use_graph or not vector_memories:
+            return vector_memories
+            
+        try:
+            from .graph_service import graph_service
+            
+            # Get graph-enhanced memories through traversal
+            graph_enhanced_memories = []
+            processed_ids = set()
+            
+            for memory in vector_memories:
+                if str(memory.id) not in processed_ids:
+                    # Get related memories through graph traversal
+                    related_data = graph_service.traverse_related_memories(
+                        str(memory.id), user_id, depth=2
+                    )
+                    
+                    # Convert graph data back to Memory objects
+                    related_ids = [data['memory_id'] for data in related_data]
+                    if related_ids:
+                        related_memories = Memory.objects.filter(
+                            id__in=related_ids, 
+                            is_active=True
+                        )
+                        
+                        # Sort by graph relevance score
+                        related_dict = {data['memory_id']: data for data in related_data}
+                        related_memories = sorted(
+                            related_memories,
+                            key=lambda m: related_dict.get(str(m.id), {}).get('relevance_score', 0),
+                            reverse=True
+                        )
+                        
+                        # Add to results with graph context
+                        for rel_memory in related_memories[:5]:  # Limit related memories
+                            if str(rel_memory.id) not in processed_ids:
+                                # Add graph metadata to memory
+                                graph_data = related_dict.get(str(rel_memory.id), {})
+                                if not hasattr(rel_memory, 'graph_metadata'):
+                                    rel_memory.graph_metadata = {}
+                                rel_memory.graph_metadata.update({
+                                    'relevance_score': graph_data.get('relevance_score', 0),
+                                    'path_length': graph_data.get('path_length', 0),
+                                    'relationship_types': [
+                                        rel['type'] for rel in graph_data.get('relationships', [])
+                                    ]
+                                })
+                                graph_enhanced_memories.append(rel_memory)
+                                processed_ids.add(str(rel_memory.id))
+                    
+                    # Always include the original memory
+                    if str(memory.id) not in processed_ids:
+                        if not hasattr(memory, 'graph_metadata'):
+                            memory.graph_metadata = {}
+                        memory.graph_metadata['relevance_score'] = 1.0  # Original search result
+                        graph_enhanced_memories.append(memory)
+                        processed_ids.add(str(memory.id))
+            
+            # Combine and re-rank results
+            final_memories = self._rerank_with_graph_scores(graph_enhanced_memories, limit)
+            
+            logger.info(
+                f"Graph enhancement: {len(vector_memories)} -> {len(final_memories)} memories"
+            )
+            
+            return final_memories
+            
+        except Exception as e:
+            logger.warning(f"Graph enhancement failed, falling back to vector results: {e}")
+            return vector_memories
+
+    def _rerank_with_graph_scores(self, memories: List[Memory], limit: int) -> List[Memory]:
+        """
+        Re-rank memories combining vector and graph scores
+        
+        Args:
+            memories: List of memories with graph metadata
+            limit: Maximum number of results
+            
+        Returns:
+            Re-ranked list of memories
+        """
+        def combined_score(memory):
+            base_score = 1.0  # Default for original vector results
+            graph_score = getattr(memory, 'graph_metadata', {}).get('relevance_score', 0)
+            path_length = getattr(memory, 'graph_metadata', {}).get('path_length', 1)
+            
+            # Boost high-confidence direct results
+            confidence_boost = memory.temporal_confidence * 0.2
+            
+            # Boost by inference level reliability
+            inference_boost = self._get_inference_level_multiplier(memory) * 0.3
+            
+            # Combine scores (graph score weighted by path distance)
+            graph_weight = 0.4 if graph_score > 0 else 0
+            vector_weight = 1.0 - graph_weight
+            
+            final_score = (
+                vector_weight * base_score + 
+                graph_weight * (graph_score / max(path_length, 1)) +
+                confidence_boost + 
+                inference_boost
+            )
+            
+            return final_score
+        
+        # Sort by combined score
+        ranked_memories = sorted(memories, key=combined_score, reverse=True)
+        
+        return ranked_memories[:limit]
+
     def find_semantic_connections(
         self, memories: List[Memory], original_query: str, user_id: str
     ) -> List[Memory]:
@@ -507,7 +644,33 @@ When analyzing these memories, consider the inference levels:
 - 🟢 Stated facts have highest reliability and should be prioritized in your summary
 - 🟡 Inferred facts are logical conclusions and generally reliable
 - 🟠 Implied facts are contextual interpretations and should be noted as such
-- Pay attention to certainty scores and evidence provided"""
+- Pay attention to certainty scores and evidence provided
+
+**CRITICAL FILTERING REQUIREMENT - SMART DOMAIN SEPARATION:**
+You MUST filter memories intelligently based on the query type. Be strict but nuanced:
+
+**QUERY TYPE IDENTIFICATION:**
+1. **Factual/Recommendation queries** (suggest music, recommend restaurant): Need direct domain facts
+2. **Explanation/Teaching queries** (explain concept, how does X work): Need domain facts + learning preferences + background knowledge
+
+**FILTERING RULES BY QUERY TYPE:**
+
+**For FACTUAL/RECOMMENDATION queries:**
+- ONLY include memories with direct factual content in the query domain
+- EXCLUDE all other domains completely
+- Example: "suggest music" → ONLY music preferences, EXCLUDE food/physics/work entirely
+
+**For EXPLANATION/TEACHING queries:**
+- INCLUDE memories from the query domain (physics for "explain Bell's theorem")
+- INCLUDE learning preferences (prefers examples, visual learner, etc.)
+- INCLUDE related background knowledge that helps contextualize the explanation
+- EXCLUDE unrelated domain content BUT acknowledge learning preferences if found
+- Example: "explain Bell's theorem" → physics memories + learning style + academic background, EXCLUDE music content but note learning preferences
+
+**SMART EXCLUSION RULE:**
+- For recommendations: Exclude everything not directly relevant
+- For explanations: Include learning/teaching context even if from different domains, but exclude content from different domains
+- NEVER mention irrelevant content domains in your summary"""
 
         from .llm_service import MEMORY_SUMMARY_FORMAT, llm_service
 

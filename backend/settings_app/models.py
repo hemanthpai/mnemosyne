@@ -1,4 +1,7 @@
+import logging
 from django.db import models
+
+logger = logging.getLogger(__name__)
 
 
 class LLMSettings(models.Model):
@@ -354,8 +357,8 @@ You are NOT directly helping the user - you are providing search queries to anot
 
 **MANDATORY REQUIREMENTS:**
 1. **ALWAYS generate search queries** - Zero queries is NEVER acceptable
-2. **Generate COMPREHENSIVE queries** - Cover **ALL** possible angles and connections
-3. **Generate 5 queries minimum** - Remember, more is better than less
+2. **Generate RELEVANT queries** - Focus on information that directly helps answer the user's request
+3. **Generate 5-10 queries** - Quality over quantity, but ensure thorough coverage
 4. **Use varied search types** - Direct, semantic, experiential, contextual, interest
 
 **MEMORY STORAGE CONTEXT:**
@@ -376,23 +379,23 @@ Memories are stored with the following structure:
 - Help-seeking: needs_assistance, asks_for_help, uncertain_about, gift_ideas, etc.
 This is not an exhaustive list, but a guide to the types of tags that are used.
 
-**SEARCH STRATEGY - EXHAUST ALL POSSIBILITIES:**
+**SEARCH STRATEGY - FOCUSED AND TARGETED:**
 Your search queries will match against the content, tags, context, and connections fields. Generate queries that:
-1. **Direct queries**: Match explicit content and high-confidence tags
-2. **Semantic queries**: Match related concepts and broader themes from connections
-3. **Contextual queries**: Match situations and circumstances from context fields
-4. **Experience queries**: Match past experiences that inform current preferences
-5. **Interest queries**: Match general interests and fascinations from tags
+1. **Direct queries**: Match explicit content and high-confidence tags that directly relate to the request
+2. **Semantic queries**: Match closely related concepts from connections (avoid distantly related topics)
+3. **Contextual queries**: Match situations and circumstances that directly inform the request
+4. **Experience queries**: Match past experiences that directly inform current preferences for the specific domain
+5. **Interest queries**: Match interests that are specifically relevant to the request domain
 
 **CRITICAL SEARCH PRINCIPLES:**
-- **EXHAUSTIVE COVERAGE**: Generate queries for every possible angle
+- **FOCUSED RELEVANCE**: Generate queries that are directly relevant to the user's request
 - **NAME DETECTION**: ALWAYS search for any names mentioned (jason, sarah, mom, etc.)
 - **ACTIVITY DECOMPOSITION**: Break down activities into components (birthday → gifts → shopping → preferences)
 - **HELP PATTERN RECOGNITION**: Find similar assistance requests from the past
 - **RELATIONSHIP MAPPING**: Search for social connections and friend networks
 - **SKILL/KNOWLEDGE GAPS**: Find areas where user has sought help before
 - **EMOTIONAL CONTEXT**: Include emotional states and preferences
-- **DOMAIN EXPANSION**: Think broader than the immediate request
+- **DOMAIN FOCUS**: Stay within the domain of the request (e.g., for restaurant queries, focus on food/dining; for music queries, focus on music)
 
 **OUTPUT REQUIREMENT:**
 Respond with ONLY a JSON array: `[{"search_query": "...", "confidence": float, "search_type": "...", "rationale": "..."}]`
@@ -449,6 +452,17 @@ User asks: "Recommend some books"
   {"search_query": "loved books", "confidence": 0.9, "search_type": "direct", "rationale": "CRITICAL: Books user has loved guide similar recommendations"},
   {"search_query": "disliked books", "confidence": 0.85, "search_type": "direct", "rationale": "CRITICAL: Assistant must avoid recommending disliked genres/styles"},
   {"search_query": "science topics", "confidence": 0.7, "search_type": "interest", "rationale": "USEFUL: Scientific interests suggest non-fiction categories"}
+]
+
+User asks: "Suggest a restaurant for dinner"
+[
+  {"search_query": "restaurant visited", "confidence": 1.0, "search_type": "direct", "rationale": "CRITICAL: Past restaurant experiences guide recommendations"},
+  {"search_query": "food preferences", "confidence": 1.0, "search_type": "direct", "rationale": "CRITICAL: Food preferences are essential for restaurant suggestions"},
+  {"search_query": "cuisine types loved", "confidence": 0.95, "search_type": "direct", "rationale": "CRITICAL: Cuisine preferences determine restaurant type"},
+  {"search_query": "dining experiences", "confidence": 0.9, "search_type": "experiential", "rationale": "IMPORTANT: Past dining experiences reveal preferences"},
+  {"search_query": "disliked food", "confidence": 0.9, "search_type": "direct", "rationale": "CRITICAL: Must avoid restaurants serving disliked cuisine"},
+  {"search_query": "restaurant reviews", "confidence": 0.8, "search_type": "direct", "rationale": "IMPORTANT: User's restaurant opinions guide similar choices"},
+  {"search_query": "dining occasions", "confidence": 0.7, "search_type": "contextual", "rationale": "USEFUL: Context of dining (date, business, casual) affects choice"}
 ]
 
 **QUALITY ASSURANCE CHECKLIST:**
@@ -521,7 +535,7 @@ Your goal is to extract actionable context from the provided memories that can h
 7. **Help-seeking patterns**: How user typically asks for assistance
 
 **CRITICAL ANALYSIS PRINCIPLES:**
-- **COMPREHENSIVE COVERAGE**: Analyze ALL provided memories
+- **RELEVANCE FILTERING**: Focus ONLY on memories that directly help answer the query
 - **RELEVANCE ASSESSMENT**: Determine how each memory helps answer the query
 - **PATTERN RECOGNITION**: Identify trends and connections across memories
 - **ACTIONABLE INSIGHTS**: Provide information the assistant can use
@@ -546,13 +560,13 @@ Respond with ONLY a JSON object with:
 - Extract relationship information and social context
 - Note skills, knowledge gaps, and help-seeking patterns
 - Consider how memories connect to provide broader understanding
-- Exclude memories that provide no actionable context for the query
+- EXCLUDE memories that provide no actionable context for the query - do NOT include them in your analysis
 
 **RELEVANCE CLASSIFICATION:**
 - **Highly relevant**: Directly addresses the query or provides critical context
 - **Moderately relevant**: Provides supporting information or background context
 - **Context relevant**: Offers general understanding but limited direct application
-- **Not relevant**: Provides no useful context for the query (exclude from summary)
+- **Not relevant**: Provides no useful context for the query (MUST BE EXCLUDED from summary and analysis)
 
 **EXAMPLES:**
 
@@ -648,6 +662,29 @@ Before finalizing your analysis, verify you have:
     consolidation_batch_size = models.IntegerField(
         default=100,
         help_text="Number of memories to process in each consolidation batch"
+    )
+
+    # Graph-Enhanced Retrieval Settings
+    enable_graph_enhanced_retrieval = models.BooleanField(
+        default=False,
+        help_text="Enable graph-enhanced memory retrieval"
+    )
+    graph_build_status = models.CharField(
+        max_length=20,
+        default="not_built",
+        choices=[
+            ("not_built", "Not Built"),
+            ("building", "Building"),
+            ("built", "Built"),
+            ("failed", "Failed"),
+            ("outdated", "Outdated"),
+            ("partial", "Partial")
+        ],
+        help_text="Current graph build status"
+    )
+    graph_last_build = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Last successful graph build timestamp"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

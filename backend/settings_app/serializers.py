@@ -32,6 +32,13 @@ class LLMSettingsSerializer(serializers.ModelSerializer):
             "search_threshold_experiential",
             "search_threshold_contextual",
             "search_threshold_interest",
+            # Memory Consolidation
+            "enable_memory_consolidation",
+            "consolidation_similarity_threshold",
+            "consolidation_auto_threshold",
+            "consolidation_strategy",
+            "consolidation_max_group_size",
+            "consolidation_batch_size",
             # Graph-Enhanced Retrieval
             "enable_graph_enhanced_retrieval",
             "graph_build_status",
@@ -59,4 +66,24 @@ class LLMSettingsSerializer(serializers.ModelSerializer):
     def validate_llm_top_k(self, value):
         if value < 1:
             raise serializers.ValidationError("Top K must be at least 1")
+        return value
+
+    def validate_consolidation_similarity_threshold(self, value):
+        if not 0.0 <= value <= 1.0:
+            raise serializers.ValidationError("Consolidation similarity threshold must be between 0.0 and 1.0")
+        return value
+
+    def validate_consolidation_auto_threshold(self, value):
+        if not 0.0 <= value <= 1.0:
+            raise serializers.ValidationError("Consolidation auto threshold must be between 0.0 and 1.0")
+        return value
+
+    def validate_consolidation_max_group_size(self, value):
+        if value < 2:
+            raise serializers.ValidationError("Max group size must be at least 2")
+        return value
+
+    def validate_consolidation_batch_size(self, value):
+        if value < 1:
+            raise serializers.ValidationError("Batch size must be at least 1")
         return value

@@ -127,6 +127,9 @@ class ExtractMemoriesView(APIView):
             )
 
         try:
+            # Refresh LLM settings to ensure we have the latest configuration
+            llm_service.refresh_settings()
+            
             # Get LLM settings for the extraction prompt
             settings = LLMSettings.get_settings()
             system_prompt = settings.memory_extraction_prompt
@@ -344,6 +347,9 @@ class RetrieveMemoriesView(APIView):
             boosted_threshold = 0.5
 
         try:
+            # Refresh LLM settings to ensure we have the latest configuration
+            llm_service.refresh_settings()
+            
             # Step 1: Get LLM settings and generate search queries
             settings = LLMSettings.get_settings()
             search_prompt = settings.memory_search_prompt

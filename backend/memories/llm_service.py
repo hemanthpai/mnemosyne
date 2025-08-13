@@ -160,6 +160,7 @@ class LLMService:
 
     def refresh_settings(self):
         """Refresh settings from database"""
+        self._settings_loaded = False  # Force reload
         self._load_settings()
 
     def get_formatted_datetime(self):

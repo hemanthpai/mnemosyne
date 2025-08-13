@@ -27,6 +27,12 @@ def llm_settings(request):
         serializer = LLMSettingsSerializer(settings, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            
+            # Refresh the LLM service settings cache
+            from memories.llm_service import llm_service
+            llm_service.refresh_settings()
+            logger.info("LLM service settings refreshed after update")
+            
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

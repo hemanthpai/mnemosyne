@@ -1,5 +1,10 @@
 import axios from 'axios';
 import {
+    ConversationChunk,
+    ConversationChunkMemoriesResponse,
+    ConversationChunkResponse,
+    ConversationSearchRequest,
+    ConversationSearchResponse,
     DeleteAllMemoriesResponse,
     ExtractMemoriesResponse,
     LLMSettings,
@@ -313,6 +318,89 @@ export const checkGraphStatus = async (
         return {
             success: false,
             error: error.response?.data?.error || error.message || 'Failed to check graph status'
+        };
+    }
+};
+
+// =============================================================================
+// CONVERSATION CHUNK MANAGEMENT API - New Hybrid Architecture
+// =============================================================================
+
+export const getConversationChunks = async (
+    userId: string,
+    page?: number,
+    pageSize?: number
+): Promise<ConversationChunkResponse> => {
+    try {
+        const params: any = { user_id: userId };
+        if (page !== undefined) params.page = page;
+        if (pageSize !== undefined) params.page_size = pageSize;
+
+        const response = await axios.get<ConversationChunkResponse>(`${API_BASE_URL}/api/conversations/`, {
+            params
+        });
+        return response.data;
+    } catch (error: any) {
+        console.error('Error fetching conversation chunks:', error);
+        throw error;
+    }
+};
+
+export const getConversationChunk = async (
+    chunkId: string
+): Promise<{ success: boolean; chunk: ConversationChunk; error?: string }> => {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/api/conversations/${chunkId}/`);
+        return response.data;
+    } catch (error: any) {
+        console.error('Error fetching conversation chunk:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to fetch conversation chunk'
+        } as any;
+    }
+};
+
+export const getMemoriesFromChunk = async (
+    chunkId: string
+): Promise<ConversationChunkMemoriesResponse> => {
+    try {
+        const response = await axios.get<ConversationChunkMemoriesResponse>(
+            `${API_BASE_URL}/api/conversations/${chunkId}/memories/`
+        );
+        return response.data;
+    } catch (error: any) {
+        console.error('Error fetching memories from conversation chunk:', error);
+        throw error;
+    }
+};
+
+export const searchConversations = async (
+    request: ConversationSearchRequest
+): Promise<ConversationSearchResponse> => {
+    try {
+        const response = await axios.post<ConversationSearchResponse>(
+            `${API_BASE_URL}/api/conversations/search/`,
+            request
+        );
+        return response.data;
+    } catch (error: any) {
+        console.error('Error searching conversations:', error);
+        throw error;
+    }
+};
+
+export const deleteConversationChunk = async (
+    chunkId: string
+): Promise<{ success: boolean; message?: string; error?: string }> => {
+    try {
+        const response = await axios.delete(`${API_BASE_URL}/api/conversations/${chunkId}/`);
+        return response.data;
+    } catch (error: any) {
+        console.error('Error deleting conversation chunk:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to delete conversation chunk'
         };
     }
 };

@@ -17,6 +17,14 @@ from .views import (
     TextToGraphView,
     TraverseMemoryGraphView,
 )
+from .entity_views import (
+    EntityExtractionView,
+    EntitySearchView,
+    UserPreferencesView,
+    clear_user_graph,
+    graph_statistics,
+    user_knowledge_summary,
+)
 
 router = DefaultRouter()
 router.register(r"", MemoryViewSet, basename="memories")
@@ -35,5 +43,14 @@ urlpatterns = [
     path("traverse-graph/", TraverseMemoryGraphView.as_view(), name="traverse-memory-graph"),
     path("memory-clusters/", MemoryClustersView.as_view(), name="memory-clusters"),
     path("graph-status/", GraphStatusView.as_view(), name="graph-status"),
+    
+    # Entity-Relationship Knowledge Graph endpoints
+    path("entities/extract/", EntityExtractionView.as_view(), name="entity-extraction"),
+    path("entities/search/", EntitySearchView.as_view(), name="entity-search"),
+    path("entities/preferences/<str:user_id>/", UserPreferencesView.as_view(), name="user-preferences"),
+    path("entities/summary/<str:user_id>/", user_knowledge_summary, name="knowledge-summary"),
+    path("entities/stats/<str:user_id>/", graph_statistics, name="entity-graph-stats"),
+    path("entities/clear/<str:user_id>/", clear_user_graph, name="clear-user-graph"),
+    
     path("", include(router.urls)),
 ]

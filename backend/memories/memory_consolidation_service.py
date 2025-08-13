@@ -100,36 +100,29 @@ class MemoryConsolidationService:
                 
             memory_embedding = embedding_result['embeddings'][0]
             
-            # Search for similar memories using vector search
-            if memory.vector_id:
-                vector_results = vector_service.search_similar(
-                    query_embedding=memory_embedding,
-                    user_id=user_id,
-                    limit=20,  # Get more candidates for thorough checking
-                    score_threshold=threshold * 0.8  # Lower threshold for broader search
-                )
-                
-                # Filter and classify duplicates
-                for result in vector_results:
-                    result_memory_id = result["memory_id"]
-                    similarity_score = result["score"]
+            # Search for similar memories by comparing embeddings directly
+            # In hybrid architecture, memories don't have vector_id - only conversation chunks do
+            for candidate_memory in existing_memories:
+                try:
+                    # Get embedding for candidate memory
+                    candidate_embedding_result = llm_service.get_embeddings([candidate_memory.content])
+                    if not candidate_embedding_result['success']:
+                        continue
+                        
+                    candidate_embedding = candidate_embedding_result['embeddings'][0]
                     
-                    # Skip if it's the same memory
-                    if result_memory_id == str(memory.id):
-                        continue
+                    # Calculate similarity using cosine similarity
+                    similarity_score = self._calculate_cosine_similarity(memory_embedding, candidate_embedding)
+                    
+                    if similarity_score >= threshold:
+                        duplicate_type = self._classify_duplicate_type(
+                            memory, candidate_memory, similarity_score
+                        )
+                        duplicates.append((candidate_memory, similarity_score, duplicate_type))
                         
-                    # Get the similar memory
-                    try:
-                        similar_memory = existing_memories.get(id=result_memory_id)
-                        
-                        if similarity_score >= threshold:
-                            duplicate_type = self._classify_duplicate_type(
-                                memory, similar_memory, similarity_score
-                            )
-                            duplicates.append((similar_memory, similarity_score, duplicate_type))
-                            
-                    except Memory.DoesNotExist:
-                        continue
+                except Exception as e:
+                    logger.warning(f"Error calculating similarity for memory {candidate_memory.id}: {e}")
+                    continue
                         
         except Exception as e:
             logger.error(f"Error finding duplicates for memory {memory.id}: {e}")
@@ -258,14 +251,14 @@ Consider temporal order, inference levels, and evidence quality."""
                 "implied": 0.1
             }.get(memory.metadata.get('inference_level', 'stated'), 0.1)
             
-            # Boost for certainty
-            certainty_boost = memory.metadata.get('certainty', 0.5) * 0.2
+            # Boost for confidence
+            confidence_boost = memory.temporal_confidence * 0.15
             
             # Recency boost (more recent = better)
             days_old = (timezone.now() - memory.created_at).days
             recency_boost = max(0, 0.1 - (days_old * 0.01))  # Decreases with age
             
-            return score + inference_boost + certainty_boost + recency_boost
+            return score + inference_boost + confidence_boost + recency_boost
         
         return sorted(memories, key=memory_score, reverse=True)
     
@@ -318,7 +311,7 @@ Consider temporal order, inference levels, and evidence quality."""
                 'created': memory.created_at.strftime('%Y-%m-%d %H:%M'),
                 'inference_level': memory.metadata.get('inference_level', 'stated'),
                 'evidence': memory.metadata.get('evidence', ''),
-                'certainty': memory.metadata.get('certainty', 0.5),
+                'confidence': memory.temporal_confidence,
                 'tags': memory.metadata.get('tags', [])
             })
         
@@ -346,11 +339,11 @@ Create a consolidated memory that captures all important information while elimi
                         "consolidated_content": {"type": "string"},
                         "inference_level": {"type": "string", "enum": ["stated", "inferred", "implied"]},
                         "evidence": {"type": "string"},
-                        "certainty": {"type": "number", "minimum": 0, "maximum": 1},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                         "tags": {"type": "array", "items": {"type": "string"}},
                         "reasoning": {"type": "string"}
                     },
-                    "required": ["consolidated_content", "inference_level", "certainty", "tags"]
+                    "required": ["consolidated_content", "inference_level", "confidence", "tags"]
                 }
             )
             
@@ -365,7 +358,7 @@ Create a consolidated memory that captures all important information while elimi
                 primary_memory.metadata.update({
                     'inference_level': consolidated_data['inference_level'],
                     'evidence': consolidated_data.get('evidence', ''),
-                    'certainty': consolidated_data['certainty'],
+                    'confidence': consolidated_data['confidence'],
                     'tags': consolidated_data['tags'],
                     'consolidated_from': [str(m.id) for m in memories[1:]],
                     'consolidation_type': 'llm_guided',
@@ -531,6 +524,28 @@ Create a consolidated memory that captures all important information while elimi
                         processed_ids.add(str(dup_memory.id))
         
         return candidates
+
+    def _calculate_cosine_similarity(self, embedding1, embedding2) -> float:
+        """Calculate cosine similarity between two embeddings"""
+        try:
+            import numpy as np
+            
+            # Convert to numpy arrays
+            a = np.array(embedding1)
+            b = np.array(embedding2)
+            
+            # Calculate cosine similarity
+            dot_product = np.dot(a, b)
+            norm_a = np.linalg.norm(a)
+            norm_b = np.linalg.norm(b)
+            
+            if norm_a == 0 or norm_b == 0:
+                return 0.0
+                
+            return float(dot_product / (norm_a * norm_b))
+        except Exception as e:
+            logger.error(f"Error calculating cosine similarity: {e}")
+            return 0.0
 
 
 # Global instance

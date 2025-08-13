@@ -19,6 +19,9 @@ class MemorySearchService:
         self, content: str, user_id: str, metadata: Dict[str, Any]
     ) -> Memory:
         """
+        DEPRECATED: This method stores memories with embeddings, which creates redundancy.
+        Use store_conversation_and_memories() instead for the new hybrid architecture.
+        
         Store memory and its embedding efficiently (synchronous)
 
         Args:
@@ -29,48 +32,166 @@ class MemorySearchService:
         Returns:
             Memory: Created memory instance
         """
-        # Get embedding using synchronous LLM service
-        embedding_result = llm_service.get_embeddings([content])
-        if not embedding_result["success"]:
-            raise ValueError(
-                f"Failed to generate embedding: {embedding_result['error']}"
-            )
-
-        embedding = embedding_result["embeddings"][0]
-
-        # Create memory record
+        logger.warning(
+            "store_memory_with_embedding() is deprecated. Use store_conversation_and_memories() "
+            "for the new conversation-based architecture."
+        )
+        
+        # For backward compatibility, create memory without vector embedding
         memory = Memory.objects.create(
             user_id=user_id,
             content=content,
             metadata=metadata,
         )
 
-        # Store in vector DB
+        logger.debug(f"Created memory {memory.id} without vector embedding (deprecated method)")
+        return memory
+
+    def store_conversation_and_memories(
+        self, 
+        conversation_text: str, 
+        extracted_memories: List[Dict[str, Any]], 
+        user_id: str,
+        timestamp: str = None
+    ) -> Dict[str, Any]:
+        """
+        NEW METHOD: Store conversation chunks in Vector DB and extracted memories in Graph DB
+        This implements the new hybrid architecture eliminating redundancy.
+
+        Args:
+            conversation_text: Original conversation text
+            extracted_memories: List of memory data extracted from conversation
+            user_id: UUID of the user
+            timestamp: ISO timestamp when conversation occurred
+
+        Returns:
+            Dict containing created memory IDs, chunk IDs, and linking info
+        """
+        from .models import ConversationChunk
+        from .graph_service import graph_service
+        import datetime
+        
+        if timestamp is None:
+            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
         try:
-            vector_id = vector_service.store_embedding(
-                memory_id=str(memory.id),
-                embedding=embedding,
-                user_id=str(user_id),
-                metadata={**metadata, "created_at": memory.created_at.isoformat()},
+            # Step 1: Chunk the conversation and store in Vector DB
+            chunks = vector_service.chunk_conversation(
+                text=conversation_text, 
+                max_chunk_size=1000, 
+                overlap_size=100
             )
-
-            # Update memory with vector reference
-            memory.vector_id = vector_id
-            memory.save()
-
-            logger.info("Successfully stored memory %s with embedding", memory.id)
-            return memory
-
+            
+            # Store conversation chunks with embeddings
+            vector_ids = vector_service.store_conversation_chunks(
+                chunks=chunks,
+                user_id=user_id,
+                timestamp=timestamp,
+                base_metadata={
+                    "source": "conversation_extraction",
+                    "total_memories_extracted": len(extracted_memories)
+                }
+            )
+            
+            # Create ConversationChunk database records
+            chunk_records = []
+            for i, (chunk, vector_id) in enumerate(zip(chunks, vector_ids)):
+                chunk_record = ConversationChunk.objects.create(
+                    user_id=user_id,
+                    content=chunk,
+                    vector_id=vector_id,
+                    timestamp=datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00')),
+                    metadata={
+                        "chunk_index": i,
+                        "total_chunks": len(chunks),
+                        "source": "conversation_extraction"
+                    }
+                )
+                chunk_records.append(chunk_record)
+            
+            # Step 2: Create Memory records for extracted memories
+            created_memories = []
+            for memory_data in extracted_memories:
+                # Ensure we have required fields
+                content = memory_data.get("content", "")
+                if not content:
+                    continue
+                    
+                # Create standardized metadata
+                standardized_metadata = {
+                    "inference_level": memory_data.get("inference_level", "stated"),
+                    "evidence": memory_data.get("evidence", ""),
+                    "extraction_timestamp": timestamp,
+                    "tags": memory_data.get("tags", []),
+                    "entity_type": memory_data.get("entity_type", "general"),
+                    "relationship_hints": memory_data.get("relationship_hints", []),
+                    "model_used": memory_data.get("model_used", "unknown"),
+                    "extraction_source": "conversation"
+                }
+                
+                memory = Memory.objects.create(
+                    user_id=user_id,
+                    content=content,
+                    metadata=standardized_metadata,
+                    fact_type=memory_data.get("fact_type", "mutable"),
+                    original_confidence=memory_data.get("confidence", 0.5),
+                    temporal_confidence=memory_data.get("confidence", 0.5)
+                )
+                created_memories.append(memory)
+            
+            # Step 3: Link memories to conversation chunks (bidirectional)
+            memory_ids = [str(m.id) for m in created_memories]
+            chunk_ids = [str(c.id) for c in chunk_records]
+            
+            # Update conversation chunks with memory IDs
+            for chunk_record in chunk_records:
+                chunk_record.extracted_memory_ids = memory_ids
+                chunk_record.save()
+            
+            # Update memories with conversation chunk IDs
+            for memory in created_memories:
+                memory.conversation_chunk_ids = chunk_ids
+                memory.save()
+            
+            # Step 4: Build graph relationships for the new memories
+            if created_memories and len(created_memories) > 1:
+                try:
+                    graph_result = graph_service.build_memory_graph(
+                        user_id=user_id, 
+                        incremental=True  # Only process new memories
+                    )
+                    logger.info(f"Built graph relationships: {graph_result}")
+                except Exception as e:
+                    logger.warning(f"Failed to build graph relationships: {e}")
+            
+            result = {
+                "success": True,
+                "memories_created": len(created_memories),
+                "chunks_created": len(chunk_records),
+                "memory_ids": memory_ids,
+                "chunk_ids": chunk_ids,
+                "conversation_length": len(conversation_text),
+                "chunks_generated": len(chunks)
+            }
+            
+            logger.info(
+                f"Successfully stored conversation and extracted {len(created_memories)} memories "
+                f"across {len(chunk_records)} conversation chunks"
+            )
+            
+            return result
+            
         except Exception as e:
-            # If vector storage fails, delete the memory to maintain consistency
-            logger.error("Failed to store embedding for memory %s: %s", memory.id, e)
-            memory.delete()
-            raise ValueError(f"Failed to store memory embedding: {e}") from e
+            logger.error(f"Failed to store conversation and memories: {e}")
+            raise ValueError(f"Failed to store conversation and memories: {e}")
 
     def search_memories(
         self, query: str, user_id: str, limit: int = 10, threshold: float = 0.7
     ) -> List[Memory]:
         """
+        DEPRECATED: Simple search method replaced by hybrid search architecture.
+        Use search_memories_with_hybrid_approach() for better results.
+        
         Search for relevant memories (synchronous)
 
         Args:
@@ -82,54 +203,464 @@ class MemorySearchService:
         Returns:
             List[Memory]: List of relevant memories ordered by similarity
         """
-        # Get query embedding (with caching)
-        cache_key = f"embedding:{hash(query)}"
-        if cache_key in self.embedding_cache:
-            query_embedding = self.embedding_cache[cache_key]
-        else:
-            embedding_result = llm_service.get_embeddings([query])
-            if not embedding_result["success"]:
-                logger.error(
-                    "Failed to generate query embedding: %s", embedding_result["error"]
-                )
-                return []
-            query_embedding = embedding_result["embeddings"][0]
-            self.embedding_cache[cache_key] = query_embedding
-
-        # Search vector DB
-        vector_results = vector_service.search_similar(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            limit=limit,
-            score_threshold=threshold,
+        logger.warning(
+            "search_memories() is deprecated. Use search_memories_with_hybrid_approach() "
+            "for the new conversation-based architecture."
         )
+        
+        # For backward compatibility, use hybrid approach
+        search_queries = [{"search_query": query, "confidence": 0.8, "search_type": "direct"}]
+        return self.search_memories_with_hybrid_approach(search_queries, user_id, limit, threshold)
 
-        # Filter by threshold and get Memory objects
-        memory_ids = [
-            result["memory_id"]
-            for result in vector_results
-            if result["score"] >= threshold
-        ]
-
+    def search_memories_with_hybrid_approach(
+        self,
+        search_queries: List[Dict[str, Any]],
+        user_id: str,
+        limit: int = 20,
+        threshold: float = 0.5,
+    ) -> List[Memory]:
+        """
+        NEW HYBRID SEARCH ARCHITECTURE:
+        1. Vector search finds relevant conversation chunks
+        2. Extract memory IDs from chunks
+        3. Graph traversal expands memory set based on relationships
+        4. Rank and filter final results
+        """
+        from .graph_service import graph_service
+        from .models import ConversationChunk
+        
+        all_memory_results = {}
+        conversation_context = {}
+        
+        for search_item in search_queries:
+            search_query = search_item.get("search_query", "")
+            query_confidence = search_item.get("confidence", 0.5)
+            search_type = search_item.get("search_type", "direct")
+            
+            if not search_query:
+                continue
+            
+            # Step 1: Search conversation chunks via Vector DB
+            embedding_result = llm_service.get_embeddings([search_query])
+            if not embedding_result["success"]:
+                continue
+                
+            query_embedding = embedding_result["embeddings"][0]
+            
+            # Search conversation chunks instead of memories
+            conversation_results = vector_service.search_conversation_context(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                limit=limit * 2,  # Get more conversation chunks
+                score_threshold=threshold * 0.8,  # Lower threshold for conversations
+            )
+            
+            # Step 2: Extract memory IDs from conversation chunks
+            chunk_ids = [result["chunk_id"] for result in conversation_results]
+            if not chunk_ids:
+                continue
+                
+            # Get memories linked to these conversation chunks
+            conversation_memories = set()
+            for chunk_id in chunk_ids:
+                try:
+                    chunk = ConversationChunk.objects.get(id=chunk_id)
+                    conversation_memories.update(chunk.extracted_memory_ids or [])
+                    
+                    # Store conversation context for later use
+                    for memory_id in (chunk.extracted_memory_ids or []):
+                        if memory_id not in conversation_context:
+                            conversation_context[memory_id] = []
+                        conversation_context[memory_id].append({
+                            "chunk_id": chunk_id,
+                            "content": chunk.content,
+                            "timestamp": chunk.timestamp.isoformat(),
+                            "relevance_score": next(
+                                (r["score"] for r in conversation_results if r["chunk_id"] == chunk_id), 
+                                0.5
+                            )
+                        })
+                except ConversationChunk.DoesNotExist:
+                    continue
+            
+            # Step 3: Graph traversal to expand memory set based on relationships
+            if conversation_memories:
+                expanded_memories = self._expand_memories_via_graph(
+                    list(conversation_memories), user_id, limit
+                )
+                conversation_memories.update(expanded_memories)
+            
+            # Step 4: Rank and filter final results
+            for memory_id in conversation_memories:
+                if memory_id in all_memory_results:
+                    # Boost score for memories found via multiple queries
+                    all_memory_results[memory_id]["score"] += query_confidence * 0.3
+                else:
+                    # Calculate base score from conversation relevance
+                    conversation_score = max(
+                        [ctx["relevance_score"] for ctx in conversation_context.get(memory_id, [{"relevance_score": 0.5}])]
+                    )
+                    
+                    all_memory_results[memory_id] = {
+                        "memory_id": memory_id,
+                        "score": conversation_score * query_confidence,
+                        "search_type": search_type,
+                        "query_confidence": query_confidence,
+                        "conversation_context": conversation_context.get(memory_id, [])
+                    }
+        
+        # Get Memory objects and apply final ranking
+        memory_ids = list(all_memory_results.keys())
         if not memory_ids:
             return []
-
-        # Batch fetch only active memories maintaining order
-        memories = Memory.objects.filter(id__in=memory_ids, is_active=True)
-        memory_dict = {str(m.id): m for m in memories}
-
-        # Apply temporal decay and return in similarity order
-        from .conflict_resolution_service import conflict_resolution_service
+            
+        memories = Memory.objects.filter(
+            id__in=memory_ids, user_id=user_id, is_active=True
+        )
         
-        result_memories = []
-        for memory_id in memory_ids:
-            if memory_id in memory_dict:
-                memory = memory_dict[memory_id]
-                # Apply temporal decay to update confidence
-                conflict_resolution_service.apply_temporal_decay(memory)
-                result_memories.append(memory)
+        # Apply conversation context and graph relationship scoring
+        scored_memories = []
+        for memory in memories:
+            memory_id = str(memory.id)
+            result_data = all_memory_results.get(memory_id, {})
+            
+            # Enhanced scoring based on hybrid search
+            base_score = result_data.get("score", 0.5)
+            conversation_boost = len(result_data.get("conversation_context", [])) * 0.1
+            temporal_boost = self._calculate_temporal_relevance(memory)
+            
+            final_score = base_score + conversation_boost + temporal_boost
+            
+            # Add conversation context to memory for later use
+            memory.conversation_context = result_data.get("conversation_context", [])
+            memory.hybrid_search_score = final_score
+            
+            scored_memories.append((memory, final_score))
+        
+        # Sort by final score and return top results
+        scored_memories.sort(key=lambda x: x[1], reverse=True)
+        return [memory for memory, score in scored_memories[:limit]]
+
+    def _expand_memories_via_graph(self, memory_ids: List[str], user_id: str, limit: int) -> List[str]:
+        """
+        Use graph traversal to find related memories via relationships
+        """
+        from .graph_service import graph_service
+        
+        if not memory_ids:
+            return []
+        
+        try:
+            # Use Neo4j to find related memories
+            query = """
+            MATCH (m:Memory {user_id: $user_id})
+            WHERE m.memory_id IN $memory_ids
+            MATCH (m)-[r:RELATES_TO|SUPPORTS|TEMPORAL_SEQUENCE]-(related:Memory {user_id: $user_id})
+            WHERE related.is_active = true
+            RETURN DISTINCT related.memory_id as memory_id, 
+                   type(r) as relationship_type,
+                   CASE 
+                       WHEN type(r) = 'RELATES_TO' THEN coalesce(r.similarity_score, 0.7)
+                       WHEN type(r) = 'SUPPORTS' THEN 0.8
+                       WHEN type(r) = 'TEMPORAL_SEQUENCE' THEN 0.6
+                       ELSE 0.5
+                   END as relationship_strength
+            ORDER BY relationship_strength DESC
+            LIMIT $limit
+            """
+            
+            if graph_service.driver:
+                with graph_service.driver.session() as session:
+                    result = session.run(query, {
+                        "user_id": user_id,
+                        "memory_ids": memory_ids,
+                        "limit": limit
+                    })
+                    
+                    related_memory_ids = []
+                    for record in result:
+                        related_memory_ids.append(record["memory_id"])
+                    
+                    logger.debug(
+                        f"Graph traversal found {len(related_memory_ids)} related memories "
+                        f"for {len(memory_ids)} input memories"
+                    )
+                    return related_memory_ids
+                    
+        except Exception as e:
+            logger.error(f"Failed to expand memories via graph: {e}")
+            
+        return []
+
+    def _calculate_temporal_relevance(self, memory) -> float:
+        """
+        Calculate temporal relevance boost based on memory age and confidence
+        """
+        import datetime
+        
+        # Recent memories get a slight boost
+        days_old = (datetime.datetime.now(datetime.timezone.utc) - memory.created_at).days
+        
+        if days_old < 1:
+            temporal_boost = 0.1  # Recent memories
+        elif days_old < 7:
+            temporal_boost = 0.05  # This week
+        elif days_old < 30:
+            temporal_boost = 0.0   # This month
+        else:
+            temporal_boost = -0.05  # Older memories slight penalty
+        
+        # Adjust by temporal confidence
+        temporal_boost *= memory.temporal_confidence
+        
+        return temporal_boost
+
+    def _rank_and_filter_results(self, memories_with_context: List[tuple], query_text: str = "") -> List[Memory]:
+        """
+        Enhanced multi-factor ranking algorithm for hybrid search results
+        
+        Ranking factors:
+        - Conversation relevance score (from vector search)
+        - Memory relationship strength (from graph traversal) 
+        - Temporal relevance and confidence decay
+        - Entity matching (person names, topics)
+        - Inference level reliability weighting
+        """
+        ranked_memories = []
+        
+        for memory, context_data in memories_with_context:
+            # Base factors
+            base_score = context_data.get("base_score", 0.5)
+            conversation_boost = len(context_data.get("conversation_context", [])) * 0.1
+            temporal_boost = self._calculate_temporal_relevance(memory)
+            
+            # Enhanced factors for better ranking
+            inference_penalty = self._calculate_inference_penalty(memory)
+            entity_boost = self._calculate_entity_matching_boost(memory, query_text)
+            relationship_boost = context_data.get("relationship_strength", 0.0) * 0.2
+            confidence_factor = memory.temporal_confidence * 0.15
+            
+            # Calculate final score with weighted factors
+            final_score = (
+                base_score * 0.4 +                    # Primary conversation relevance
+                conversation_boost * 0.15 +           # Multiple conversation mentions
+                temporal_boost * 0.1 +                # Recent vs old memories  
+                inference_penalty * 0.1 +             # Stated facts rank higher
+                entity_boost * 0.15 +                 # Entity name/topic matching
+                relationship_boost * 0.05 +           # Graph relationship strength
+                confidence_factor * 0.05              # Memory confidence
+            )
+            
+            # Add scoring details for debugging/transparency
+            memory.ranking_details = {
+                "base_score": base_score,
+                "conversation_boost": conversation_boost,
+                "temporal_boost": temporal_boost,
+                "inference_penalty": inference_penalty,
+                "entity_boost": entity_boost,
+                "relationship_boost": relationship_boost,
+                "confidence_factor": confidence_factor,
+                "final_score": final_score
+            }
+            
+            ranked_memories.append((memory, final_score))
+        
+        # Sort by final score and return memories only
+        ranked_memories.sort(key=lambda x: x[1], reverse=True)
+        return [memory for memory, score in ranked_memories]
+    
+    def _calculate_inference_penalty(self, memory) -> float:
+        """Calculate penalty/boost based on inference level reliability"""
+        inference_level = memory.metadata.get("inference_level", "stated")
+        
+        if inference_level == "stated":
+            return 0.1   # Boost for directly stated facts
+        elif inference_level == "inferred":
+            return 0.0   # Neutral for logical inferences
+        elif inference_level == "implied":
+            return -0.05  # Slight penalty for implied information
+        else:
+            return 0.0
+            
+    def _calculate_entity_matching_boost(self, memory, query_text: str) -> float:
+        """Calculate boost for entity/name matching between query and memory"""
+        if not query_text:
+            return 0.0
+            
+        query_lower = query_text.lower()
+        memory_content_lower = memory.content.lower()
+        memory_tags = [tag.lower() for tag in memory.metadata.get("tags", [])]
+        
+        boost = 0.0
+        
+        # Check for name matches (capitalized words in query)
+        import re
+        names_in_query = re.findall(r'\b[A-Z][a-z]+\b', query_text)
+        for name in names_in_query:
+            if name.lower() in memory_content_lower or name.lower() in memory_tags:
+                boost += 0.1
+        
+        # Check for entity type matches
+        entity_type = memory.metadata.get("entity_type", "")
+        if entity_type and entity_type.lower() in query_lower:
+            boost += 0.05
+            
+        # Check for tag matches
+        query_words = set(query_lower.split())
+        tag_matches = len(query_words.intersection(set(memory_tags)))
+        boost += tag_matches * 0.02
+        
+        return min(boost, 0.3)  # Cap the boost at 0.3
+
+    def expand_conversation_context(self, memory_ids: List[str], user_id: str) -> Dict[str, Any]:
+        """
+        Expand conversation context by including surrounding temporal context and related conversation chunks.
+        When conversation chunk matches, include surrounding chunks from same conversation session.
+        """
+        from .models import ConversationChunk
+        import datetime
+        
+        if not memory_ids:
+            return {}
+        
+        try:
+            # Get conversation chunks linked to these memories
+            memories = Memory.objects.filter(id__in=memory_ids, user_id=user_id, is_active=True)
+            all_chunk_ids = set()
+            
+            for memory in memories:
+                if memory.conversation_chunk_ids:
+                    all_chunk_ids.update(memory.conversation_chunk_ids)
+            
+            if not all_chunk_ids:
+                return {}
+            
+            # Get the conversation chunks
+            chunks = ConversationChunk.objects.filter(id__in=all_chunk_ids, user_id=user_id).order_by('timestamp')
+            
+            # Group chunks by conversation session (within 1 hour of each other)
+            conversation_sessions = []
+            current_session = []
+            session_threshold = datetime.timedelta(hours=1)
+            
+            for chunk in chunks:
+                if not current_session:
+                    current_session = [chunk]
+                else:
+                    # Check if this chunk is within the session threshold
+                    last_chunk_time = current_session[-1].timestamp
+                    if chunk.timestamp - last_chunk_time <= session_threshold:
+                        current_session.append(chunk)
+                    else:
+                        # Start new session
+                        conversation_sessions.append(current_session)
+                        current_session = [chunk]
+            
+            # Add the last session
+            if current_session:
+                conversation_sessions.append(current_session)
+            
+            # For each session, find surrounding chunks to provide context
+            expanded_context = {}
+            
+            for session in conversation_sessions:
+                session_start = session[0].timestamp
+                session_end = session[-1].timestamp
                 
-        return result_memories
+                # Expand context window by 30 minutes before/after
+                context_window = datetime.timedelta(minutes=30)
+                context_start = session_start - context_window
+                context_end = session_end + context_window
+                
+                # Get all chunks within the expanded window
+                context_chunks = ConversationChunk.objects.filter(
+                    user_id=user_id,
+                    timestamp__gte=context_start,
+                    timestamp__lte=context_end
+                ).order_by('timestamp')
+                
+                # Build expanded context for this session
+                session_context = {
+                    "session_start": session_start.isoformat(),
+                    "session_end": session_end.isoformat(),
+                    "primary_chunks": len(session),
+                    "expanded_chunks": context_chunks.count(),
+                    "conversation_flow": []
+                }
+                
+                for chunk in context_chunks:
+                    is_primary = chunk.id in all_chunk_ids
+                    session_context["conversation_flow"].append({
+                        "chunk_id": str(chunk.id),
+                        "content": chunk.content,
+                        "timestamp": chunk.timestamp.isoformat(),
+                        "is_primary_match": is_primary,
+                        "extracted_memories": chunk.extracted_memory_ids or [],
+                        "metadata": chunk.metadata
+                    })
+                
+                expanded_context[f"session_{len(expanded_context)}"] = session_context
+            
+            # Calculate conversation session statistics
+            total_expanded_chunks = sum(
+                session["expanded_chunks"] for session in expanded_context.values()
+            )
+            
+            result = {
+                "expanded_context": expanded_context,
+                "total_sessions": len(conversation_sessions),
+                "total_expanded_chunks": total_expanded_chunks,
+                "context_summary": self._generate_context_summary(expanded_context)
+            }
+            
+            logger.info(
+                f"Expanded conversation context for {len(memory_ids)} memories: "
+                f"{len(conversation_sessions)} sessions, {total_expanded_chunks} chunks"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to expand conversation context: {e}")
+            return {}
+
+    def _generate_context_summary(self, expanded_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a summary of the expanded conversation context"""
+        if not expanded_context:
+            return {}
+            
+        total_content_length = 0
+        earliest_timestamp = None
+        latest_timestamp = None
+        total_memories_referenced = set()
+        
+        for session in expanded_context.values():
+            for chunk_data in session["conversation_flow"]:
+                content_length = len(chunk_data["content"])
+                total_content_length += content_length
+                
+                timestamp_str = chunk_data["timestamp"]
+                timestamp = datetime.datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                
+                if earliest_timestamp is None or timestamp < earliest_timestamp:
+                    earliest_timestamp = timestamp
+                if latest_timestamp is None or timestamp > latest_timestamp:
+                    latest_timestamp = timestamp
+                
+                total_memories_referenced.update(chunk_data.get("extracted_memories", []))
+        
+        time_span = None
+        if earliest_timestamp and latest_timestamp:
+            time_span = (latest_timestamp - earliest_timestamp).total_seconds() / 3600  # hours
+        
+        return {
+            "total_content_length": total_content_length,
+            "time_span_hours": time_span,
+            "earliest_timestamp": earliest_timestamp.isoformat() if earliest_timestamp else None,
+            "latest_timestamp": latest_timestamp.isoformat() if latest_timestamp else None,
+            "memories_referenced": len(total_memories_referenced),
+            "avg_chunk_length": total_content_length / max(sum(len(s["conversation_flow"]) for s in expanded_context.values()), 1)
+        }
 
     def search_memories_with_queries(
         self,
@@ -138,7 +669,7 @@ class MemorySearchService:
         limit: int = 20,  # Increase to get more candidates
         threshold: float = 0.5,  # Lower threshold for broader search
     ) -> List[Memory]:
-        """Enhanced search with multiple similarity approaches"""
+        """Enhanced search with multiple similarity approaches - LEGACY METHOD"""
 
         all_memory_results = {}
 
@@ -256,7 +787,6 @@ class MemorySearchService:
     def _get_inference_level_multiplier(self, memory: Memory) -> float:
         """Get reliability multiplier based on inference level"""
         inference_level = memory.metadata.get("inference_level", "stated")
-        certainty = memory.metadata.get("certainty", 0.5)
         
         # Base multipliers by inference level
         base_multipliers = {
@@ -265,13 +795,13 @@ class MemorySearchService:
             "implied": 0.7,     # Moderate reliability - reading between lines
         }
         
-        # Apply certainty factor
+        # Apply confidence factor
         base_multiplier = base_multipliers.get(inference_level, 0.8)
         
-        # Boost by certainty level (certainty acts as additional confidence)
-        certainty_boost = certainty * 0.2  # Up to 20% boost from high certainty
+        # Boost by confidence level 
+        confidence_boost = memory.temporal_confidence * 0.15  # Up to 15% boost from high confidence
         
-        return min(1.0, base_multiplier + certainty_boost)
+        return min(1.0, base_multiplier + confidence_boost)
 
     def _rank_and_filter_results(self, results: Dict, limit: int) -> List[Memory]:
         """Enhanced ranking that considers semantic diversity and inference levels"""
@@ -593,14 +1123,29 @@ class MemorySearchService:
                 },
             }
 
-        # Prepare memory content for analysis with inference level information
+        # Prepare memory content for analysis with enhanced hybrid information
         memory_content = []
         inference_stats = {"stated": 0, "inferred": 0, "implied": 0}
+        conversation_contexts = []
+        relationship_info = []
         
         for i, memory in enumerate(memories[:20]):  # Limit to prevent prompt overflow
             inference_level = memory.metadata.get("inference_level", "stated")
-            certainty = memory.metadata.get("certainty", 0.5)
             evidence = memory.metadata.get("evidence", "")
+            
+            # Include conversation context if available from hybrid search
+            conversation_context = ""
+            if hasattr(memory, 'conversation_context') and memory.conversation_context:
+                context_snippets = []
+                for ctx in memory.conversation_context[:2]:  # Limit context snippets
+                    context_snippets.append(f"Context: {ctx.get('content', '')[:100]}...")
+                conversation_context = " | ".join(context_snippets)
+                conversation_contexts.append(f"Memory {i+1} context: {conversation_context}")
+            
+            # Include ranking information if available
+            ranking_info = ""
+            if hasattr(memory, 'ranking_details'):
+                ranking_info = f" [Score: {memory.ranking_details.get('final_score', 0):.2f}]"
             
             inference_stats[inference_level] += 1
             
@@ -612,8 +1157,8 @@ class MemorySearchService:
             }.get(inference_level, "⚪")
             
             memory_line = f"{i + 1}. {reliability_indicator} {memory.content}"
-            if certainty < 0.7:
-                memory_line += f" (Certainty: {certainty:.1f})"
+            if memory.temporal_confidence < 0.7:
+                memory_line += f" (Confidence: {memory.temporal_confidence:.1f})"
             if evidence and len(evidence) < 100:
                 memory_line += f" | Evidence: {evidence}"
                 
@@ -644,7 +1189,7 @@ When analyzing these memories, consider the inference levels:
 - 🟢 Stated facts have highest reliability and should be prioritized in your summary
 - 🟡 Inferred facts are logical conclusions and generally reliable
 - 🟠 Implied facts are contextual interpretations and should be noted as such
-- Pay attention to certainty scores and evidence provided
+- Pay attention to confidence scores and evidence provided
 
 **CRITICAL FILTERING REQUIREMENT - SMART DOMAIN SEPARATION:**
 You MUST filter memories intelligently based on the query type. Be strict but nuanced:
@@ -690,11 +1235,17 @@ You MUST filter memories intelligently based on the query type. Be strict but nu
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to parse memory summary: {e}")
 
-        # Fallback summary
+        # Enhanced fallback summary for hybrid results
+        conversation_context_summary = ""
+        if conversation_contexts:
+            conversation_context_summary = f" Includes conversation context from {len(conversation_contexts)} sources."
+        
         return {
-            "summary": f"Found {len(memories)} memories related to your query, but unable to generate detailed summary.",
+            "summary": f"Found {len(memories)} memories related to your query{conversation_context_summary}",
             "key_points": [memory.content[:100] + "..." for memory in memories[:5]],
-            "relevant_context": "Multiple memories found but analysis failed",
+            "relevant_context": "Multiple memories found but detailed analysis failed",
+            "conversation_context": "\n".join(conversation_contexts[:3]) if conversation_contexts else "",
+            "patterns_identified": f"Retrieved via hybrid search with inference levels: {inference_stats}",
             "confidence": 0.3,
             "memory_usage": {
                 "total_memories": len(memories),
@@ -702,6 +1253,12 @@ You MUST filter memories intelligently based on the query type. Be strict but nu
                 "moderately_relevant": len(memories),
                 "context_relevant": 0,
             },
+            "source_analysis": {
+                "conversation_chunks": len(conversation_contexts),
+                "extracted_memories": len(memories),
+                "relationship_connections": 0,  # Could be enhanced with graph data
+                "inference_breakdown": inference_stats
+            }
         }
 
 

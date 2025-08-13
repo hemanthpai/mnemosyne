@@ -1406,15 +1406,18 @@ const SettingsPage: React.FC = () => {
                                     </div>
                                 </div>
 
-                                {/* Search Type Thresholds */}
+                                {/* Hybrid Search Configuration */}
                                 <div className="border-t pt-6">
                                     <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                        Search Type Thresholds
+                                        Hybrid Search Configuration
                                     </h3>
+                                    <p className="text-sm text-gray-600 mb-4">
+                                        Configure thresholds for the hybrid search architecture that combines conversation context search with graph relationship traversal.
+                                    </p>
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Direct Search
+                                                Conversation Context Search
                                             </label>
                                             <input
                                                 type="number"
@@ -1433,13 +1436,13 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                             />
                                             <p className="text-xs text-gray-500 mt-1">
-                                                Threshold for explicit matches
+                                                Minimum similarity for conversation chunks
                                             </p>
                                         </div>
 
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Semantic Search
+                                                Graph Relationship Expansion
                                             </label>
                                             <input
                                                 type="number"
@@ -1458,7 +1461,7 @@ const SettingsPage: React.FC = () => {
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                             />
                                             <p className="text-xs text-gray-500 mt-1">
-                                                Threshold for related concepts
+                                                Minimum strength for relationship traversal
                                             </p>
                                         </div>
 
@@ -1893,9 +1896,10 @@ const SettingsPage: React.FC = () => {
                                     </h3>
                                     <p className="text-sm text-gray-600 mb-6">
                                         Enable hybrid search that combines
-                                        vector similarity with relationship
-                                        traversal for improved context
-                                        discovery.
+                                        conversation context search with memory
+                                        relationship traversal. Vector DB stores
+                                        conversation chunks while Graph DB tracks
+                                        structured memory relationships.
                                     </p>
 
                                     {/* Enable/Disable Button */}
@@ -1906,11 +1910,10 @@ const SettingsPage: React.FC = () => {
                                                     Graph-Enhanced Retrieval
                                                 </h4>
                                                 <p className="text-sm text-gray-600 mb-4">
-                                                    Combines vector similarity
-                                                    search with relationship
-                                                    traversal to discover
-                                                    contextually relevant
-                                                    memories.
+                                                    Uses conversation chunks for
+                                                    semantic search combined with
+                                                    memory relationship traversal
+                                                    for enhanced context discovery.
                                                 </p>
                                                 <div className="text-sm text-gray-500">
                                                     <strong>Status:</strong>{" "}

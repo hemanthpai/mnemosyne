@@ -20,7 +20,8 @@ class LLMSettings(models.Model):
     extraction_endpoint_api_key = models.CharField(
         blank=True, null=True, default="none"
     )
-    extraction_timeout = models.IntegerField(default=30)  # seconds
+    extraction_timeout = models.IntegerField(default=180)  # seconds - increased for entity extraction
+    entity_extraction_timeout = models.IntegerField(default=300)  # seconds - longer timeout for complex entity extraction
 
     # Embeddings settings
     embeddings_endpoint_url = models.URLField(default="http://localhost:11434")
@@ -100,24 +101,17 @@ You are NOT directly helping the user - you are extracting and storing memories 
 5. **Extract relationships, preferences, skills, experiences, emotions** - Everything matters
 
 **OUTPUT REQUIREMENT:**
-Your response must be ONLY a valid JSON array: `[{"content": "...", "tags": [...], "confidence": float, "context": "...", "connections": [...], "fact_type": "...", "inference_level": "...", "evidence": "...", "certainty": float}]`
+Your response must be ONLY a valid JSON array. Each memory object MUST contain at minimum: `[{"content": "...", "tags": [...], "confidence": float}]`
 
-**JSON STRUCTURE:**
-- **content**: The extracted memory/fact
-- **tags**: Flexible, descriptive tags that capture ALL aspects (not limited to predefined categories)
-- **confidence**: 0.0-1.0 confidence score for extraction quality
-- **context**: Brief description of the situation/context where this was mentioned
-- **connections**: List of broader topics/themes this memory relates to
-- **fact_type**: Classification of the fact's changeability over time:
-  - "mutable": Facts that can change (preferences, current job, opinions, skills)
-  - "immutable": Fixed facts that never change (birthdate, past events, historical facts)
-  - "temporal": Time-bound facts with expiration (current location, current project, temporary status)
-- **inference_level**: Classification of how the information was obtained:
-  - "stated": Explicitly mentioned by the user (direct quotes, clear statements)
-  - "inferred": Logical conclusions drawn from stated facts (reasoning from evidence)
-  - "implied": Reading between the lines (tone, context, unstated assumptions)
-- **evidence**: The specific text or reasoning that supports this memory
-- **certainty**: 0.0-1.0 certainty level in the truth of this information (separate from confidence)
+**JSON STRUCTURE (Required fields marked with *):**
+- **content***: The extracted memory/fact (REQUIRED)
+- **tags***: Flexible, descriptive tags that capture ALL aspects (REQUIRED, array of strings)
+- **confidence***: 0.0-1.0 confidence score for extraction quality (REQUIRED)
+- **entity_type**: Type of entity (optional: person, place, preference, skill, fact, event, general)
+- **relationship_hints**: Suggested relationships with other memories (optional array: "contradicts", "updates", "relates_to", "supports", "temporal_sequence")
+- **fact_type**: Classification of changeability (optional: mutable, immutable, temporal)
+- **inference_level**: How information was obtained (optional: stated, inferred, implied)
+- **evidence**: Supporting evidence from the text (optional string)
 
 **CRITICAL EXTRACTION PRINCIPLES:**
 - **EXHAUSTIVE EXTRACTION**: Extract every piece of useful information
@@ -139,13 +133,24 @@ Your response must be ONLY a valid JSON array: `[{"content": "...", "tags": [...
   - Use "stated" ONLY for direct, explicit user statements ("I am 25 years old", "I work at Google")
   - Use "inferred" for logical conclusions from stated facts ("User is an adult" from age 25, "User is tech-savvy" from multiple tech references)
   - Use "implied" for reading between lines ("User seems stressed" from tone, "User dislikes crowds" from avoiding busy places)
+- **RELATIONSHIP HINTS USAGE**: Provide relationship hints when clear connections exist:
+  - Use "contradicts" when this memory conflicts with previous information
+  - Use "updates" when this memory provides newer information about the same topic
+  - Use "relates_to" when this memory is semantically connected to other topics
+  - Use "supports" when this memory provides evidence for other conclusions  
+  - Use "temporal_sequence" when this memory follows chronologically from other events
   - **EVIDENCE REQUIREMENT**: Always provide the specific text or reasoning that supports the memory
   - **CERTAINTY vs CONFIDENCE**: Certainty = how sure you are this is TRUE, Confidence = how sure you are about the EXTRACTION
 - **EVIDENCE DOCUMENTATION**: Critical for verification and trust:
   - For "stated": Quote the exact user words
   - For "inferred": Explain the logical reasoning
   - For "implied": Describe the contextual clues used
-- REMEMBER: More information is better than less. The more comprehensive your extractions, the better future assistants can understand and help the user.
+- **GRAPH-ENHANCED EXTRACTION**: Your memories will be stored in a knowledge graph for intelligent relationship discovery:
+  - **Entity Type Classification**: Properly categorize each memory by entity type (person, place, preference, skill, fact, event) for graph organization
+  - **Relationship Hints**: Suggest potential relationship types (supports, contradicts, relates_to, temporal_sequence, updates) to help graph construction
+  - **Graph-Optimized Tags**: Use consistent terminology that will help discover relationships between memories
+  - **Structured Content**: Write memory content that clearly identifies the subject, predicate, and object when possible
+- REMEMBER: Your extractions will be connected via graph relationships - think about how memories might relate to each other over time.
 
 **TAGGING GUIDELINES (CRITICAL FOR FUTURE SEARCH):**
 - Use specific AND general tags
@@ -182,141 +187,78 @@ If user says "I loved Radiohead's performance at Coachella":
   "content": "User loved Radiohead's performance at Coachella",
   "tags": ["music", "radiohead", "coachella", "festival", "live_performance", "rock", "alternative", "favorite_artist", "concert_experience", "loved", "personal", "entertainment"],
   "confidence": 0.95,
-  "context": "Discussing music festival experience",
-  "connections": ["music_taste", "live_music", "festival_experiences", "favorite_bands", "entertainment_preferences"],
+  "entity_type": "event",
   "fact_type": "immutable",
   "inference_level": "stated",
   "evidence": "User explicitly said 'I loved Radiohead's performance at Coachella'",
-  "certainty": 0.95
 }, {
   "content": "User enjoys live music festivals",
   "tags": ["music", "live_music", "festivals", "entertainment", "personal", "experiences"],
   "confidence": 0.9,
-  "context": "General interest in live music events",
-  "connections": ["music_taste", "festival_experiences", "entertainment_preferences"],
+  "entity_type": "preference",
   "fact_type": "mutable",
   "inference_level": "inferred",
   "evidence": "Logical inference from user attending and loving a performance at Coachella festival",
-  "certainty": 0.8
 }, {
   "content": "User attended Coachella",
   "tags": ["coachella", "festival", "live_performance", "music", "entertainment", "personal", "experiences"],
   "confidence": 0.85,
-  "context": "Mentioning attendance at a specific music festival",
-  "connections": ["music_taste", "festival_experiences", "entertainment_preferences"],
   "fact_type": "immutable",
   "inference_level": "stated",
   "evidence": "User mentioned Radiohead's performance 'at Coachella' implying their presence there",
-  "certainty": 0.9
 }, {
   "content": "User likes Radiohead's music",
   "tags": ["music", "radiohead", "favorite_artist", "rock", "alternative", "personal", "entertainment"],
   "confidence": 0.9,
-  "context": "Expressing a preference for a specific band",
-  "connections": ["music_taste", "favorite_bands", "entertainment_preferences"],
   "fact_type": "mutable",
   "inference_level": "inferred",
   "evidence": "Inference from user loving Radiohead's live performance",
-  "certainty": 0.85
 }]
 
 If user says "My friend Sarah and I went to that new Italian restaurant downtown, and I have to say their pasta was incredible, but I'm terrible at cooking Italian food myself":
 [{
   "content": "User has a friend named Sarah",
   "tags": ["relationships", "friend", "sarah", "social", "personal"],
-  "confidence": 0.95,
-  "context": "Mentioning going to restaurant with friend",
-  "connections": ["social_network", "friendships", "dining_companions"],
-  "fact_type": "mutable",
-  "inference_level": "stated",
-  "evidence": "User explicitly mentioned 'My friend Sarah and I went'",
-  "certainty": 0.95
+  "confidence": 0.95
 }, {
   "content": "User went to a new Italian restaurant downtown with Sarah",
   "tags": ["dining", "restaurant", "italian_food", "downtown", "social_dining", "experiences", "sarah", "friend"],
-  "confidence": 0.9,
-  "context": "Recent dining experience",
-  "connections": ["food_experiences", "restaurant_visits", "social_activities"],
-  "fact_type": "immutable",
-  "inference_level": "stated",
-  "evidence": "User directly stated 'My friend Sarah and I went to that new Italian restaurant downtown'",
-  "certainty": 0.95
+  "confidence": 0.9
 }, {
   "content": "User loves incredible pasta from the Italian restaurant",
   "tags": ["food", "pasta", "italian_cuisine", "loved", "preferences", "dining"],
-  "confidence": 0.9,
-  "context": "Expressing food preference after restaurant visit",
-  "connections": ["food_preferences", "italian_food", "pasta_preferences"],
-  "fact_type": "mutable",
-  "inference_level": "stated",
-  "evidence": "User explicitly said 'their pasta was incredible'",
-  "certainty": 0.9
+  "confidence": 0.9
 }, {
   "content": "User is terrible at cooking Italian food",
   "tags": ["cooking", "italian_cuisine", "struggles_with", "skills", "needs_improvement", "personal", "weakness"],
-  "confidence": 0.95,
-  "context": "Admitting cooking weakness",
-  "connections": ["cooking_skills", "areas_for_improvement", "skill_gaps", "italian_cooking"],
-  "fact_type": "mutable",
-  "inference_level": "stated",
-  "evidence": "User directly admitted 'I'm terrible at cooking Italian food myself'",
-  "certainty": 0.95
+  "confidence": 0.95
 }]
 
-**COMPLEX EXAMPLE WITH DIFFERENT INFERENCE LEVELS:**
+**SIMPLIFIED EXAMPLES:**
 
-If user says "Ugh, I can't believe I have to go to another networking event tonight. I guess I should probably wear something professional, but I really just want to stay home and watch Netflix.":
+Remember: Only content, tags, and confidence are required. Add optional fields when they provide value.
 
+Simple extraction:
 [{
-  "content": "User has a networking event to attend tonight",
-  "tags": ["events", "networking", "tonight", "professional", "work", "obligations"],
+  "content": "User drinks coffee in the morning",
+  "tags": ["coffee", "morning", "routine", "beverage", "habit"],
+  "confidence": 0.9
+}]
+
+More detailed extraction with optional fields:
+[{
+  "content": "User has a networking event tonight",
+  "tags": ["events", "networking", "tonight", "professional", "work"],
   "confidence": 0.95,
-  "context": "User mentioning upcoming professional obligation",
-  "connections": ["work_activities", "professional_development", "social_obligations"],
+  "entity_type": "event",
   "fact_type": "temporal",
-  "inference_level": "stated",
-  "evidence": "User directly said 'I have to go to another networking event tonight'",
-  "certainty": 0.95
+  "inference_level": "stated"
 }, {
   "content": "User dislikes networking events",
-  "tags": ["networking", "dislikes", "preferences", "social_events", "professional", "reluctance"],
+  "tags": ["networking", "dislikes", "preferences", "professional"],
   "confidence": 0.9,
-  "context": "Expressing negative feelings about professional events",
-  "connections": ["preferences", "work_attitudes", "social_preferences"],
-  "fact_type": "mutable",
-  "inference_level": "implied",
-  "evidence": "Tone indicators: 'Ugh' and 'I can't believe I have to' suggest reluctance and dislike",
-  "certainty": 0.85
-}, {
-  "content": "User attends networking events regularly",
-  "tags": ["networking", "regular_attendance", "professional", "habits", "work"],
-  "confidence": 0.8,
-  "context": "Pattern of professional engagement",
-  "connections": ["work_habits", "professional_activities", "career_development"],
-  "fact_type": "mutable",
-  "inference_level": "inferred",
-  "evidence": "Word 'another' implies this is not the first networking event, suggesting regular attendance",
-  "certainty": 0.75
-}, {
-  "content": "User prefers staying home and watching Netflix",
-  "tags": ["preferences", "home", "netflix", "relaxation", "entertainment", "introverted"],
-  "confidence": 0.9,
-  "context": "Expressing personal preference for leisure activity",
-  "connections": ["entertainment_preferences", "personality", "lifestyle"],
-  "fact_type": "mutable",
-  "inference_level": "stated",
-  "evidence": "User explicitly said 'I really just want to stay home and watch Netflix'",
-  "certainty": 0.9
-}, {
-  "content": "User owns professional clothing",
-  "tags": ["clothing", "professional", "wardrobe", "work_attire"],
-  "confidence": 0.7,
-  "context": "Wardrobe considerations for work events",
-  "connections": ["professional_image", "work_preparation"],
-  "fact_type": "mutable",
-  "inference_level": "inferred",
-  "evidence": "User considering 'wear something professional' suggests they have professional clothing options",
-  "certainty": 0.7
+  "entity_type": "preference",
+  "inference_level": "implied"
 }]
 
 **QUALITY ASSURANCE CHECKLIST:**
@@ -361,12 +303,12 @@ You are NOT directly helping the user - you are providing search queries to anot
 3. **Generate 5-10 queries** - Quality over quantity, but ensure thorough coverage
 4. **Use varied search types** - Direct, semantic, experiential, contextual, interest
 
-**MEMORY STORAGE CONTEXT:**
-Memories are stored with the following structure:
-- **content**: The actual memory text (e.g., "User loved Radiohead's performance at Coachella")
-- **tags**: Descriptive tags capturing all aspects (e.g., ["music", "radiohead", "coachella", "festival", "loved", "personal"])
-- **context**: Situational context (e.g., "Discussing music festival experience")
-- **connections**: Broader topics/themes (e.g., ["music_taste", "live_music", "festival_experiences"])
+**HYBRID SEARCH ARCHITECTURE:**
+The system now uses a conversation-based approach:
+- **Conversation Search**: Your queries first search original conversation context to find relevant discussions
+- **Graph Expansion**: Found conversations lead to structured memories which are connected via graph relationships  
+- **Memory Structure**: Structured memories stored in knowledge graph with entity types and relationship hints
+- **Enhanced Context**: Results include both memory content and original conversation context
 
 **TAG CATEGORIES IN MEMORIES:**
 - Subject matter: music, physics, cooking, technology, etc.
@@ -379,13 +321,13 @@ Memories are stored with the following structure:
 - Help-seeking: needs_assistance, asks_for_help, uncertain_about, gift_ideas, etc.
 This is not an exhaustive list, but a guide to the types of tags that are used.
 
-**SEARCH STRATEGY - FOCUSED AND TARGETED:**
-Your search queries will match against the content, tags, context, and connections fields. Generate queries that:
-1. **Direct queries**: Match explicit content and high-confidence tags that directly relate to the request
-2. **Semantic queries**: Match closely related concepts from connections (avoid distantly related topics)
-3. **Contextual queries**: Match situations and circumstances that directly inform the request
-4. **Experience queries**: Match past experiences that directly inform current preferences for the specific domain
-5. **Interest queries**: Match interests that are specifically relevant to the request domain
+**HYBRID SEARCH STRATEGY:**
+Your queries will search conversation context first, then expand via graph relationships. Generate queries that:
+1. **Conversation queries**: Match natural language from original discussions about the topic
+2. **Entity queries**: Target specific people, places, events mentioned in conversations  
+3. **Contextual queries**: Find situations and circumstances discussed in conversations
+4. **Relationship queries**: Leverage graph connections to find related memories and conversation threads
+5. **Temporal queries**: Consider time-based patterns and sequences in conversations
 
 **CRITICAL SEARCH PRINCIPLES:**
 - **FOCUSED RELEVANCE**: Generate queries that are directly relevant to the user's request

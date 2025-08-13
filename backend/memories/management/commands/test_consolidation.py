@@ -109,7 +109,6 @@ class Command(BaseCommand):
                         'tags': ['test_data', group_name],
                         'inference_level': 'stated',
                         'evidence': f'Test data for {group_name}',
-                        'certainty': 0.9,
                         'test_group': group_name,
                         'test_index': i
                     },

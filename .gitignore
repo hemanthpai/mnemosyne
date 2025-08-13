@@ -74,6 +74,8 @@ qdrant_storage/
 *.orig
 *.old
 *.log
+*.MD
+*.md
 
 # Editor backups
 *~

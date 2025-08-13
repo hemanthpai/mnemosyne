@@ -62,25 +62,21 @@ class Command(BaseCommand):
                 "content": "I love making Italian pasta dishes, especially carbonara",
                 "tags": ["cooking", "italian_food", "pasta", "carbonara", "loves"],
                 "inference_level": "stated",
-                "certainty": 0.9
             },
             {
                 "content": "My grandmother taught me how to make authentic marinara sauce",
                 "tags": ["cooking", "italian_food", "sauce", "grandmother", "family", "learned"],
                 "inference_level": "stated", 
-                "certainty": 0.95
             },
             {
                 "content": "I always use fresh basil and oregano in my cooking",
                 "tags": ["cooking", "herbs", "basil", "oregano", "ingredients", "always"],
                 "inference_level": "stated",
-                "certainty": 0.8
             },
             {
                 "content": "User enjoys cooking Italian food based on family traditions",
                 "tags": ["cooking", "italian_food", "family", "traditions", "enjoys"],
                 "inference_level": "inferred",
-                "certainty": 0.7
             }
         ]
 
@@ -90,19 +86,16 @@ class Command(BaseCommand):
                 "content": "I went to a jazz concert at the Blue Note last weekend",
                 "tags": ["music", "jazz", "concert", "blue_note", "weekend", "attended"],
                 "inference_level": "stated",
-                "certainty": 0.9
             },
             {
                 "content": "I play piano and love improvisation",
                 "tags": ["music", "piano", "improvisation", "plays", "loves"],
                 "inference_level": "stated",
-                "certainty": 0.95
             },
             {
                 "content": "Miles Davis is one of my favorite musicians",
                 "tags": ["music", "jazz", "miles_davis", "favorite", "musician"],
                 "inference_level": "stated",
-                "certainty": 0.9
             }
         ]
 
@@ -112,19 +105,16 @@ class Command(BaseCommand):
                 "content": "I'm working on a Python project using Django framework",
                 "tags": ["work", "programming", "python", "django", "project", "currently"],
                 "inference_level": "stated",
-                "certainty": 0.9
             },
             {
                 "content": "I prefer using PostgreSQL for database projects",
                 "tags": ["work", "database", "postgresql", "prefers", "projects"],
                 "inference_level": "stated",
-                "certainty": 0.8
             },
             {
                 "content": "User has experience with web development technologies",
                 "tags": ["work", "web_development", "technology", "experience"],
                 "inference_level": "inferred",
-                "certainty": 0.75
             }
         ]
 
@@ -140,8 +130,7 @@ class Command(BaseCommand):
                     "tags": memory_data["tags"],
                     "inference_level": memory_data["inference_level"],
                     "evidence": f"Test data for graph retrieval: {memory_data['content']}",
-                    "certainty": memory_data["certainty"],
-                    "test_category": "graph_retrieval_test",
+                        "test_category": "graph_retrieval_test",
                     "test_index": i
                 }
             )

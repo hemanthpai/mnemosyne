@@ -152,7 +152,6 @@ class Command(BaseCommand):
             content = memory.get("content", "")
             inference_level = memory.get("inference_level", "unknown")
             evidence = memory.get("evidence", "")
-            certainty = memory.get("certainty", 0.0)
             confidence = memory.get("confidence", 0.0)
             
             inference_counts[inference_level] = inference_counts.get(inference_level, 0) + 1
@@ -166,7 +165,7 @@ class Command(BaseCommand):
             
             self.stdout.write(f"\n{i}. {level_style(inference_level.upper())}: {content}")
             self.stdout.write(f"   Evidence: {evidence}")
-            self.stdout.write(f"   Certainty: {certainty:.2f} | Confidence: {confidence:.2f}")
+            self.stdout.write(f"   Confidence: {confidence:.2f}")
             
             # Check against expected if provided
             if expected_levels and i <= len(expected_levels):

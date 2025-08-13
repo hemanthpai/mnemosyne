@@ -1,16 +1,16 @@
 import json
 import logging
 import uuid
-from datetime import datetime
 
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.utils import timezone
 from settings_app.models import LLMSettings
 
 from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_service
 from .memory_search_service import memory_search_service
-from .models import Memory
+from .models import Memory, ConversationChunk
 from .serializers import MemorySerializer
 from .vector_service import vector_service
 from .graph_service import graph_service
@@ -139,9 +139,8 @@ class ExtractMemoriesView(APIView):
             # Add the current datetime to system prompt for time awareness
             system_prompt_with_date = system_prompt
             try:
-                now = datetime.now()
-                # TODO: Handle timezone if needed
-                system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                now = timezone.now()
+                system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"
             except Exception as e:
                 logger.warning("Could not add date to system prompt: %s", e)
 
@@ -233,17 +232,10 @@ class ExtractMemoriesView(APIView):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
-            # Store extracted memories with conflict resolution and deduplication
-            stored_memories = []
-            conflicts_resolved = 0
-            duplicates_consolidated = 0
+            # NEW HYBRID ARCHITECTURE: Store conversation chunks and extracted memories
             
-            # Get existing active memories for the user to check for conflicts
-            existing_memories = list(Memory.objects.filter(
-                user_id=user_id, 
-                is_active=True
-            ))
-            
+            # Prepare memories for the new storage method
+            extracted_memories = []
             for memory_data in memories_data:
                 if not isinstance(memory_data, dict):
                     continue
@@ -252,137 +244,182 @@ class ExtractMemoriesView(APIView):
                 if not content:
                     continue
 
-                # Extract fact type, confidence, and inference information
+                # Extract all fields including new entity_type and relationship_hints
+                # Validate and normalize entity_type
+                entity_type = memory_data.get("entity_type", "general")
+                if entity_type not in ["person", "place", "preference", "skill", "fact", "event", "general"]:
+                    entity_type = "general"
+                
+                # Validate and normalize fact_type
                 fact_type = memory_data.get("fact_type", "mutable")
-                confidence = memory_data.get("confidence", 0.5)
+                if fact_type not in ["mutable", "immutable", "temporal"]:
+                    fact_type = "mutable"
+                
+                # Validate and normalize inference_level
                 inference_level = memory_data.get("inference_level", "stated")
-                evidence = memory_data.get("evidence", "")
-                certainty = memory_data.get("certainty", confidence)
-
-                # Prepare enhanced metadata with inference information
-                metadata = {
+                if inference_level not in ["stated", "inferred", "implied"]:
+                    inference_level = "stated"
+                
+                # Validate relationship_hints
+                valid_hints = ["supports", "contradicts", "relates_to", "temporal_sequence", "updates"]
+                relationship_hints = [h for h in memory_data.get("relationship_hints", []) if h in valid_hints]
+                
+                memory_info = {
+                    "content": content,
                     "tags": memory_data.get("tags", []),
-                    "confidence": confidence,
-                    "context": memory_data.get("context", ""),
-                    "connections": memory_data.get("connections", []),
-                    "extraction_source": "conversation",
-                    "model_used": llm_result.get("model", "unknown"),
+                    "confidence": min(max(memory_data.get("confidence", 0.5), 0.0), 1.0),  # Clamp to [0,1]
+                    "entity_type": entity_type,
+                    "relationship_hints": relationship_hints,
                     "fact_type": fact_type,
                     "inference_level": inference_level,
-                    "evidence": evidence,
-                    "certainty": certainty,
+                    "evidence": memory_data.get("evidence", ""),
+                    "model_used": llm_result.get("model", "unknown"),
                 }
-
-                # Detect conflicts before storing
-                conflicts = conflict_resolution_service.detect_conflicts(
-                    content, metadata, existing_memories
-                )
-
-                # Store memory with embedding
-                memory = memory_search_service.store_memory_with_embedding(
-                    content=content, user_id=user_id, metadata=metadata
+                extracted_memories.append(memory_info)
+            
+            # Store using the new hybrid approach
+            timestamp = timezone.now().isoformat()
+            try:
+                storage_result = memory_search_service.store_conversation_and_memories(
+                    conversation_text=conversation_text,
+                    extracted_memories=extracted_memories,
+                    user_id=user_id,
+                    timestamp=timestamp
                 )
                 
-                # Set additional fields for conflict resolution
-                memory.fact_type = fact_type
-                memory.original_confidence = confidence
-                memory.temporal_confidence = confidence
-                memory.save()
-
-                # Resolve any detected conflicts
-                if conflicts:
-                    conflicts_resolved += len(conflicts)
-                    for conflicting_memory, similarity, conflict_type in conflicts:
-                        logger.info(
-                            f"Resolving {conflict_type} conflict (similarity: {similarity:.2f}) "
-                            f"between new memory {memory.id} and existing memory {conflicting_memory.id}"
-                        )
+                # Get created memories for conflict resolution
+                memory_ids = storage_result.get("memory_ids", [])
+                stored_memories = list(Memory.objects.filter(id__in=memory_ids))
+                
+                # Perform conflict resolution on the new memories
+                conflicts_resolved = 0
+                duplicates_consolidated = 0  # Initialize before the loop
+                existing_memories = list(Memory.objects.filter(
+                    user_id=user_id, 
+                    is_active=True
+                ).exclude(id__in=memory_ids))
+                
+                for memory in stored_memories:
+                    # Detect and resolve conflicts
+                    conflicts = conflict_resolution_service.detect_conflicts(
+                        memory.content, memory.metadata, existing_memories
+                    )
+                    
+                    if conflicts:
+                        conflicts_resolved += len(conflicts)
+                        for conflicting_memory, similarity, conflict_type in conflicts:
+                            logger.info(
+                                f"Resolving {conflict_type} conflict (similarity: {similarity:.2f}) "
+                                f"between new memory {memory.id} and existing memory {conflicting_memory.id}"
+                            )
                         memory = conflict_resolution_service.resolve_conflict(
                             memory, conflicting_memory, conflict_type
                         )
 
-                # Check for duplicates after conflict resolution
-                duplicates = memory_consolidation_service.find_duplicates(
-                    memory, user_id
-                )
-                
-                if duplicates:
-                    # Filter duplicates that might be suitable for consolidation
-                    consolidation_candidates = [
-                        (dup_memory, score, dup_type) for dup_memory, score, dup_type in duplicates
-                        if dup_type in ['exact_duplicate', 'near_duplicate'] and score >= 0.90
-                    ]
+                    # Check for duplicates after conflict resolution
+                    duplicates = memory_consolidation_service.find_duplicates(
+                        memory, user_id
+                    )
                     
-                    if consolidation_candidates:
-                        duplicates_consolidated += len(consolidation_candidates)
+                    if duplicates:
+                        # Filter duplicates that might be suitable for consolidation
+                        consolidation_candidates = [
+                            (dup_memory, score, dup_type) for dup_memory, score, dup_type in duplicates
+                            if dup_type in ['exact_duplicate', 'near_duplicate'] and score >= 0.90
+                        ]
                         
-                        # Consolidate with the most similar duplicate
-                        memories_to_consolidate = [memory] + [dup[0] for dup in consolidation_candidates[:2]]  # Limit to avoid over-consolidation
-                        
-                        consolidated_memory = memory_consolidation_service.merge_memories(
-                            memories_to_consolidate, 
-                            consolidation_strategy="llm_guided"
-                        )
-                        
-                        if consolidated_memory:
-                            memory = consolidated_memory
-                            logger.info(
-                                f"Consolidated {len(memories_to_consolidate)} duplicate memories into {memory.id}"
+                        if consolidation_candidates:
+                            duplicates_consolidated += len(consolidation_candidates)
+                            
+                            # Consolidate with the most similar duplicate
+                            memories_to_consolidate = [memory] + [dup[0] for dup in consolidation_candidates[:2]]  # Limit to avoid over-consolidation
+                            
+                            consolidated_memory = memory_consolidation_service.merge_memories(
+                                memories_to_consolidate, 
+                                consolidation_strategy="llm_guided"
                             )
+                            
+                            if consolidated_memory:
+                                memory = consolidated_memory
+                                logger.info(
+                                    f"Consolidated {len(memories_to_consolidate)} duplicate memories into {memory.id}"
+                                )
 
-                stored_memories.append(
-                    {
-                        "id": str(memory.id),
-                        "content": memory.content,
-                        "metadata": memory.metadata,
-                        "fact_type": memory.fact_type,
-                        "inference_level": memory.metadata.get("inference_level", "stated"),
-                        "evidence": memory.metadata.get("evidence", ""),
-                        "certainty": memory.metadata.get("certainty", memory.temporal_confidence),
-                        "confidence": memory.temporal_confidence,
-                        "is_active": memory.is_active,
-                        "created_at": memory.created_at.isoformat(),
-                        "supersedes": str(memory.supersedes.id) if memory.supersedes else None,
-                    }
+                # Collect enhanced memory data for response (outside the loop)
+                enhanced_memories = []
+                for memory in stored_memories:
+                    enhanced_memories.append(
+                        {
+                            "id": str(memory.id),
+                            "content": memory.content,
+                            "metadata": memory.metadata,
+                            "fact_type": memory.fact_type,
+                            "entity_type": memory.metadata.get("entity_type", "general"),
+                            "inference_level": memory.metadata.get("inference_level", "stated"),
+                            "evidence": memory.metadata.get("evidence", ""),
+                            "confidence": memory.temporal_confidence,
+                            "is_active": memory.is_active,
+                            "created_at": memory.created_at.isoformat(),
+                            "supersedes": str(memory.supersedes.id) if memory.supersedes else None,
+                            "conversation_chunk_ids": memory.conversation_chunk_ids if hasattr(memory, 'conversation_chunk_ids') else [],
+                        }
+                    )
+                
+                logger.info(
+                    "Successfully extracted and stored %d memories with %d conflicts resolved and %d duplicates consolidated via hybrid architecture", 
+                    len(enhanced_memories), conflicts_resolved, duplicates_consolidated
                 )
 
-            logger.info(
-                "Successfully extracted and stored %d memories with %d conflicts resolved and %d duplicates consolidated", 
-                len(stored_memories), conflicts_resolved, duplicates_consolidated
-            )
+                # Auto-build graph if graph-enhanced retrieval is enabled and we have new memories
+                graph_build_result = None
+                if settings.enable_graph_enhanced_retrieval and enhanced_memories:
+                    try:
+                        logger.info("Auto-building graph relationships for %d new memories", len(enhanced_memories))
+                        graph_build_result = graph_service.build_memory_graph(user_id, incremental=True)
+                        if graph_build_result.get("success"):
+                            logger.info("Auto-build successful: %d relationships created", 
+                                      graph_build_result.get("relationships_created", 0))
+                        else:
+                            logger.warning("Auto-build failed: %s", graph_build_result.get("error"))
+                    except Exception as e:
+                        logger.error("Error during auto-build: %s", e)
 
-            # Auto-build graph if graph-enhanced retrieval is enabled and we have new memories
-            graph_build_result = None
-            if settings.enable_graph_enhanced_retrieval and stored_memories:
-                try:
-                    logger.info("Auto-building graph relationships for %d new memories", len(stored_memories))
-                    graph_build_result = graph_service.build_memory_graph(user_id, incremental=True)
-                    if graph_build_result.get("success"):
-                        logger.info("Auto-build successful: %d relationships created", 
-                                  graph_build_result.get("relationships_created", 0))
-                    else:
-                        logger.warning("Auto-build failed: %s", graph_build_result.get("error"))
-                except Exception as e:
-                    logger.error("Error during auto-build: %s", e)
-
-            response_data = {
-                "success": True,
-                "memories_extracted": len(stored_memories),
-                "conflicts_resolved": conflicts_resolved,
-                "duplicates_consolidated": duplicates_consolidated,
-                "memories": stored_memories,
-                "model_used": llm_result.get("model", "unknown"),
-            }
-
-            # Include graph build results if auto-building occurred
-            if graph_build_result:
-                response_data["graph_build_result"] = {
-                    "success": graph_build_result.get("success", False),
-                    "relationships_created": graph_build_result.get("relationships_created", 0),
-                    "incremental": graph_build_result.get("incremental", True)
+                response_data = {
+                    "success": True,
+                    "memories_extracted": len(enhanced_memories),
+                    "conflicts_resolved": conflicts_resolved,
+                    "duplicates_consolidated": duplicates_consolidated,
+                    "memories": enhanced_memories,
+                    "model_used": llm_result.get("model", "unknown"),
+                    # New hybrid architecture information
+                    "hybrid_storage": {
+                        "conversation_chunks_created": storage_result.get("chunks_created", 0),
+                        "chunk_ids": storage_result.get("chunk_ids", []),
+                        "conversation_length": storage_result.get("conversation_length", 0),
+                        "chunks_generated": storage_result.get("chunks_generated", 0),
+                    }
                 }
 
-            return Response(response_data)
+                # Include graph build results if auto-building occurred
+                if graph_build_result:
+                    response_data["graph_build_result"] = {
+                        "success": graph_build_result.get("success", False),
+                        "relationships_created": graph_build_result.get("relationships_created", 0),
+                        "incremental": graph_build_result.get("incremental", True)
+                    }
+
+                return Response(response_data)
+            
+            except Exception as storage_error:
+                logger.error("Failed to store conversation and memories: %s", storage_error)
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Failed to store memories: {str(storage_error)}",
+                        "memories_extracted": len(extracted_memories),
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
         except Exception as e:
             logger.error("Unexpected error during memory extraction: %s", e)
@@ -497,21 +534,22 @@ class RetrieveMemoriesView(APIView):
 
             logger.info("Generated %d search queries", len(search_queries))
 
-            # Step 3: Use appropriate search method based on app-level setting
-            if use_graph:
-                relevant_memories = memory_search_service.search_with_graph_enhancement(
-                    search_queries=search_queries,
-                    user_id=user_id,
-                    limit=limit,
-                    threshold=threshold,
-                    use_graph=True
-                )
-            else:
-                relevant_memories = memory_search_service.search_memories_with_queries(
-                    search_queries=search_queries,
-                    user_id=user_id,
-                    limit=limit,
-                    threshold=threshold,
+            # Step 3: Use new hybrid search architecture
+            # The hybrid approach automatically uses both conversation search and graph expansion
+            relevant_memories = memory_search_service.search_memories_with_hybrid_approach(
+                search_queries=search_queries,
+                user_id=user_id,
+                limit=limit,
+                threshold=threshold,
+            )
+            
+            # Get expanded conversation context if available
+            conversation_context = None
+            if relevant_memories and use_graph:
+                memory_ids = [str(m.id) for m in relevant_memories[:10]]  # Top 10 for context expansion
+                conversation_context = memory_search_service.expand_conversation_context(
+                    memory_ids=memory_ids,
+                    user_id=user_id
                 )
 
             # Step 4: Find additional semantic connections if enabled and we have enough results
@@ -551,7 +589,7 @@ class RetrieveMemoriesView(APIView):
                     len(memory_summary.get("key_points", [])),
                 )
 
-            # Step 6: Format memories for response
+            # Step 6: Format memories for response with enhanced hybrid information
             formatted_memories = []
             for memory in relevant_memories:
                 memory_data = {
@@ -560,25 +598,40 @@ class RetrieveMemoriesView(APIView):
                     "metadata": memory.metadata,
                     "created_at": memory.created_at.isoformat(),
                     "updated_at": memory.updated_at.isoformat(),
+                    # Include hybrid search scoring if available
+                    "hybrid_search_score": getattr(memory, 'hybrid_search_score', None),
+                    "conversation_chunk_ids": memory.conversation_chunk_ids if hasattr(memory, 'conversation_chunk_ids') else [],
                 }
                 formatted_memories.append(memory_data)
 
-            logger.info("Found %d relevant memories", len(formatted_memories))
+            logger.info("Found %d relevant memories via hybrid search", len(formatted_memories))
 
-            return Response(
-                {
-                    "success": True,
-                    "memories": formatted_memories,
-                    "memory_summary": memory_summary,  # Add the summary
-                    "count": len(formatted_memories),
-                    "search_queries_generated": len(search_queries),
-                    "model_used": llm_result.get("model", "unknown"),
-                    "query_params": {
-                        "limit": limit,
-                        "threshold": threshold,
-                    },
+            response_data = {
+                "success": True,
+                "memories": formatted_memories,
+                "memory_summary": memory_summary,
+                "count": len(formatted_memories),
+                "search_queries_generated": len(search_queries),
+                "model_used": llm_result.get("model", "unknown"),
+                "query_params": {
+                    "limit": limit,
+                    "threshold": threshold,
+                },
+                "hybrid_search_info": {
+                    "graph_enabled": use_graph,
+                    "conversation_context_available": conversation_context is not None,
                 }
-            )
+            }
+            
+            # Include conversation context if available
+            if conversation_context:
+                response_data["conversation_context"] = {
+                    "total_sessions": conversation_context.get("total_sessions", 0),
+                    "total_expanded_chunks": conversation_context.get("total_expanded_chunks", 0),
+                    "context_summary": conversation_context.get("context_summary", {})
+                }
+
+            return Response(response_data)
 
         except Exception as e:
             logger.error("Unexpected error during memory retrieval: %s", e)
@@ -827,7 +880,8 @@ class DeleteAllMemoriesView(APIView):
 
 class TextToGraphView(APIView):
     """
-    API endpoint to convert text to graph documents and store in Neo4j
+    DEPRECATED: API endpoint to convert text to graph documents and store in Neo4j
+    Use the memory extraction endpoint with hybrid architecture instead.
     """
 
     def post(self, request):
@@ -855,43 +909,18 @@ class TextToGraphView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            logger.info("Converting text to graph for user %s", user_id)
-            
-            # Convert text to graph and store in Neo4j
-            result = graph_service.text_to_graph(text, user_id)
-            
-            if result["success"]:
-                return Response(
-                    {
-                        "success": True,
-                        "message": "Text successfully converted to graph",
-                        "nodes_created": result["nodes_created"],
-                        "relationships_created": result["relationships_created"],
-                        "graph_documents_count": result["graph_documents_count"],
-                        "user_id": user_id,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-            else:
-                logger.error("Graph conversion failed: %s", result["error"])
-                return Response(
-                    {
-                        "success": False,
-                        "error": f"Graph conversion failed: {result['error']}",
-                    },
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
-        except Exception as e:
-            logger.error("Unexpected error during text to graph conversion: %s", e)
-            return Response(
-                {
-                    "success": False,
-                    "error": "An unexpected error occurred during graph conversion",
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        # Return deprecation notice
+        logger.warning("TextToGraphView is deprecated. User %s attempted to use deprecated endpoint.", user_id)
+        
+        return Response(
+            {
+                "success": False,
+                "error": "This endpoint is deprecated. Use the memory extraction endpoint (/extract-memories/) with the new hybrid architecture instead.",
+                "deprecated": True,
+                "recommendation": "Use POST /extract-memories/ with conversation_text to store both conversation chunks and extracted memories."
+            },
+            status=status.HTTP_410_GONE,
+        )
 
 
 class GraphStatsView(APIView):
@@ -1396,5 +1425,234 @@ class GraphStatusView(APIView):
                     "success": False,
                     "error": "An unexpected error occurred checking graph status",
                 },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ConversationChunkViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for CRUD operations on conversation chunks in the hybrid architecture
+    """
+    queryset = ConversationChunk.objects.all()
+    
+    def get_serializer_class(self):
+        # Return a basic serializer class since we'll define inline
+        from rest_framework import serializers
+        
+        class ConversationChunkSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = ConversationChunk
+                fields = '__all__'
+                
+        return ConversationChunkSerializer
+
+    def get_queryset(self):
+        """Filter conversation chunks by user_id if provided"""
+        user_id = self.request.GET.get("user_id")
+        if user_id:
+            try:
+                uuid.UUID(user_id)  # Validate UUID format
+                return ConversationChunk.objects.filter(user_id=user_id).order_by("-timestamp")
+            except ValueError:
+                logger.warning(f"Invalid user_id format: {user_id}")
+                return ConversationChunk.objects.none()
+        return ConversationChunk.objects.all().order_by("-timestamp")
+
+    def retrieve(self, request, *args, pk=None, **kwargs):
+        """Get a specific conversation chunk by ID"""
+        try:
+            uuid.UUID(pk)  # Validate UUID format
+            chunk = self.get_object()
+            serializer = self.get_serializer(chunk)
+            return Response({
+                "success": True,
+                "chunk": serializer.data
+            })
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid chunk ID format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ConversationChunk.DoesNotExist:
+            return Response(
+                {"success": False, "error": "Conversation chunk not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+    def list(self, request, *args, **kwargs):
+        """List conversation chunks with pagination"""
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response({
+                "success": True,
+                "chunks": serializer.data
+            })
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "success": True,
+            "chunks": serializer.data,
+            "count": len(serializer.data)
+        })
+
+
+class ConversationChunkMemoriesView(APIView):
+    """
+    API endpoint to get memories extracted from a specific conversation chunk
+    """
+    
+    def get(self, request, chunk_id):
+        """Get memories that were extracted from this conversation chunk"""
+        try:
+            uuid.UUID(chunk_id)  # Validate UUID format
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid chunk ID format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            chunk = ConversationChunk.objects.get(id=chunk_id)
+            memory_ids = chunk.extracted_memory_ids or []
+            
+            if not memory_ids:
+                return Response({
+                    "success": True,
+                    "memories": [],
+                    "count": 0,
+                    "chunk_info": {
+                        "id": str(chunk.id),
+                        "content_preview": chunk.get_conversation_preview(),
+                        "timestamp": chunk.timestamp.isoformat(),
+                    }
+                })
+            
+            # Get the memories
+            memories = Memory.objects.filter(id__in=memory_ids, is_active=True).order_by('-created_at')
+            
+            formatted_memories = []
+            for memory in memories:
+                formatted_memories.append({
+                    "id": str(memory.id),
+                    "content": memory.content,
+                    "metadata": memory.metadata,
+                    "entity_type": memory.metadata.get("entity_type", "general"),
+                    "fact_type": memory.fact_type,
+                    "inference_level": memory.metadata.get("inference_level", "stated"),
+                    "created_at": memory.created_at.isoformat(),
+                })
+            
+            return Response({
+                "success": True,
+                "memories": formatted_memories,
+                "count": len(formatted_memories),
+                "chunk_info": {
+                    "id": str(chunk.id),
+                    "content_preview": chunk.get_conversation_preview(),
+                    "timestamp": chunk.timestamp.isoformat(),
+                    "total_content_length": len(chunk.content),
+                }
+            })
+            
+        except ConversationChunk.DoesNotExist:
+            return Response(
+                {"success": False, "error": "Conversation chunk not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            logger.error("Error retrieving memories for chunk %s: %s", chunk_id, e)
+            return Response(
+                {"success": False, "error": "An unexpected error occurred"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ConversationSearchView(APIView):
+    """
+    API endpoint to search conversation chunks using vector similarity
+    """
+    
+    def post(self, request):
+        """Search conversation chunks by content similarity"""
+        query = request.data.get("query", "")
+        user_id = request.data.get("user_id")
+        limit = request.data.get("limit", 20)
+        threshold = request.data.get("threshold", 0.5)
+        
+        if not query:
+            return Response(
+                {"success": False, "error": "query is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            uuid.UUID(user_id)  # Validate UUID format
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            # Get embedding for the query
+            from .llm_service import llm_service
+            embedding_result = llm_service.get_embeddings([query])
+            
+            if not embedding_result["success"]:
+                return Response(
+                    {"success": False, "error": "Failed to generate query embedding"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            
+            # Search conversation chunks
+            search_results = vector_service.search_conversation_context(
+                query_embedding=embedding_result["embeddings"][0],
+                user_id=user_id,
+                limit=limit,
+                score_threshold=threshold
+            )
+            
+            # Format results
+            formatted_results = []
+            for result in search_results:
+                chunk_id = result["chunk_id"]
+                try:
+                    chunk = ConversationChunk.objects.get(id=chunk_id)
+                    formatted_results.append({
+                        "chunk_id": chunk_id,
+                        "content": result.get("content", ""),
+                        "score": result["score"],
+                        "timestamp": result.get("timestamp"),
+                        "extracted_memories_count": len(chunk.extracted_memory_ids or []),
+                        "content_preview": chunk.get_conversation_preview(150),
+                    })
+                except ConversationChunk.DoesNotExist:
+                    # Skip chunks that no longer exist
+                    continue
+            
+            return Response({
+                "success": True,
+                "results": formatted_results,
+                "count": len(formatted_results),
+                "query": query,
+                "search_params": {
+                    "limit": limit,
+                    "threshold": threshold,
+                }
+            })
+            
+        except Exception as e:
+            logger.error("Error searching conversation chunks: %s", e)
+            return Response(
+                {"success": False, "error": "An unexpected error occurred"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

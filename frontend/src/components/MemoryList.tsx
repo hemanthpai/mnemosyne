@@ -45,34 +45,76 @@ const MemoryList: React.FC<MemoryListProps> = ({ memories }) => {
                             <div className="px-4 py-4 sm:px-6">
                                 <div className="flex items-center justify-between">
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-gray-900 truncate">
-                                            {memory.content.substring(0, 100)}
-                                            {memory.content.length > 100 &&
-                                                "..."}
-                                        </p>
-                                        <p className="text-sm text-gray-500">
-                                            User: {memory.user_id}
-                                        </p>
+                                        <div className="flex items-center space-x-2 mb-1">
+                                            <p className="text-sm font-medium text-gray-900 truncate">
+                                                {memory.content.substring(0, 80)}
+                                                {memory.content.length > 80 && "..."}
+                                            </p>
+                                            
+                                            {/* Entity Type Badge */}
+                                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                                memory.metadata?.entity_type === 'person' ? 'bg-purple-100 text-purple-800' :
+                                                memory.metadata?.entity_type === 'place' ? 'bg-green-100 text-green-800' :
+                                                memory.metadata?.entity_type === 'preference' ? 'bg-pink-100 text-pink-800' :
+                                                memory.metadata?.entity_type === 'skill' ? 'bg-yellow-100 text-yellow-800' :
+                                                memory.metadata?.entity_type === 'fact' ? 'bg-blue-100 text-blue-800' :
+                                                memory.metadata?.entity_type === 'event' ? 'bg-indigo-100 text-indigo-800' :
+                                                'bg-gray-100 text-gray-800'
+                                            }`}>
+                                                {memory.metadata?.entity_type || 'general'}
+                                            </span>
+
+                                            {/* Inference Level */}
+                                            <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
+                                                memory.metadata?.inference_level === 'stated' ? 'bg-green-50 text-green-700 border border-green-200' :
+                                                memory.metadata?.inference_level === 'inferred' ? 'bg-yellow-50 text-yellow-700 border border-yellow-200' :
+                                                'bg-orange-50 text-orange-700 border border-orange-200'
+                                            }`}>
+                                                {memory.metadata?.inference_level === 'stated' ? '🟢' :
+                                                 memory.metadata?.inference_level === 'inferred' ? '🟡' : '🟠'}
+                                            </span>
+                                        </div>
+                                        
+                                        <div className="flex items-center space-x-4 text-sm text-gray-500">
+                                            <span>User: {memory.user_id}</span>
+                                            
+                                            {/* Hybrid Search Score */}
+                                            {memory.hybrid_search_score && (
+                                                <span className="text-xs">
+                                                    Score: {(memory.hybrid_search_score * 100).toFixed(1)}%
+                                                </span>
+                                            )}
+                                            
+                                            {/* Conversation Chunks Count */}
+                                            {memory.conversation_chunk_ids && memory.conversation_chunk_ids.length > 0 && (
+                                                <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded">
+                                                    {memory.conversation_chunk_ids.length} chunk{memory.conversation_chunk_ids.length !== 1 ? 's' : ''}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="flex-shrink-0 text-sm text-gray-500">
-                                        {new Date(
-                                            memory.created_at
-                                        ).toLocaleDateString()}
+                                        {new Date(memory.created_at).toLocaleDateString()}
                                     </div>
                                 </div>
-                                {Object.keys(memory.metadata).length > 0 && (
+                                
+                                {/* Tags */}
+                                {memory.metadata?.tags && memory.metadata.tags.length > 0 && (
                                     <div className="mt-2">
                                         <div className="flex flex-wrap gap-1">
-                                            {Object.entries(
-                                                memory.metadata
-                                            ).map(([key, value]) => (
+                                            {memory.metadata.tags.slice(0, 5).map((tag, index) => (
                                                 <span
-                                                    key={key}
-                                                    className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                                                    key={index}
+                                                    className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800"
                                                 >
-                                                    {key}: {String(value)}
+                                                    {tag}
                                                 </span>
                                             ))}
+                                            {memory.metadata.tags.length > 5 && (
+                                                <span className="text-xs text-gray-500">
+                                                    +{memory.metadata.tags.length - 5} more
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
                                 )}

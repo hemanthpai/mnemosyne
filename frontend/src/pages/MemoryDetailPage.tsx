@@ -197,7 +197,7 @@ const MemoryDetailPage: React.FC = () => {
     const regularTags = getRegularTags(tags);
     const confidence = memory.metadata?.confidence || 0;
     const context = memory.metadata?.context || "";
-    const connections = memory.metadata?.connections || [];
+    const connections: string[] = memory.metadata?.connections || [];
     const createdDate = formatDate(memory.created_at);
     const updatedDate = formatDate(memory.updated_at);
 
@@ -470,7 +470,7 @@ const MemoryDetailPage: React.FC = () => {
                                 ) : (
                                     <div className="flex flex-wrap gap-2">
                                         {connections.map(
-                                            (connection, index) => (
+                                            (connection: string, index: number) => (
                                                 <span
                                                     key={index}
                                                     className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800"

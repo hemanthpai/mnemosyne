@@ -5,13 +5,47 @@ export interface Memory {
     metadata: {
         tags: string[];
         confidence: number;
-        context?: string;
-        connections?: string[];
+        entity_type: 'person' | 'place' | 'preference' | 'skill' | 'fact' | 'event' | 'general';
+        inference_level: 'stated' | 'inferred' | 'implied';
+        certainty: number;
+        evidence: string;
+        relationship_hints?: ('supports' | 'contradicts' | 'relates_to' | 'temporal_sequence' | 'updates')[];
         extraction_source?: string;
         model_used?: string;
         created_at?: string;
         [key: string]: any;
     };
+    fact_type: 'mutable' | 'immutable' | 'temporal';
+    created_at: string;
+    updated_at: string;
+    // New hybrid architecture fields
+    conversation_chunk_ids: string[];
+    hybrid_search_score?: number;
+    ranking_details?: {
+        base_score: number;
+        conversation_boost: number;
+        temporal_boost: number;
+        inference_penalty: number;
+        entity_boost: number;
+        relationship_boost: number;
+        confidence_factor: number;
+        final_score: number;
+    };
+}
+
+export interface ConversationChunk {
+    id: string;
+    user_id: string;
+    content: string;
+    vector_id: string;
+    timestamp: string;
+    metadata: {
+        chunk_index?: number;
+        total_chunks?: number;
+        source?: string;
+        [key: string]: any;
+    };
+    extracted_memory_ids: string[];
     created_at: string;
     updated_at: string;
 }
@@ -84,7 +118,22 @@ export interface ExtractMemoriesRequest {
 export interface ExtractMemoriesResponse {
     success: boolean;
     memories_extracted: number;
+    conflicts_resolved: number;
+    duplicates_consolidated: number;
     memories: Memory[];
+    model_used: string;
+    // New hybrid architecture information
+    hybrid_storage: {
+        conversation_chunks_created: number;
+        chunk_ids: string[];
+        conversation_length: number;
+        chunks_generated: number;
+    };
+    graph_build_result?: {
+        success: boolean;
+        relationships_created: number;
+        incremental: boolean;
+    };
 }
 
 export interface RetrieveMemoriesRequest {
@@ -108,13 +157,30 @@ export interface MemorySummary {
 export interface RetrieveMemoriesResponse {
     success: boolean;
     memories: Memory[];
-    memory_summary?: MemorySummary;  // Add this field
+    memory_summary?: MemorySummary;
     count: number;
     search_queries_generated: number;
     model_used: string;
     query_params: {
         limit: number;
         threshold: number;
+    };
+    // New hybrid architecture information
+    hybrid_search_info: {
+        graph_enabled: boolean;
+        conversation_context_available: boolean;
+    };
+    conversation_context?: {
+        total_sessions: number;
+        total_expanded_chunks: number;
+        context_summary: {
+            total_content_length: number;
+            time_span_hours?: number;
+            earliest_timestamp?: string;
+            latest_timestamp?: string;
+            memories_referenced: number;
+            avg_chunk_length: number;
+        };
     };
 }
 
@@ -136,5 +202,49 @@ export interface MemoryStatsData {
         vector_count?: number;
         status?: string;
         config?: Record<string, any>;
+    };
+}
+
+// New conversation management types
+export interface ConversationChunkResponse {
+    success: boolean;
+    chunks: ConversationChunk[];
+    count?: number;
+}
+
+export interface ConversationChunkMemoriesResponse {
+    success: boolean;
+    memories: Memory[];
+    count: number;
+    chunk_info: {
+        id: string;
+        content_preview: string;
+        timestamp: string;
+        total_content_length?: number;
+    };
+}
+
+export interface ConversationSearchRequest {
+    query: string;
+    user_id: string;
+    limit?: number;
+    threshold?: number;
+}
+
+export interface ConversationSearchResponse {
+    success: boolean;
+    results: {
+        chunk_id: string;
+        content: string;
+        score: number;
+        timestamp?: string;
+        extracted_memories_count: number;
+        content_preview: string;
+    }[];
+    count: number;
+    query: string;
+    search_params: {
+        limit: number;
+        threshold: number;
     };
 }

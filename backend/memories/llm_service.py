@@ -22,23 +22,17 @@ MEMORY_EXTRACTION_FORMAT = {
                 "items": {"type": "string"},
             },
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "context": {"type": "string"},
-            "connections": {
+            "entity_type": {"type": "string"},  # Removed enum constraint
+            "relationship_hints": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {"type": "string"},  # Removed enum constraint
             },
-            "fact_type": {
-                "type": "string",
-                "enum": ["mutable", "immutable", "temporal"],
-            },
-            "inference_level": {
-                "type": "string",
-                "enum": ["stated", "inferred", "implied"],
-            },
+            "fact_type": {"type": "string"},  # Removed enum constraint
+            "inference_level": {"type": "string"},  # Removed enum constraint
             "evidence": {"type": "string"},
-            "certainty": {"type": "number", "minimum": 0, "maximum": 1},
         },
-        "required": ["content", "tags", "confidence", "fact_type", "inference_level", "evidence", "certainty"],
+        # Only require core fields, make new fields optional
+        "required": ["content", "tags", "confidence"],
     },
 }
 
@@ -52,11 +46,11 @@ MEMORY_SEARCH_FORMAT = {
             "search_type": {
                 "type": "string",
                 "enum": [
-                    "direct",
-                    "semantic",
-                    "experiential",
-                    "contextual",
-                    "interest",
+                    "conversation",
+                    "entity",
+                    "contextual", 
+                    "relationship",
+                    "temporal",
                 ],
             },
             "rationale": {

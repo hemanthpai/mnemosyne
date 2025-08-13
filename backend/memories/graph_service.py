@@ -169,6 +169,9 @@ class GraphService:
 
     def text_to_graph(self, text: str, user_id: str) -> Dict[str, Any]:
         """
+        DEPRECATED: This method is deprecated in favor of memory-focused graph construction.
+        Use build_memory_graph() instead which operates on structured memory data.
+        
         Convert text to graph documents and store in Neo4j
 
         Args:
@@ -178,78 +181,12 @@ class GraphService:
         Returns:
             Dict containing success status and extraction results
         """
-        try:
-            if not self.transformer or not self.graph:
-                return {
-                    "success": False,
-                    "error": "Graph transformer or Neo4j connection not initialized",
-                }
-            
-            # Convert UUID to string if needed
-            user_id = str(user_id)
-
-            # Check for empty text input
-            if not text.strip():
-                return {
-                    "success": False,
-                    "error": "Empty text input provided",
-                }
-
-            # Create LangChain document from text
-            document = Document(
-                page_content=text,
-                metadata={
-                    "user_id": user_id,
-                    "source": "memory_extraction",
-                    "extraction_timestamp": str(int(time.time())),
-                },
-            )
-
-            logger.info(f"Converting text to graph for user {user_id}")
-
-            # Transform document to graph documents
-            graph_documents = self.transformer.convert_to_graph_documents([document])
-
-            if not graph_documents:
-                return {
-                    "success": False,
-                    "error": "No graph documents generated from text",
-                }
-
-            # Store graph documents in Neo4j and add user_id to all nodes
-            nodes_created = 0
-            relationships_created = 0
-
-            for graph_doc in graph_documents:
-                # Add user_id property to all nodes in the graph document
-                for node in graph_doc.nodes:
-                    if not hasattr(node, "properties"):
-                        node.properties = {}
-                    node.properties["user_id"] = user_id
-                    node.properties["extraction_timestamp"] = str(int(time.time()))
-
-                # Add graph document to Neo4j
-                self.graph.add_graph_documents([graph_doc])
-
-                # Count nodes and relationships
-                nodes_created += len(graph_doc.nodes)
-                relationships_created += len(graph_doc.relationships)
-
-            logger.info(
-                f"Successfully stored {nodes_created} nodes and {relationships_created} relationships"
-            )
-
-            return {
-                "success": True,
-                "nodes_created": nodes_created,
-                "relationships_created": relationships_created,
-                "graph_documents_count": len(graph_documents),
-                "user_id": user_id,
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to convert text to graph: {e}")
-            return {"success": False, "error": str(e)}
+        logger.warning("text_to_graph() is deprecated. Use build_memory_graph() for new conversation-based architecture.")
+        return {
+            "success": False,
+            "error": "text_to_graph() is deprecated. Use memory-based graph construction instead.",
+            "deprecated": True
+        }
 
     def query_graph(self, query: str) -> Dict[str, Any]:
         """
@@ -425,16 +362,22 @@ class GraphService:
             with self.driver.session() as session:
                 # Create memory nodes with enhanced metadata
                 for memory in memories:
-                    # Create memory node
+                    # Get standardized metadata
+                    metadata = memory.get_standardized_metadata()
+                    
+                    # Create memory node with rich properties for graph traversal
                     node_query = """
                     MERGE (m:Memory {memory_id: $memory_id, user_id: $user_id})
                     SET m.content = $content,
                         m.created_at = $created_at,
                         m.inference_level = $inference_level,
-                        m.certainty = $certainty,
-                        m.confidence = $confidence,
+                        m.temporal_confidence = $temporal_confidence,
                         m.tags = $tags,
-                        m.fact_type = $fact_type
+                        m.fact_type = $fact_type,
+                        m.entity_type = $entity_type,
+                        m.evidence = $evidence,
+                        m.last_validated = $last_validated,
+                        m.is_active = $is_active
                     """
 
                     session.run(
@@ -444,62 +387,26 @@ class GraphService:
                             "user_id": user_id,
                             "content": memory.content,
                             "created_at": memory.created_at.isoformat(),
-                            "inference_level": memory.metadata.get(
-                                "inference_level", "stated"
-                            ),
-                            "certainty": memory.metadata.get("certainty", 0.5),
-                            "confidence": memory.temporal_confidence,
-                            "tags": memory.metadata.get("tags", []),
+                            "inference_level": metadata.get("inference_level", "stated"),
+                            "temporal_confidence": memory.temporal_confidence,
+                            "tags": metadata.get("tags", []),
                             "fact_type": memory.fact_type or "mutable",
+                            "entity_type": metadata.get("entity_type", "general"),
+                            "evidence": metadata.get("evidence", ""),
+                            "last_validated": memory.last_validated.isoformat() if memory.last_validated else None,
+                            "is_active": memory.is_active,
                         },
                     )
                     nodes_created += 1
 
-                # Create semantic similarity relationships using vector similarity
+                # Create enhanced memory-to-memory relationships
                 from .llm_service import llm_service
                 from .vector_service import vector_service
 
-                for memory in memories:
-                    # Get embedding for this memory
-                    embedding_result = llm_service.get_embeddings([memory.content])
-                    if not embedding_result["success"]:
-                        continue
-
-                    memory_embedding = embedding_result["embeddings"][0]
-
-                    # Find similar memories
-                    similar_memories = vector_service.search_similar(
-                        query_embedding=memory_embedding,
-                        user_id=user_id,
-                        limit=10,
-                        score_threshold=0.7,  # High similarity for graph connections
-                    )
-
-                    # Create relationships to similar memories
-                    for result in similar_memories:
-                        similar_id = result["memory_id"]
-                        similarity_score = result["score"]
-
-                        if similar_id != str(memory.id):  # Don't connect to self
-                            rel_query = """
-                            MATCH (m1:Memory {memory_id: $memory1_id, user_id: $user_id})
-                            MATCH (m2:Memory {memory_id: $memory2_id, user_id: $user_id})
-                            MERGE (m1)-[r:SIMILAR_TO]-(m2)
-                            SET r.similarity_score = $similarity_score,
-                                r.connection_type = 'semantic',
-                                r.created_at = datetime()
-                            """
-
-                            session.run(
-                                rel_query,
-                                {
-                                    "memory1_id": str(memory.id),
-                                    "memory2_id": similar_id,
-                                    "user_id": user_id,
-                                    "similarity_score": similarity_score,
-                                },
-                            )
-                            relationships_created += 1
+                # Build relationship map
+                relationships_created += self._create_enhanced_relationships(
+                    session, memories, user_id
+                )
 
                 # Create tag-based relationships
                 memories_with_tags = [
@@ -650,7 +557,6 @@ class GraphService:
                        related.memory_id as memory_id,
                        related.content as content,
                        related.inference_level as inference_level,
-                       related.certainty as certainty,
                        related.confidence as confidence,
                        related.tags as tags,
                        related.fact_type as fact_type,
@@ -658,7 +564,7 @@ class GraphService:
                        base_score / path_length as relevance_score,
                        path_length,
                        relationships
-                ORDER BY relevance_score DESC, related.certainty DESC
+                ORDER BY relevance_score DESC, related.confidence DESC
                 LIMIT 50
                 """
                 )
@@ -674,7 +580,6 @@ class GraphService:
                             "memory_id": record["memory_id"],
                             "content": record["content"],
                             "inference_level": record["inference_level"],
-                            "certainty": record["certainty"],
                             "confidence": record["confidence"],
                             "tags": record["tags"],
                             "fact_type": record["fact_type"],
@@ -716,7 +621,7 @@ class GraphService:
                 community_query = """
                 CALL gds.graph.project(
                     'memoryGraph_' + $user_id,
-                    {Memory: {properties: ['certainty', 'confidence']}},
+                    {Memory: {properties: ['confidence']}},
                     {
                         SIMILAR_TO: {orientation: 'UNDIRECTED', properties: ['similarity_score']},
                         RELATED_BY_TAG: {orientation: 'UNDIRECTED', properties: ['strength']},
@@ -739,7 +644,6 @@ class GraphService:
                     WITH tag, collect({
                         memory_id: m.memory_id,
                         content: m.content,
-                        certainty: m.certainty,
                         confidence: m.confidence,
                         inference_level: m.inference_level,
                         created_at: m.created_at
@@ -764,7 +668,6 @@ class GraphService:
                     WITH date(m.created_at) as creation_date, collect({
                         memory_id: m.memory_id,
                         content: m.content,
-                        certainty: m.certainty,
                         confidence: m.confidence,
                         inference_level: m.inference_level,
                         created_at: m.created_at
@@ -845,6 +748,286 @@ class GraphService:
         except Exception as e:
             logger.error(f"Failed to calculate centrality scores: {e}")
             return {}
+
+    def _create_enhanced_relationships(self, session, memories, user_id: str) -> int:
+        """
+        Create enhanced memory-to-memory relationships with multiple relationship types.
+        
+        Enhanced relationship types:
+        - CONTRADICTS (temporal conflicts)
+        - UPDATES (newer information superseding older)
+        - RELATES_TO (semantic similarity)
+        - SUPPORTS (evidence relationships)
+        - TEMPORAL_SEQUENCE (chronological order)
+        """
+        relationships_created = 0
+        from .llm_service import llm_service
+        from .vector_service import vector_service
+        
+        # Convert to list for indexing
+        memory_list = list(memories)
+        
+        for i, memory1 in enumerate(memory_list):
+            # Get embedding for similarity comparisons
+            embedding_result = llm_service.get_embeddings([memory1.content])
+            if not embedding_result["success"]:
+                continue
+                
+            memory1_embedding = embedding_result["embeddings"][0]
+            memory1_metadata = memory1.get_standardized_metadata()
+            
+            # Compare with other memories
+            for memory2 in memory_list[i+1:]:
+                if memory1.id == memory2.id:
+                    continue
+                    
+                memory2_metadata = memory2.get_standardized_metadata()
+                
+                # Priority 1: Check for LLM-provided relationship hints
+                relationship_created = self._create_hint_based_relationships(
+                    session, memory1, memory2, memory1_metadata, memory2_metadata, user_id
+                )
+                if relationship_created:
+                    relationships_created += relationship_created
+                    continue  # Skip heuristic analysis if hint-based relationship was created
+                
+                # Priority 2: Fallback to heuristic relationship detection
+                # 1. Check for contradiction relationships
+                if self._detect_contradiction(memory1, memory2):
+                    self._create_relationship(
+                        session, memory1, memory2, "CONTRADICTS", 
+                        {"conflict_detected": True, "requires_resolution": True}, user_id
+                    )
+                    relationships_created += 1
+                
+                # 2. Check for update relationships (newer supersedes older)
+                elif self._detect_update_relationship(memory1, memory2):
+                    newer, older = (memory1, memory2) if memory1.created_at > memory2.created_at else (memory2, memory1)
+                    self._create_relationship(
+                        session, newer, older, "UPDATES", 
+                        {"supersedes": True, "temporal_relationship": True}, user_id
+                    )
+                    relationships_created += 1
+                
+                # 3. Check for support relationships
+                elif self._detect_support_relationship(memory1, memory2):
+                    self._create_relationship(
+                        session, memory1, memory2, "SUPPORTS", 
+                        {"evidence_type": "supporting", "confidence_boost": True}, user_id
+                    )
+                    relationships_created += 1
+                
+                # 4. Check for semantic similarity
+                else:
+                    # Get embedding for memory2
+                    embedding_result2 = llm_service.get_embeddings([memory2.content])
+                    if embedding_result2["success"]:
+                        # Calculate similarity
+                        similarity_score = self._calculate_similarity(
+                            memory1_embedding, embedding_result2["embeddings"][0]
+                        )
+                        
+                        if similarity_score > 0.7:  # High similarity threshold
+                            self._create_relationship(
+                                session, memory1, memory2, "RELATES_TO", 
+                                {"similarity_score": similarity_score, "connection_type": "semantic"}, user_id
+                            )
+                            relationships_created += 1
+                
+                # 5. Check for temporal sequence (same topic, different times)
+                if self._detect_temporal_sequence(memory1, memory2):
+                    earlier, later = (memory1, memory2) if memory1.created_at < memory2.created_at else (memory2, memory1)
+                    self._create_relationship(
+                        session, earlier, later, "TEMPORAL_SEQUENCE", 
+                        {"sequence_type": "chronological", "temporal_gap": str(later.created_at - earlier.created_at)}, user_id
+                    )
+                    relationships_created += 1
+        
+        return relationships_created
+    
+    def _detect_contradiction(self, memory1, memory2) -> bool:
+        """Detect if two memories contradict each other"""
+        # Basic contradiction detection based on content analysis
+        # Could be enhanced with LLM-based analysis
+        
+        # Check if they are about similar topics but have conflicting content
+        memory1_tags = set(memory1.get_standardized_metadata().get("tags", []))
+        memory2_tags = set(memory2.get_standardized_metadata().get("tags", []))
+        
+        # If they share tags but have conflicting content, they might contradict
+        if memory1_tags & memory2_tags:  # Common tags
+            # Check for explicit contradiction indicators
+            contradiction_words = ["not", "never", "doesn't", "don't", "can't", "won't", "hate", "dislike"]
+            opposite_words = ["love", "like", "prefer", "enjoy"]
+            
+            content1_lower = memory1.content.lower()
+            content2_lower = memory2.content.lower()
+            
+            # Simple heuristic: if one contains contradiction words and the other doesn't
+            has_contradiction_1 = any(word in content1_lower for word in contradiction_words)
+            has_contradiction_2 = any(word in content2_lower for word in contradiction_words)
+            has_positive_1 = any(word in content1_lower for word in opposite_words)
+            has_positive_2 = any(word in content2_lower for word in opposite_words)
+            
+            return (has_contradiction_1 and has_positive_2) or (has_positive_1 and has_contradiction_2)
+        
+        return False
+    
+    def _detect_update_relationship(self, memory1, memory2) -> bool:
+        """Detect if one memory updates/supersedes another"""
+        # Check if memories are about the same topic but one is newer
+        memory1_tags = set(memory1.get_standardized_metadata().get("tags", []))
+        memory2_tags = set(memory2.get_standardized_metadata().get("tags", []))
+        
+        # Must have significant tag overlap and reasonable time difference
+        tag_overlap = len(memory1_tags & memory2_tags) / max(len(memory1_tags | memory2_tags), 1)
+        time_diff = abs((memory1.created_at - memory2.created_at).days)
+        
+        return tag_overlap > 0.5 and time_diff > 1  # Same topic, different days
+    
+    def _detect_support_relationship(self, memory1, memory2) -> bool:
+        """Detect if one memory supports/provides evidence for another"""
+        # Check if one memory provides evidence or context for another
+        memory1_tags = set(memory1.get_standardized_metadata().get("tags", []))
+        memory2_tags = set(memory2.get_standardized_metadata().get("tags", []))
+        
+        # Look for support indicators in content
+        support_words = ["because", "since", "due to", "as", "evidence", "proof", "shows", "indicates"]
+        
+        content1_lower = memory1.content.lower()
+        content2_lower = memory2.content.lower()
+        
+        has_support_1 = any(word in content1_lower for word in support_words)
+        has_support_2 = any(word in content2_lower for word in support_words)
+        
+        # If they share tags and one has support language
+        return bool(memory1_tags & memory2_tags) and (has_support_1 or has_support_2)
+    
+    def _detect_temporal_sequence(self, memory1, memory2) -> bool:
+        """Detect if memories form a temporal sequence"""
+        # Check if memories are related and form a time-based sequence
+        memory1_tags = set(memory1.get_standardized_metadata().get("tags", []))
+        memory2_tags = set(memory2.get_standardized_metadata().get("tags", []))
+        
+        # Must have some tag overlap and be from different times
+        tag_overlap = len(memory1_tags & memory2_tags) / max(len(memory1_tags | memory2_tags), 1)
+        time_diff_hours = abs((memory1.created_at - memory2.created_at).total_seconds()) / 3600
+        
+        return tag_overlap > 0.3 and 1 < time_diff_hours < 168  # Same topic, 1 hour to 1 week apart
+    
+    def _calculate_similarity(self, embedding1, embedding2) -> float:
+        """Calculate cosine similarity between two embeddings"""
+        import numpy as np
+        
+        # Convert to numpy arrays
+        a = np.array(embedding1)
+        b = np.array(embedding2)
+        
+        # Calculate cosine similarity
+        dot_product = np.dot(a, b)
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+            
+        return dot_product / (norm_a * norm_b)
+    
+    def _create_relationship(self, session, memory1, memory2, relationship_type: str, properties: dict, user_id: str):
+        """Create a relationship between two memories"""
+        rel_query = f"""
+        MATCH (m1:Memory {{memory_id: $memory1_id, user_id: $user_id}})
+        MATCH (m2:Memory {{memory_id: $memory2_id, user_id: $user_id}})
+        MERGE (m1)-[r:{relationship_type}]->(m2)
+        SET r += $properties,
+            r.created_at = datetime(),
+            r.user_id = $user_id
+        """
+        
+        session.run(
+            rel_query,
+            {
+                "memory1_id": str(memory1.id),
+                "memory2_id": str(memory2.id),
+                "user_id": user_id,
+                "properties": properties,
+            },
+        )
+
+    def _create_hint_based_relationships(
+        self, session, memory1, memory2, memory1_metadata, memory2_metadata, user_id: str
+    ) -> int:
+        """
+        Create relationships based on LLM-provided relationship hints.
+        
+        Returns the number of relationships created (0-2, since we check both directions).
+        """
+        relationships_created = 0
+        
+        # Check hints from memory1 about potential relationships
+        memory1_hints = memory1_metadata.get("relationship_hints", [])
+        memory2_hints = memory2_metadata.get("relationship_hints", [])
+        
+        # Map relationship hints to graph relationship types
+        hint_to_relationship = {
+            "contradicts": "CONTRADICTS",
+            "updates": "UPDATES", 
+            "relates_to": "RELATES_TO",
+            "supports": "SUPPORTS",
+            "temporal_sequence": "TEMPORAL_SEQUENCE"
+        }
+        
+        # Process hints from memory1 (memory1 -> memory2)
+        for hint in memory1_hints:
+            if hint in hint_to_relationship:
+                relationship_type = hint_to_relationship[hint]
+                properties = {
+                    "source": "llm_hint",
+                    "confidence": 0.8,  # High confidence since LLM provided the hint
+                    "hint_provided_by": str(memory1.id)
+                }
+                
+                # Add specific properties based on relationship type
+                if hint == "updates":
+                    properties.update({"supersedes": True, "temporal_relationship": True})
+                elif hint == "contradicts":
+                    properties.update({"conflict_detected": True, "requires_resolution": True})
+                elif hint == "supports":
+                    properties.update({"evidence_type": "supporting", "confidence_boost": True})
+                elif hint == "temporal_sequence":
+                    properties.update({"sequence_type": "chronological"})
+                elif hint == "relates_to":
+                    properties.update({"connection_type": "semantic"})
+                
+                self._create_relationship(session, memory1, memory2, relationship_type, properties, user_id)
+                relationships_created += 1
+        
+        # Process hints from memory2 (memory2 -> memory1) 
+        for hint in memory2_hints:
+            if hint in hint_to_relationship:
+                relationship_type = hint_to_relationship[hint]
+                properties = {
+                    "source": "llm_hint",
+                    "confidence": 0.8,
+                    "hint_provided_by": str(memory2.id)
+                }
+                
+                # Add specific properties based on relationship type
+                if hint == "updates":
+                    properties.update({"supersedes": True, "temporal_relationship": True})
+                elif hint == "contradicts":
+                    properties.update({"conflict_detected": True, "requires_resolution": True})
+                elif hint == "supports":
+                    properties.update({"evidence_type": "supporting", "confidence_boost": True})
+                elif hint == "temporal_sequence":
+                    properties.update({"sequence_type": "chronological"})
+                elif hint == "relates_to":
+                    properties.update({"connection_type": "semantic"})
+                
+                self._create_relationship(session, memory2, memory1, relationship_type, properties, user_id)
+                relationships_created += 1
+        
+        return relationships_created
 
     def close(self):
         """Close the Neo4j connection"""

@@ -15,17 +15,10 @@ class Memory(models.Model):
     content = models.TextField()
     metadata = models.JSONField(default=dict, blank=True)
 
-    # Store vector DB reference instead of actual embedding
-    vector_id = models.CharField(max_length=255, null=True, blank=True)
-
-    context = models.TextField(
-        blank=True, help_text="Context where this memory was mentioned"
-    )
-    connections = models.JSONField(
-        default=list, help_text="Broader topics this memory relates to"
-    )
-    search_tags = models.JSONField(
-        default=list, help_text="Searchable tags for this memory"
+    # Links to conversation chunks in Vector DB that led to this memory
+    conversation_chunk_ids = models.JSONField(
+        default=list, 
+        help_text="List of ConversationChunk IDs that led to this memory extraction"
     )
     
     # New fields for conflict resolution and temporal tracking
@@ -69,7 +62,6 @@ class Memory(models.Model):
         indexes = [
             models.Index(fields=["user_id"]),
             models.Index(fields=["created_at"]),
-            models.Index(fields=["vector_id"]),
             models.Index(fields=["user_id", "is_active"]),
             models.Index(fields=["fact_type", "is_active"]),
         ]
@@ -77,12 +69,91 @@ class Memory(models.Model):
     def __str__(self):
         return f"Memory {self.id} for user {self.user_id}"
 
-    def get_all_searchable_text(self):
-        """Get all text that should be searchable"""
+    def get_memory_text_for_graph(self):
+        """Get memory content and tags for graph storage - vector search now handled by conversation chunks"""
         searchable_parts = [self.content]
         searchable_parts.extend(self.metadata.get("tags", []))
-        searchable_parts.extend(self.connections)
-        searchable_parts.extend(self.search_tags)
-        if self.context:
-            searchable_parts.append(self.context)
         return " ".join(searchable_parts)
+    
+    def get_standardized_metadata(self):
+        """
+        Get standardized metadata structure focused on graph construction and memory reliability.
+        Returns metadata in the new simplified format for graph-enhanced architecture.
+        """
+        return {
+            "inference_level": self.metadata.get("inference_level", "stated"),
+            "evidence": self.metadata.get("evidence", ""),
+            "extraction_timestamp": self.metadata.get("extraction_timestamp", self.created_at.isoformat()),
+            "tags": self.metadata.get("tags", []),
+            "entity_type": self.metadata.get("entity_type", "general"),  # person, place, preference, skill, fact, etc.
+            "relationship_hints": self.metadata.get("relationship_hints", []),  # suggested relationship types
+            "model_used": self.metadata.get("model_used", "unknown"),
+            "extraction_source": self.metadata.get("extraction_source", "conversation")
+        }
+    
+    def update_metadata_to_standard_format(self):
+        """
+        Update metadata to use the new standardized format, removing redundant fields.
+        This helps migration from old to new format.
+        """
+        # Preserve essential fields, remove redundant ones
+        new_metadata = self.get_standardized_metadata()
+        
+        # Remove old fields that are now handled differently
+        old_fields_to_remove = ["context", "connections", "confidence"]
+        for field in old_fields_to_remove:
+            new_metadata.pop(field, None)
+            
+        # Add conversation chunk linkage if available
+        if hasattr(self, 'conversation_chunk_ids') and self.conversation_chunk_ids:
+            new_metadata["source_chunk_ids"] = self.conversation_chunk_ids
+            
+        self.metadata = new_metadata
+        return new_metadata
+
+
+class ConversationChunk(models.Model):
+    """
+    Stores original conversation text chunks for vector database storage and semantic search.
+    Each chunk represents a segment of user conversation that led to memory extraction.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.UUIDField()
+    content = models.TextField(help_text="Original conversation text chunk")
+    vector_id = models.CharField(
+        max_length=255, 
+        unique=True,
+        help_text="Vector database ID for this chunk's embedding"
+    )
+    timestamp = models.DateTimeField(
+        help_text="When this conversation segment occurred"
+    )
+    metadata = models.JSONField(
+        default=dict, 
+        blank=True,
+        help_text="Additional context: source info, session data, etc."
+    )
+    extracted_memory_ids = models.JSONField(
+        default=list,
+        help_text="List of Memory IDs that were extracted from this chunk"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["user_id"]),
+            models.Index(fields=["timestamp"]),
+            models.Index(fields=["vector_id"]),
+            models.Index(fields=["user_id", "timestamp"]),
+        ]
+
+    def __str__(self):
+        return f"ConversationChunk {self.id} for user {self.user_id}"
+
+    def get_conversation_preview(self, max_length=100):
+        """Get a preview of the conversation content"""
+        if len(self.content) <= max_length:
+            return self.content
+        return self.content[:max_length] + "..."

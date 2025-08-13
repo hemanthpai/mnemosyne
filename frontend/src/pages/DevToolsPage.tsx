@@ -458,9 +458,15 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                             retrievalResult.memories.length >
                                                 0 && (
                                                 <div className="mt-3">
-                                                    <p className="font-medium mb-2">
-                                                        Retrieved Memories:
-                                                    </p>
+                                                    <div className="flex justify-between items-center mb-2">
+                                                        <p className="font-medium">
+                                                            Retrieved Memories:
+                                                        </p>
+                                                        <div className="text-xs text-gray-500">
+                                                            <span className="mr-3">Score: <span className="bg-green-100 text-green-800 px-1 rounded">≥0.7</span> <span className="bg-yellow-100 text-yellow-800 px-1 rounded">≥0.5</span> <span className="bg-gray-100 text-gray-800 px-1 rounded">&lt;0.5</span></span>
+                                                            <span>Type: <span className="bg-blue-100 text-blue-800 px-1 rounded">direct</span> <span className="bg-purple-100 text-purple-800 px-1 rounded">semantic</span> <span className="bg-orange-100 text-orange-800 px-1 rounded">exp.</span></span>
+                                                        </div>
+                                                    </div>
                                                     <div className="space-y-2">
                                                         {retrievalResult.memories.map(
                                                             (memory, index) => (
@@ -471,17 +477,68 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                                                     }
                                                                     className="bg-white p-3 rounded border"
                                                                 >
-                                                                    <p className="text-sm text-gray-800">
-                                                                        {
-                                                                            memory.content
-                                                                        }
-                                                                    </p>
-                                                                    <p className="text-xs text-gray-500 mt-1">
-                                                                        Created:{" "}
-                                                                        {new Date(
-                                                                            memory.created_at
-                                                                        ).toLocaleString()}
-                                                                    </p>
+                                                                    <div className="flex justify-between items-start mb-2">
+                                                                        <p className="text-sm text-gray-800 flex-1">
+                                                                            {
+                                                                                memory.content
+                                                                            }
+                                                                        </p>
+                                                                        {memory.search_metadata && (
+                                                                            <div className="ml-3 flex flex-col items-end space-y-1">
+                                                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                                                    memory.search_metadata.search_score >= 0.7 
+                                                                                        ? 'bg-green-100 text-green-800'
+                                                                                        : memory.search_metadata.search_score >= 0.5
+                                                                                        ? 'bg-yellow-100 text-yellow-800'
+                                                                                        : 'bg-gray-100 text-gray-800'
+                                                                                }`}>
+                                                                                    Score: {memory.search_metadata.search_score}
+                                                                                </span>
+                                                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                                                    memory.search_metadata.search_type === 'direct' 
+                                                                                        ? 'bg-blue-100 text-blue-800'
+                                                                                        : memory.search_metadata.search_type === 'semantic'
+                                                                                        ? 'bg-purple-100 text-purple-800'
+                                                                                        : memory.search_metadata.search_type === 'experiential'
+                                                                                        ? 'bg-orange-100 text-orange-800'
+                                                                                        : 'bg-gray-100 text-gray-800'
+                                                                                }`}>
+                                                                                    {memory.search_metadata.search_type}
+                                                                                </span>
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="flex justify-between items-center text-xs text-gray-500">
+                                                                        <span>
+                                                                            Created:{" "}
+                                                                            {new Date(
+                                                                                memory.created_at
+                                                                            ).toLocaleString()}
+                                                                        </span>
+                                                                        {memory.search_metadata && (
+                                                                            <span className="text-gray-400">
+                                                                                Original: {memory.search_metadata.original_score} | 
+                                                                                Confidence: {memory.search_metadata.query_confidence}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    {memory.metadata?.tags && memory.metadata.tags.length > 0 && (
+                                                                        <div className="mt-2 flex flex-wrap gap-1">
+                                                                            {memory.metadata.tags.slice(0, 5).map((tag, tagIndex) => (
+                                                                                <span
+                                                                                    key={tagIndex}
+                                                                                    className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded"
+                                                                                >
+                                                                                    {tag}
+                                                                                </span>
+                                                                            ))}
+                                                                            {memory.metadata.tags.length > 5 && (
+                                                                                <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs rounded">
+                                                                                    +{memory.metadata.tags.length - 5} more
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             )
                                                         )}
@@ -515,6 +572,9 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                     memorable content
                                 </li>
                                 <li>
+                                    • Supports OpenAI, OpenAI-compatible (LM Studio), and Ollama endpoints
+                                </li>
+                                <li>
                                     • Stores extracted memories with embeddings
                                     for fast retrieval
                                 </li>
@@ -535,6 +595,12 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                 <li>
                                     • Returns ranked list of relevant memories
                                     along with a summary and context
+                                </li>
+                                <li>
+                                    • Displays search scores and types for debugging
+                                </li>
+                                <li>
+                                    • Applies quality filtering (default threshold: 0.35)
                                 </li>
                             </ul>
                         </div>

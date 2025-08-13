@@ -361,6 +361,9 @@ class RetrieveMemoriesView(APIView):
             )
 
             # Query LLM to generate search queries
+            logger.info("About to generate search queries with user prompt: %s", prompt)
+            logger.info("Using search system prompt length: %d characters", len(search_prompt))
+            
             llm_result = llm_service.query_llm(
                 prompt=prompt,
                 system_prompt=search_prompt,
@@ -448,6 +451,16 @@ class RetrieveMemoriesView(APIView):
                     "created_at": memory.created_at.isoformat(),
                     "updated_at": memory.updated_at.isoformat(),
                 }
+                
+                # Add search metadata if available
+                if hasattr(memory, '_search_score'):
+                    memory_data["search_metadata"] = {
+                        "search_score": round(memory._search_score, 3),
+                        "search_type": memory._search_type,
+                        "original_score": round(memory._original_score, 3),
+                        "query_confidence": round(memory._query_confidence, 3),
+                    }
+                
                 formatted_memories.append(memory_data)
 
             logger.info("Found %d relevant memories", len(formatted_memories))
@@ -464,6 +477,11 @@ class RetrieveMemoriesView(APIView):
                         "limit": limit,
                         "threshold": threshold,
                     },
+                    "debug_info": {
+                        "quality_filtering_applied": True,
+                        "improved_summarization": True,
+                        "raw_memory_count_before_filtering": len(relevant_memories) if 'relevant_memories' in locals() else 0
+                    }
                 }
             )
 

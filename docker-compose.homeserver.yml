@@ -50,6 +50,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - LLM_MODEL=${LLM_MODEL:-llama3.1:8b}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - GUNICORN_TIMEOUT=600
     depends_on:
       db:
         condition: service_healthy

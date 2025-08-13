@@ -14,6 +14,12 @@ export interface Memory {
     };
     created_at: string;
     updated_at: string;
+    search_metadata?: {
+        search_score: number;
+        search_type: string;
+        original_score: number;
+        query_confidence: number;
+    };
 }
 
 export interface LLMSettings {

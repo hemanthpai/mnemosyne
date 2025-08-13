@@ -53,7 +53,7 @@ MEMORY_SEARCH_FORMAT = {
                 "type": "string",
             },
         },
-        "required": ["search_query", "confidence"],
+        "required": ["search_query", "confidence", "search_type", "rationale"],
     },
 }
 
@@ -268,6 +268,10 @@ class LLMService:
                     attempt,
                     max_retries + 1,
                 )
+                
+                # Log full request data for debugging
+                import json
+                logger.info("Request data: %s", json.dumps(data, indent=2))
 
                 # Make the API call
                 response = requests.post(
@@ -442,7 +446,27 @@ class LLMService:
 
         if response_format:
             if isinstance(response_format, dict):
-                data["response_format"] = response_format
+                # For OpenAI API, wrap JSON schema in the proper format
+                # OpenAI requires root schema to be an object, so wrap arrays
+                schema = response_format
+                if response_format.get("type") == "array":
+                    schema = {
+                        "type": "object",
+                        "properties": {
+                            "data": response_format
+                        },
+                        "required": ["data"],
+                        "additionalProperties": False
+                    }
+                
+                data["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "response_schema",
+                        "strict": True,
+                        "schema": schema
+                    }
+                }
             elif response_format == "json":
                 data["response_format"] = {"type": "json_object"}
 
@@ -466,6 +490,18 @@ class LLMService:
                     and data["choices"][0]["message"].get("content")
                 ):
                     content = data["choices"][0]["message"]["content"]
+                    
+                    # For structured outputs, unwrap arrays that were wrapped in objects
+                    try:
+                        import json
+                        parsed_content = json.loads(content)
+                        if isinstance(parsed_content, dict) and "data" in parsed_content and len(parsed_content) == 1:
+                            # This looks like a wrapped array, unwrap it
+                            content = json.dumps(parsed_content["data"])
+                    except (json.JSONDecodeError, TypeError):
+                        # If parsing fails, keep original content
+                        pass
+                    
                     metadata = {
                         "usage": data.get("usage", {}),
                         "finish_reason": data["choices"][0].get("finish_reason"),

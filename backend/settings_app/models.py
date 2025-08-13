@@ -71,6 +71,12 @@ class LLMSettings(models.Model):
         default=0.5, help_text="Similarity threshold for interest searches"
     )
 
+    # Memory quality filtering
+    memory_quality_threshold = models.FloatField(
+        default=0.35,
+        help_text="Minimum score threshold for including memories in results (0.0-1.0). Memories below this score are filtered out.",
+    )
+
     # Memory extraction prompt
     memory_extraction_prompt = models.TextField(
         default="""You are a CRITICAL memory extraction system that captures user information for future AI assistant interactions. Your extraction quality DIRECTLY determines how well future assistants can help the user. If you fail to extract comprehensive memories, future assistants will lack crucial context about the user.

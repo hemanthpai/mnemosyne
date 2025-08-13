@@ -248,17 +248,36 @@ class MemorySearchService:
         return multipliers.get(search_type, 0.8)
 
     def _rank_and_filter_results(self, results: Dict, limit: int) -> List[Memory]:
-        """Enhanced ranking that considers semantic diversity"""
+        """Enhanced ranking that considers semantic diversity and score quality"""
+        from settings_app.models import LLMSettings
+        
+        settings = LLMSettings.get_settings()
+        
         # Sort by boosted score
         sorted_results = sorted(
             results.values(), key=lambda x: x["score"], reverse=True
         )
 
-        # Take top results but ensure diversity of search types
+        # Apply configurable quality threshold to filter out low-relevance results
+        quality_threshold = getattr(settings, 'memory_quality_threshold', 0.35)
+        high_quality_results = [
+            result for result in sorted_results 
+            if result["score"] >= quality_threshold
+        ]
+        
+        # If we have very few high-quality results, relax threshold slightly
+        if len(high_quality_results) < 3 and sorted_results:
+            relaxed_threshold = max(0.25, quality_threshold * 0.8)
+            high_quality_results = [
+                result for result in sorted_results 
+                if result["score"] >= relaxed_threshold
+            ]
+        
+        # Apply diversity filtering only to remaining high-quality results
         final_results = []
         type_counts = {}
 
-        for result in sorted_results:
+        for result in high_quality_results:
             search_type = result.get("search_type", "direct")
             type_count = type_counts.get(search_type, 0)
 
@@ -276,16 +295,24 @@ class MemorySearchService:
             if len(final_results) >= limit:
                 break
 
-        # Fetch and return Memory objects
+        # Fetch Memory objects and attach search metadata
         memory_ids = [r["memory_id"] for r in final_results]
         memories = Memory.objects.filter(id__in=memory_ids)
         memory_dict = {str(m.id): m for m in memories}
 
-        return [
-            memory_dict[r["memory_id"]]
-            for r in final_results
-            if r["memory_id"] in memory_dict
-        ]
+        # Attach search metadata to memories
+        enhanced_memories = []
+        for result in final_results:
+            if result["memory_id"] in memory_dict:
+                memory = memory_dict[result["memory_id"]]
+                # Add search metadata as temporary attributes
+                memory._search_score = result["score"]
+                memory._search_type = result.get("search_type", "unknown")
+                memory._original_score = result.get("original_score", result["score"])
+                memory._query_confidence = result.get("query_confidence", 1.0)
+                enhanced_memories.append(memory)
+        
+        return enhanced_memories
 
     def clear_cache(self):
         """Clear embedding cache (useful when settings change)"""

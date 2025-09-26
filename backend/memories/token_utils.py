@@ -110,15 +110,21 @@ class TokenCounter:
         total_input_tokens = prompt_tokens + input_tokens
         recommended_context = total_input_tokens + safety_margin
 
-        # Round up to common context sizes
-        common_sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
-
-        for size in common_sizes:
-            if recommended_context <= size:
-                return size
-
-        # If larger than common sizes, round up to next 32k boundary
-        return ((recommended_context + 32767) // 32768) * 32768
+        # Use more reasonable context sizes for memory extraction
+        # Most memory extraction tasks need much less than 32k tokens
+        if recommended_context <= 1024:
+            return 1024
+        elif recommended_context <= 2048:
+            return 2048
+        elif recommended_context <= 4096:
+            return 4096
+        elif recommended_context <= 8192:
+            return 8192
+        elif recommended_context <= 16384:
+            return 16384
+        else:
+            # For very large inputs, round up to 8K boundaries instead of 32K
+            return ((recommended_context + 8191) // 8192) * 8192
 
 
 def get_token_counts_for_prompts(settings) -> dict:

@@ -9,7 +9,7 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory }) => {
     const tags = memory.metadata?.tags || [];
     const confidence = memory.metadata?.confidence || 0;
     const context = memory.metadata?.context || "";
-    const connections = memory.metadata?.connections || [];
+    // const connections = memory.metadata?.connections || []; // Removed in backend optimization
 
     // Categorize tags for better display
     const domainTags = tags.filter((tag) =>
@@ -65,12 +65,7 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory }) => {
                     </div>
                 )}
 
-                {connections.length > 0 && (
-                    <div>
-                        <span className="font-medium">Related to:</span>{" "}
-                        {connections.join(", ")}
-                    </div>
-                )}
+                {/* Connections field removed in backend optimization */}
 
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
                     <div className="flex items-center space-x-4">

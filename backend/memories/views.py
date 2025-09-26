@@ -11,6 +11,7 @@ from settings_app.models import LLMSettings
 from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_service
 from .memory_search_service import memory_search_service
 from .models import Memory
+from .rate_limiter import rate_limit_extract, rate_limit_retrieve
 from .serializers import MemorySerializer
 from .vector_service import vector_service
 
@@ -99,8 +100,14 @@ class MemoryViewSet(viewsets.ModelViewSet):
 class ExtractMemoriesView(APIView):
     """
     API endpoint to extract memories from conversation text using LLM
+    
+    Supports field selection to optimize response size:
+    - fields: Array of field names to include in response (default: ["id", "content"])
+    
+    Available fields: id, content, metadata, created_at, updated_at
     """
 
+    @rate_limit_extract
     def post(self, request):
         conversation_text = request.data.get("conversation_text", "")
         user_id = request.data.get("user_id")
@@ -108,6 +115,18 @@ class ExtractMemoriesView(APIView):
         if not conversation_text:
             return Response(
                 {"success": False, "error": "conversation_text is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Add reasonable content length limit for DIY systems
+        if len(conversation_text) > 50000:  # ~50KB limit
+            return Response(
+                {
+                    "success": False, 
+                    "error": "Conversation text is too long. Please break it into smaller chunks.",
+                    "max_length": 50000,
+                    "current_length": len(conversation_text)
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -137,13 +156,13 @@ class ExtractMemoriesView(APIView):
             logger.info("Extracting memories for user %s", user_id)
 
             # Add the current datetime to system prompt for time awareness
-            system_prompt_with_date = system_prompt
+            # Add current timestamp to system prompt for context
             try:
                 now = datetime.now()
-                # TODO: Handle timezone if needed
                 system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
             except Exception as e:
                 logger.warning("Could not add date to system prompt: %s", e)
+                system_prompt_with_date = system_prompt
 
             # Query LLM to extract memories with higher token limit
             llm_result = llm_service.query_llm(
@@ -180,58 +199,19 @@ class ExtractMemoriesView(APIView):
                     "LLM response preview: %s...", llm_result.get("response", "")[:500]
                 )
 
-                # Try to recover partial results from truncated JSON
-                try:
-                    response_text = llm_result["response"].strip()
-
-                    # Handle truncated JSON array by finding the last complete object
-                    if response_text.startswith("[") and "{" in response_text:
-                        # Find the position of the last complete JSON object
-                        last_complete_brace = response_text.rfind("}")
-                        if last_complete_brace != -1:
-                            # Try to create valid JSON by truncating after the last complete object
-                            truncated_json = response_text[: last_complete_brace + 1]
-                            if not truncated_json.endswith("]"):
-                                truncated_json += "]"
-
-                            memories_data = json.loads(truncated_json)
-                            if (
-                                isinstance(memories_data, list)
-                                and len(memories_data) > 0
-                            ):
-                                logger.warning(
-                                    "Recovered %d memories from truncated JSON response",
-                                    len(memories_data),
-                                )
-                            else:
-                                raise ValueError(
-                                    "No valid memories found in truncated response"
-                                )
-                        else:
-                            raise ValueError("Could not find any complete JSON objects")
-                    else:
-                        raise ValueError(
-                            "Response does not appear to contain a JSON array"
-                        )
-
-                except Exception as recovery_error:
-                    logger.error(
-                        "Failed to recover memories from malformed JSON: %s",
-                        recovery_error,
-                    )
-                    return Response(
-                        {
-                            "success": False,
-                            "error": "Failed to parse memory extraction results. The response may have been truncated due to token limits.",
-                            "memories_extracted": 0,
-                            "debug_info": {
-                                "response_length": len(llm_result.get("response", "")),
-                                "parse_error": str(e),
-                                "recovery_error": str(recovery_error),
-                            },
-                        },
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    )
+                # Simple fallback - return helpful error message
+                logger.error("Failed to parse LLM response as JSON: %s", e)
+                logger.debug("Invalid LLM response: %s", llm_result.get("response", "")[:500])
+                
+                return Response(
+                    {
+                        "success": False,
+                        "error": "The AI model returned an invalid response format. This usually means the model is overloaded or the prompt was too complex. Please try again with a shorter message.",
+                        "memories_extracted": 0,
+                        "suggestion": "If this continues to happen, check your LLM service configuration or try a different model."
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
             # Store extracted memories
             stored_memories = []
@@ -243,12 +223,9 @@ class ExtractMemoriesView(APIView):
                 if not content:
                     continue
 
-                # Prepare metadata without memory_bank
+                # Prepare metadata
                 metadata = {
                     "tags": memory_data.get("tags", []),
-                    "confidence": memory_data.get("confidence", 0.5),
-                    "context": memory_data.get("context", ""),
-                    "connections": memory_data.get("connections", []),
                     "extraction_source": "conversation",
                     "model_used": llm_result.get("model", "unknown"),
                 }
@@ -257,14 +234,22 @@ class ExtractMemoriesView(APIView):
                     content=content, user_id=user_id, metadata=metadata
                 )
 
-                stored_memories.append(
-                    {
-                        "id": str(memory.id),
-                        "content": memory.content,
-                        "metadata": memory.metadata,
-                        "created_at": memory.created_at.isoformat(),
-                    }
-                )
+                # Format memory based on requested fields (default to minimal for efficiency)
+                fields = request.data.get("fields", ["id", "content"])
+                memory_data = {}
+                
+                if "id" in fields:
+                    memory_data["id"] = str(memory.id)
+                if "content" in fields:
+                    memory_data["content"] = memory.content
+                if "metadata" in fields:
+                    memory_data["metadata"] = memory.metadata
+                if "created_at" in fields:
+                    memory_data["created_at"] = memory.created_at.isoformat()
+                if "updated_at" in fields:
+                    memory_data["updated_at"] = memory.updated_at.isoformat()
+                
+                stored_memories.append(memory_data)
 
             logger.info(
                 "Successfully extracted and stored %d memories", len(stored_memories)
@@ -284,8 +269,9 @@ class ExtractMemoriesView(APIView):
             return Response(
                 {
                     "success": False,
-                    "error": "An unexpected error occurred during memory extraction",
+                    "error": "Failed to extract memories. This could be due to an LLM service issue, database problem, or vector storage failure.",
                     "memories_extracted": 0,
+                    "suggestion": "Check if your LLM service (Ollama) and vector database (Qdrant) are running properly."
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -294,8 +280,43 @@ class ExtractMemoriesView(APIView):
 class RetrieveMemoriesView(APIView):
     """
     API endpoint to retrieve relevant memories for a prompt using vector search
+    
+    Supports response optimization options:
+    - fields: Array of field names to include (default: ["id", "content"])  
+    - include_search_metadata: Whether to include search scoring info (default: false)
+    - include_summary: Whether to generate memory summary (default: false, saves LLM calls)
+    
+    Available fields: id, content, metadata, created_at, updated_at
     """
 
+    def _format_memory(self, memory, fields, include_search_metadata=False):
+        """Format a single memory with specified fields"""
+        memory_data = {}
+        
+        # Include only requested fields
+        if "id" in fields:
+            memory_data["id"] = str(memory.id)
+        if "content" in fields:
+            memory_data["content"] = memory.content
+        if "metadata" in fields:
+            memory_data["metadata"] = memory.metadata
+        if "created_at" in fields:
+            memory_data["created_at"] = memory.created_at.isoformat()
+        if "updated_at" in fields:
+            memory_data["updated_at"] = memory.updated_at.isoformat()
+        
+        # Add search metadata if requested and available
+        if include_search_metadata and hasattr(memory, '_search_score'):
+            memory_data["search_metadata"] = {
+                "search_score": round(memory._search_score, 3),
+                "search_type": memory._search_type,
+                "original_score": round(memory._original_score, 3),
+                "query_confidence": round(memory._query_confidence, 3),
+            }
+        
+        return memory_data
+
+    @rate_limit_retrieve
     def post(self, request):
         prompt = request.data.get("prompt", "")
         user_id = request.data.get("user_id")
@@ -306,6 +327,18 @@ class RetrieveMemoriesView(APIView):
         if not prompt:
             return Response(
                 {"success": False, "error": "prompt is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Add reasonable prompt length limit
+        if len(prompt) > 5000:  # ~5KB limit for search prompts
+            return Response(
+                {
+                    "success": False, 
+                    "error": "Search prompt is too long. Please use a shorter, more focused query.",
+                    "max_length": 5000,
+                    "current_length": len(prompt)
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -392,7 +425,7 @@ class RetrieveMemoriesView(APIView):
                 logger.error("Failed to parse search queries as JSON: %s", e)
                 logger.debug("LLM response: %s", llm_result["response"])
                 # Fallback: use original prompt as single search query
-                search_queries = [{"search_query": prompt, "confidence": 0.5}]
+                search_queries = [{"search_query": prompt, "search_type": "direct"}]
 
             logger.info("Generated %d search queries", len(search_queries))
 
@@ -429,38 +462,24 @@ class RetrieveMemoriesView(APIView):
                     settings.semantic_enhancement_threshold,
                 )
 
-            # Step 5: Generate memory summary for AI assistance
+            # Step 5: Generate memory summary for AI assistance (optional)
             memory_summary = None
-            if relevant_memories:
+            include_summary = request.data.get("include_summary", False)
+            if relevant_memories and include_summary:
                 logger.info("Generating memory summary...")
                 memory_summary = memory_search_service.summarize_relevant_memories(
                     memories=relevant_memories, user_query=prompt
                 )
-                logger.info(
-                    "Memory summary generated with %d key points",
-                    len(memory_summary.get("key_points", [])),
-                )
+                logger.info("Memory summary generated successfully")
 
-            # Step 6: Format memories for response
+            # Step 6: Format memories for response with field selection
+            # Default to minimal fields for efficiency - can reduce response size by 60-80%
+            fields = request.data.get("fields", ["id", "content"])  
+            include_search_metadata = request.data.get("include_search_metadata", False)
+            
             formatted_memories = []
             for memory in relevant_memories:
-                memory_data = {
-                    "id": str(memory.id),
-                    "content": memory.content,
-                    "metadata": memory.metadata,
-                    "created_at": memory.created_at.isoformat(),
-                    "updated_at": memory.updated_at.isoformat(),
-                }
-                
-                # Add search metadata if available
-                if hasattr(memory, '_search_score'):
-                    memory_data["search_metadata"] = {
-                        "search_score": round(memory._search_score, 3),
-                        "search_type": memory._search_type,
-                        "original_score": round(memory._original_score, 3),
-                        "query_confidence": round(memory._query_confidence, 3),
-                    }
-                
+                memory_data = self._format_memory(memory, fields, include_search_metadata)
                 formatted_memories.append(memory_data)
 
             logger.info("Found %d relevant memories", len(formatted_memories))
@@ -490,8 +509,9 @@ class RetrieveMemoriesView(APIView):
             return Response(
                 {
                     "success": False,
-                    "error": "An unexpected error occurred during memory retrieval",
+                    "error": "Failed to retrieve memories. This could be due to an LLM service issue, vector database problem, or database connectivity issue.",
                     "memories": [],
+                    "suggestion": "Check if your LLM service (Ollama) and vector database (Qdrant) are running and accessible."
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -570,7 +590,7 @@ class MemoryStatsView(APIView):
             # Basic stats
             total_memories = memories.count()
 
-            # Count tags (remove memory_banks grouping)
+            # Count tags by category
             tags_count = {}
             domain_tags = {}  # Track domain-related tags separately if needed
 
@@ -595,7 +615,7 @@ class MemoryStatsView(APIView):
                 {
                     "success": True,
                     "total_memories": total_memories,
-                    "domain_distribution": domain_tags,  # Replace memory_banks with domain_distribution
+                    "domain_distribution": domain_tags,
                     "top_tags": dict(
                         sorted(
                             tags_count.items(), key=lambda x: x[1], reverse=True

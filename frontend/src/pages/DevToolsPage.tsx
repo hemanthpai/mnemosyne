@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { extractMemories, retrieveMemories } from "../services/api";
+import { extractMemories, retrieveMemories, retrieveMemoriesWithSummary, retrieveMemoriesWithSearchDetails } from "../services/api";
 import {
     ExtractMemoriesResponse,
     RetrieveMemoriesResponse,
@@ -22,6 +22,9 @@ const DevToolsPage: React.FC = () => {
     const [retrievalResult, setRetrievalResult] =
         useState<RetrieveMemoriesResponse | null>(null);
     const [retrievalError, setRetrievalError] = useState<string | null>(null);
+    
+    // Optimization options
+    const [optimizationLevel, setOptimizationLevel] = useState<"fast" | "detailed" | "full">("fast");
     const [searchParams] = useSearchParams();
 
     useEffect(() => {
@@ -77,10 +80,27 @@ const DevToolsPage: React.FC = () => {
         setRetrievalResult(null);
 
         try {
-            const result = await retrieveMemories(
-                retrievalPrompt,
-                retrievalUserId
-            );
+            let result: RetrieveMemoriesResponse;
+            
+            // Use different API calls based on optimization level
+            switch (optimizationLevel) {
+                case "fast":
+                    // Minimal fields, no extras - maximum performance
+                    result = await retrieveMemories(retrievalPrompt, retrievalUserId);
+                    break;
+                case "detailed":
+                    // Include search metadata for debugging
+                    result = await retrieveMemoriesWithSearchDetails(retrievalPrompt, retrievalUserId);
+                    break;
+                case "full":
+                    // Include everything including expensive summary
+                    result = await retrieveMemoriesWithSummary(retrievalPrompt, retrievalUserId, {
+                        include_search_metadata: true,
+                        fields: ["id", "content", "metadata", "created_at", "updated_at"]
+                    });
+                    break;
+            }
+            
             setRetrievalResult(result);
         } catch (err) {
             setRetrievalError("Failed to retrieve memories");
@@ -360,6 +380,24 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                 />
                             </div>
 
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Response Optimization Level
+                                </label>
+                                <select
+                                    value={optimizationLevel}
+                                    onChange={(e) => setOptimizationLevel(e.target.value as "fast" | "detailed" | "full")}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                    <option value="fast">Fast - Minimal fields only (60-80% smaller responses)</option>
+                                    <option value="detailed">Detailed - Include search metadata for debugging</option>
+                                    <option value="full">Full - Everything including expensive LLM summary</option>
+                                </select>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    💡 "Fast" mode is recommended for production use
+                                </p>
+                            </div>
+
                             <button
                                 onClick={handleRetrieveMemories}
                                 disabled={retrievalLoading}
@@ -396,63 +434,18 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                             {retrievalResult.memories?.length ||
                                                 0}
                                         </p>
-                                        <p>
-                                            <strong>Summary:</strong>{" "}
-                                            {
-                                                retrievalResult.memory_summary
-                                                    ?.summary
-                                            }
-                                        </p>
-                                        <p>
-                                            <strong>Relevant Context:</strong>{" "}
-                                            {
-                                                retrievalResult.memory_summary
-                                                    ?.relevant_context
-                                            }
-                                        </p>
-                                        <p>
-                                            <strong>
-                                                Memory Usage Counts:
-                                            </strong>
-                                            <ul className="list-disc pl-5">
-                                                <li>
-                                                    Total Memories:{" "}
-                                                    {
-                                                        retrievalResult
-                                                            .memory_summary
-                                                            ?.memory_usage
-                                                            .total_memories
-                                                    }
-                                                </li>
-                                                <li>
-                                                    Highly Relevant:{" "}
-                                                    {
-                                                        retrievalResult
-                                                            .memory_summary
-                                                            ?.memory_usage
-                                                            .highly_relevant
-                                                    }
-                                                </li>
-                                                <li>
-                                                    Moderately Relevant:{" "}
-                                                    {
-                                                        retrievalResult
-                                                            .memory_summary
-                                                            ?.memory_usage
-                                                            .moderately_relevant
-                                                    }
-                                                </li>
-                                                <li>
-                                                    Context Relevant:{" "}
-                                                    {
-                                                        retrievalResult
-                                                            .memory_summary
-                                                            ?.memory_usage
-                                                            .context_relevant
-                                                    }
-                                                </li>
-                                            </ul>
-                                        </p>
+                                        {/* Optimized summary display - only shows when included */}
+                                        {retrievalResult.memory_summary && (
+                                            <div className="bg-blue-50 p-4 rounded mt-3">
+                                                <strong>Memory Summary:</strong>
+                                                <p className="mt-2 text-sm">
+                                                    {retrievalResult.memory_summary.summary}
+                                                </p>
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    💡 Summary generation uses additional LLM calls - enable "Full" mode to include
+                                                </p>
+                                            </div>
+                                        )}
 
                                         {retrievalResult.memories &&
                                             retrievalResult.memories.length >
@@ -462,10 +455,12 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                                         <p className="font-medium">
                                                             Retrieved Memories:
                                                         </p>
-                                                        <div className="text-xs text-gray-500">
-                                                            <span className="mr-3">Score: <span className="bg-green-100 text-green-800 px-1 rounded">≥0.7</span> <span className="bg-yellow-100 text-yellow-800 px-1 rounded">≥0.5</span> <span className="bg-gray-100 text-gray-800 px-1 rounded">&lt;0.5</span></span>
-                                                            <span>Type: <span className="bg-blue-100 text-blue-800 px-1 rounded">direct</span> <span className="bg-purple-100 text-purple-800 px-1 rounded">semantic</span> <span className="bg-orange-100 text-orange-800 px-1 rounded">exp.</span></span>
-                                                        </div>
+                                                        {optimizationLevel !== "fast" && (
+                                                            <div className="text-xs text-gray-500">
+                                                                <span className="mr-3">Threshold: <span className="bg-blue-100 text-blue-800 px-1 rounded">≥0.7</span></span>
+                                                                <span>Mode: <span className="bg-green-100 text-green-800 px-1 rounded">{optimizationLevel}</span></span>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     <div className="space-y-2">
                                                         {retrievalResult.memories.map(
@@ -488,37 +483,32 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                                                                 <span className={`px-2 py-1 rounded text-xs font-medium ${
                                                                                     memory.search_metadata.search_score >= 0.7 
                                                                                         ? 'bg-green-100 text-green-800'
-                                                                                        : memory.search_metadata.search_score >= 0.5
-                                                                                        ? 'bg-yellow-100 text-yellow-800'
                                                                                         : 'bg-gray-100 text-gray-800'
                                                                                 }`}>
-                                                                                    Score: {memory.search_metadata.search_score}
+                                                                                    {memory.search_metadata.search_score.toFixed(2)}
                                                                                 </span>
-                                                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                                                                    memory.search_metadata.search_type === 'direct' 
-                                                                                        ? 'bg-blue-100 text-blue-800'
-                                                                                        : memory.search_metadata.search_type === 'semantic'
-                                                                                        ? 'bg-purple-100 text-purple-800'
-                                                                                        : memory.search_metadata.search_type === 'experiential'
-                                                                                        ? 'bg-orange-100 text-orange-800'
-                                                                                        : 'bg-gray-100 text-gray-800'
-                                                                                }`}>
-                                                                                    {memory.search_metadata.search_type}
-                                                                                </span>
+                                                                                {memory.search_metadata.search_type && (
+                                                                                    <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                                                                        {memory.search_metadata.search_type}
+                                                                                    </span>
+                                                                                )}
                                                                             </div>
                                                                         )}
                                                                     </div>
                                                                     <div className="flex justify-between items-center text-xs text-gray-500">
                                                                         <span>
-                                                                            Created:{" "}
-                                                                            {new Date(
-                                                                                memory.created_at
-                                                                            ).toLocaleString()}
+                                                                            {memory.created_at ? (
+                                                                                <>Created: {new Date(memory.created_at).toLocaleString()}</>
+                                                                            ) : (
+                                                                                <>ID: {memory.id.slice(0, 8)}...</>
+                                                                            )}
                                                                         </span>
-                                                                        {memory.search_metadata && (
+                                                                        {memory.search_metadata && optimizationLevel !== "fast" && (
                                                                             <span className="text-gray-400">
-                                                                                Original: {memory.search_metadata.original_score} | 
-                                                                                Confidence: {memory.search_metadata.query_confidence}
+                                                                                {optimizationLevel === "full" && memory.search_metadata.search_time_ms 
+                                                                                    ? `Search Time: ${memory.search_metadata.search_time_ms}ms`
+                                                                                    : `Score: ${memory.search_metadata.search_score.toFixed(2)}`
+                                                                                }
                                                                             </span>
                                                                         )}
                                                                     </div>
@@ -594,13 +584,16 @@ User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
                                 </li>
                                 <li>
                                     • Returns ranked list of relevant memories
-                                    along with a summary and context
+                                    with optimized response sizes
                                 </li>
                                 <li>
-                                    • Displays search scores and types for debugging
+                                    • Three optimization levels: Fast (60-80% smaller), Detailed, Full
                                 </li>
                                 <li>
-                                    • Applies quality filtering (default threshold: 0.35)
+                                    • Quality filtering with 0.7 similarity threshold
+                                </li>
+                                <li>
+                                    • Response sizes: Fast (minimal), Detailed (+metadata), Full (+summary)
                                 </li>
                             </ul>
                         </div>

@@ -27,17 +27,11 @@ def serve_react_static(request, path):
             os.path.join(settings.BASE_DIR, "../frontend/build", path)
         )
 
-    print(f"DEBUG: Looking for file: {file_path}")
-    print(f"DEBUG: File exists: {os.path.exists(file_path)}")
-
     if os.path.exists(file_path) and os.path.isfile(file_path):
         # Get the correct MIME type
         content_type, _ = mimetypes.guess_type(file_path)
-        print(f"DEBUG: Serving file with content type: {content_type}")
         response = FileResponse(open(file_path, "rb"), content_type=content_type)
         return response
-
-    print(f"DEBUG: File not found: {file_path}")
     raise Http404("File not found")
 
 

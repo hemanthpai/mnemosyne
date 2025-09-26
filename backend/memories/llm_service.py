@@ -10,7 +10,7 @@ from .token_utils import TokenCounter  # Add this import
 
 logger = logging.getLogger(__name__)
 
-# Define format schemas
+# Define format schemas - optimized for efficiency
 MEMORY_EXTRACTION_FORMAT = {
     "type": "array",
     "items": {
@@ -21,14 +21,8 @@ MEMORY_EXTRACTION_FORMAT = {
                 "type": "array",
                 "items": {"type": "string"},
             },
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "context": {"type": "string"},
-            "connections": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
         },
-        "required": ["content", "tags", "confidence"],
+        "required": ["content", "tags"],
     },
 }
 
@@ -38,7 +32,6 @@ MEMORY_SEARCH_FORMAT = {
         "type": "object",
         "properties": {
             "search_query": {"type": "string"},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "search_type": {
                 "type": "string",
                 "enum": [
@@ -49,11 +42,8 @@ MEMORY_SEARCH_FORMAT = {
                     "interest",
                 ],
             },
-            "rationale": {
-                "type": "string",
-            },
         },
-        "required": ["search_query", "confidence", "search_type", "rationale"],
+        "required": ["search_query", "search_type"],
     },
 }
 
@@ -82,26 +72,14 @@ MEMORY_SUMMARY_FORMAT = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
-        "key_points": {"type": "array", "items": {"type": "string"}},
-        "relevant_context": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "memory_usage": {
-            "type": "object",
-            "properties": {
-                "total_memories": {"type": "integer"},
-                "highly_relevant": {"type": "integer"},
-                "moderately_relevant": {"type": "integer"},
-                "context_relevant": {"type": "integer"},
-            },
-        },
+        "relevant_count": {"type": "integer"},
+        "total_provided": {"type": "integer"},
+        "key_insights": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
     },
-    "required": [
-        "summary",
-        "key_points",
-        "relevant_context",
-        "confidence",
-        "memory_usage",
-    ],
+    "required": ["summary", "relevant_count", "total_provided", "key_insights"],
 }
 
 
@@ -139,11 +117,11 @@ class LLMService:
 
                 self._settings = LLMSettings.get_settings()
                 self._settings_loaded = True
-                print("LLM settings loaded from database")
+                logger.info("LLM settings loaded from database")
 
         except Exception as e:
-            print(f"Could not load LLM settings from database: {e}")
-            print("Using environment variables and defaults")
+            logger.warning("Could not load LLM settings from database: %s", e)
+            logger.info("Using environment variables and defaults")
 
             # Create a fallback settings object from environment variables
             from types import SimpleNamespace
@@ -334,7 +312,7 @@ class LLMService:
                 else:
                     return {
                         "success": False,
-                        "error": "LLM API request timed out after multiple retries",
+                        "error": f"LLM API request timed out after {max_retries + 1} attempts. Check if your LLM service (e.g., Ollama) is running and responsive.",
                         "response": "",
                         "model": model,
                     }
@@ -351,14 +329,14 @@ class LLMService:
                 else:
                     return {
                         "success": False,
-                        "error": f"Unexpected error after {max_retries} attempts: {str(e)}",
+                        "error": f"Failed to connect to LLM service after {max_retries + 1} attempts: {str(e)}. Verify your LLM service URL and network connectivity.",
                         "response": "",
                         "model": model,
                     }
 
         return {
             "success": False,
-            "error": f"LLM query failed after {max_retries} attempts",
+            "error": f"LLM query failed after {max_retries + 1} attempts due to repeated errors",
             "response": "",
             "model": model,
         }

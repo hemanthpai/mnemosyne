@@ -51,6 +51,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "memories.security.SecurityHeadersMiddleware",  # Add security headers
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -164,3 +165,31 @@ LOGGING = {
         },
     },
 }
+
+# Rate Limiting Configuration (DIY-friendly defaults)
+# Adjust these values based on your server capacity and usage patterns
+
+# Memory extraction rate limits (more expensive operations)
+RATE_LIMIT_EXTRACT_PER_MINUTE = int(os.environ.get('RATE_LIMIT_EXTRACT_PER_MINUTE', 20))
+
+# Memory retrieval rate limits (lighter operations)  
+RATE_LIMIT_RETRIEVE_PER_MINUTE = int(os.environ.get('RATE_LIMIT_RETRIEVE_PER_MINUTE', 60))
+
+# Security Configuration (DIY-friendly)
+# Optional API keys for additional protection (comma-separated list)
+MNEMOSYNE_API_KEYS = [
+    key.strip() for key in os.environ.get('MNEMOSYNE_API_KEYS', '').split(',') if key.strip()
+]
+
+# Security headers and HTTPS settings
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+
+# For production with HTTPS, uncomment these:
+# SECURE_SSL_REDIRECT = True
+# SECURE_HSTS_SECONDS = 31536000
+# SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+# SECURE_HSTS_PRELOAD = True
+# SESSION_COOKIE_SECURE = True
+# CSRF_COOKIE_SECURE = True

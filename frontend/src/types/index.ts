@@ -16,9 +16,11 @@ export interface Memory {
     updated_at: string;
     search_metadata?: {
         search_score: number;
-        search_type: string;
-        original_score: number;
-        query_confidence: number;
+        search_type?: string;
+        search_time_ms?: number;
+        // Legacy fields - kept for backward compatibility
+        original_score?: number;
+        query_confidence?: number;
     };
 }
 
@@ -43,14 +45,15 @@ export interface LLMSettings {
     llm_top_k: number;
     llm_max_tokens: number;
     
-    // Search Configuration
+    // Search Configuration (Optimized - simplified from multiple thresholds)
     enable_semantic_connections: boolean;
     semantic_enhancement_threshold: number;
-    search_threshold_direct: number;
-    search_threshold_semantic: number;
-    search_threshold_experiential: number;
-    search_threshold_contextual: number;
-    search_threshold_interest: number;
+    // Legacy threshold fields - kept for backward compatibility but not used
+    search_threshold_direct?: number;
+    search_threshold_semantic?: number;
+    search_threshold_experiential?: number;
+    search_threshold_contextual?: number;
+    search_threshold_interest?: number;
     
     // Prompts
     memory_extraction_prompt: string;
@@ -72,6 +75,16 @@ export interface ApiResponse<T> {
 export interface ExtractMemoriesRequest {
     conversation_text: string;
     user_id: string;
+    fields?: string[];
+}
+
+export interface RetrieveMemoriesRequestOptions {
+    fields?: string[];
+    include_search_metadata?: boolean;
+    include_summary?: boolean;
+    limit?: number;
+    threshold?: number;
+    // boosted_threshold removed in backend optimization
 }
 
 export interface ExtractMemoriesResponse {
@@ -87,15 +100,6 @@ export interface RetrieveMemoriesRequest {
 
 export interface MemorySummary {
     summary: string;
-    key_points: string[];
-    relevant_context: string;
-    confidence: number;
-    memory_usage: {
-        total_memories: number;
-        highly_relevant: number;
-        moderately_relevant: number;
-        context_relevant: number;
-    };
 }
 
 export interface RetrieveMemoriesResponse {

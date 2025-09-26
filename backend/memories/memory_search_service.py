@@ -1,5 +1,6 @@
 import json
 import logging
+from functools import lru_cache
 from typing import Any, Dict, List
 
 from .llm_service import llm_service
@@ -13,7 +14,16 @@ class MemorySearchService:
     """Optimized memory search with caching and batch operations"""
 
     def __init__(self):
-        self.embedding_cache = {}  # Simple in-memory cache
+        # Use LRU cache to prevent unbounded memory growth
+        # Cache up to 1000 embeddings (suitable for DIY/personal use)
+        self._get_cached_embedding = lru_cache(maxsize=1000)(self._get_embedding)
+
+    def _get_embedding(self, text: str) -> List[float]:
+        """Get embedding for text (cached with LRU)"""
+        embedding_result = llm_service.get_embeddings([text])
+        if not embedding_result["success"]:
+            raise ValueError(f"Failed to generate embedding: {embedding_result['error']}")
+        return embedding_result["embeddings"][0]
 
     def store_memory_with_embedding(
         self, content: str, user_id: str, metadata: Dict[str, Any]
@@ -82,19 +92,12 @@ class MemorySearchService:
         Returns:
             List[Memory]: List of relevant memories ordered by similarity
         """
-        # Get query embedding (with caching)
-        cache_key = f"embedding:{hash(query)}"
-        if cache_key in self.embedding_cache:
-            query_embedding = self.embedding_cache[cache_key]
-        else:
-            embedding_result = llm_service.get_embeddings([query])
-            if not embedding_result["success"]:
-                logger.error(
-                    "Failed to generate query embedding: %s", embedding_result["error"]
-                )
-                return []
-            query_embedding = embedding_result["embeddings"][0]
-            self.embedding_cache[cache_key] = query_embedding
+        # Get query embedding (with LRU caching)
+        try:
+            query_embedding = self._get_cached_embedding(query)
+        except ValueError as e:
+            logger.error("Failed to generate query embedding: %s", e)
+            return []
 
         # Search vector DB
         vector_results = vector_service.search_similar(
@@ -138,7 +141,7 @@ class MemorySearchService:
 
         for search_item in search_queries:
             search_query = search_item.get("search_query", "")
-            query_confidence = search_item.get("confidence", 0.5)
+            query_confidence = 0.8  # Default confidence for simplified schema
             search_type = search_item.get("search_type", "direct")
 
             if not search_query:
@@ -150,16 +153,11 @@ class MemorySearchService:
             )
 
             for variation in search_variations:
-                cache_key = f"embedding:{hash(variation)}"
-                if cache_key in self.embedding_cache:
-                    query_embedding = self.embedding_cache[cache_key]
-                else:
-                    embedding_result = llm_service.get_embeddings([variation])
-                    if embedding_result["success"]:
-                        query_embedding = embedding_result["embeddings"][0]
-                        self.embedding_cache[cache_key] = query_embedding
-                    else:
-                        continue
+                try:
+                    query_embedding = self._get_cached_embedding(variation)
+                except ValueError:
+                    # Skip this variation if embedding fails
+                    continue
 
                 # Search with different thresholds based on search type
                 search_threshold = self._get_threshold_for_search_type(search_type)
@@ -316,8 +314,12 @@ class MemorySearchService:
 
     def clear_cache(self):
         """Clear embedding cache (useful when settings change)"""
-        self.embedding_cache.clear()
+        self._get_cached_embedding.cache_clear()
         logger.info("Cleared memory search service cache")
+
+    def get_cache_info(self):
+        """Get cache statistics for debugging"""
+        return self._get_cached_embedding.cache_info()
 
     def find_semantic_connections(
         self, memories: List[Memory], original_query: str, user_id: str
@@ -405,16 +407,7 @@ class MemorySearchService:
 
         if not memories:
             return {
-                "summary": "No relevant memories found.",
-                "key_points": [],
-                "relevant_context": "",
-                "confidence": 0.0,
-                "memory_usage": {
-                    "total_memories": 0,
-                    "highly_relevant": 0,
-                    "moderately_relevant": 0,
-                    "context_relevant": 0,
-                },
+                "summary": "No relevant memories found for this query.",
             }
 
         # Prepare memory content for analysis
@@ -443,25 +436,14 @@ class MemorySearchService:
         if llm_result["success"]:
             try:
                 summary_result = json.loads(llm_result["response"])
-                logger.info(
-                    f"Generated memory summary with confidence {summary_result.get('confidence', 0)}"
-                )
+                logger.info("Generated memory summary successfully")
                 return summary_result
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to parse memory summary: {e}")
 
         # Fallback summary
         return {
-            "summary": f"Found {len(memories)} memories related to your query, but unable to generate detailed summary.",
-            "key_points": [memory.content[:100] + "..." for memory in memories[:5]],
-            "relevant_context": "Multiple memories found but analysis failed",
-            "confidence": 0.3,
-            "memory_usage": {
-                "total_memories": len(memories),
-                "highly_relevant": 0,
-                "moderately_relevant": len(memories),
-                "context_relevant": 0,
-            },
+            "summary": f"Found {len(memories)} memories related to your query, but unable to generate detailed analysis.",
         }
 
 

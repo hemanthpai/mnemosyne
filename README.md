@@ -4,385 +4,323 @@
 
 *Mnemosyne, the Greek goddess of memory and remembrance*
 
-Mnemosyne is a service that allows persisting and retrieving memories to enable AI models to remember important items from their past interactions with users. The application consists of a Django backend and a React frontend.
+Mnemosyne enables AI models to remember important information from past conversations. It extracts and stores memories from chat interactions, then retrieves relevant memories to provide context for future conversations.
 
 <br clear="left"/>
 
-## Backend
+## Architecture
 
-The backend is built using Django and provides REST API endpoints for memory management. Key components include:
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Open WebUI    │    │   Mnemosyne     │    │    Ollama       │
+│   (Chat UI)     │◄──►│  (Memories)     │◄──►│   (LLM API)     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                │
+                       ┌─────────────────┐
+                       │   PostgreSQL    │
+                       │   + Qdrant      │
+                       │   (Storage)     │
+                       └─────────────────┘
+```
 
-- **Memories**: Handles memory extraction, retrieval, and CRUD operations.
-- **Settings**: Manages application settings such as API endpoint configurations.
+**Components:**
+- **Django Backend**: REST API for memory extraction, storage, and retrieval
+- **React Frontend**: Web UI for managing memories and settings
+- **PostgreSQL**: Stores memory content and metadata
+- **Qdrant**: Vector database for semantic memory search
+- **OpenWebUI Filter**: Integrates memory into chat conversations
 
-### API Endpoints
-
-1. **Extract Memories**: Accepts a string input (conversation snippet) and returns the number of memories extracted.
-2. **Retrieve Memories**: Accepts a prompt and returns a list of relevant memories.
-3. **List All Memories**: Accepts a user ID and returns all memories associated with that user.
-
-## Frontend
-
-The frontend is built using React and provides a user interface for interacting with the memory service. Key components include:
-
-- **Memories Page**: Displays a list of all memories, filterable by user ID.
-- **Memory Detail Page**: Allows editing or deleting of specific memories.
-- **Settings**: Enables configuration of various application settings.
-- **DevTools**: Enables testing memory extraction and retrieval. Useful for prompt tuning.
-- **Statistics**: Various stats related to memories stored.
-
-## Local Development Setup
+## Quick Start with Docker
 
 ### Prerequisites
 - Docker and Docker Compose
-- Python 3.11+ (for local development without Docker)
-- Node.js 18+ (for frontend development)
+- [Ollama](https://ollama.ai) running locally with your preferred models
 
-### Local Development
+### 1. Set up Mnemosyne
 
-If you prefer not to use Docker or need to debug services individually:
-
-1. **Start Qdrant**
 ```bash
+# Clone the repository
+git clone <repository-url>
+cd mnemosyne
+
+# Create environment file
+cp .env.example .env
+
+# Edit .env and set required values:
+# - SECRET_KEY (generate with: openssl rand -hex 32)
+# - POSTGRES_PASSWORD
+# - OLLAMA_BASE_URL (default: http://host.docker.internal:11434)
+# - ALLOWED_HOSTS (add your IP/domain)
+
+# Start all services
+docker-compose -f docker-compose.homeserver.yml up -d
+
+# Check status
+docker-compose -f docker-compose.homeserver.yml ps
+```
+
+Mnemosyne will be available at `http://localhost:8080`
+
+### 2. Set up Open WebUI
+
+```bash
+# Run Open WebUI with Docker
+docker run -d -p 3000:8080 \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+  -v open-webui:/app/backend/data \
+  --name open-webui \
+  --restart always \
+  ghcr.io/open-webui/open-webui:main
+```
+
+Open WebUI will be available at `http://localhost:3000`
+
+### 3. Install the Memory Filter
+
+```bash
+# Copy the filter to Open WebUI's functions directory
+docker cp openwebui_mnemosyne_integration_v3.py open-webui:/app/backend/data/functions/
+```
+
+**Alternative**: In Open WebUI, go to **Settings** → **Functions** → **Import Function** and paste the contents of `openwebui_mnemosyne_integration_v3.py`
+
+### 4. Configure the Filter
+
+In Open WebUI:
+1. Go to **Settings** → **Functions**
+2. Enable "**Mnemosyne Memory Integration**"
+3. Configure settings:
+   - **Mnemosyne Endpoint**: `http://host.docker.internal:8080` (if both running in Docker)
+   - **Optimization Level**: `fast` (recommended)
+   - **Memory Limit**: `10` memories per retrieval
+
+### 5. Test the Integration
+
+1. Start a conversation in Open WebUI
+2. You should see status messages like:
+   - "🔍 Searching for relevant memories..."
+   - "🤔 No relevant memories found" (for first conversation)
+   - "🚀 Forwarding enhanced prompt to AI..."
+3. After the AI responds, you'll see:
+   - "💭 Analyzing new messages..."
+   - "🎉 Extracted X new memories!"
+
+## Configuring Mnemosyne
+
+### Access the Settings UI
+
+Navigate to `http://localhost:8080` and click **Settings** to configure the service.
+
+### LLM Configuration
+
+**Extraction Settings** (for memory extraction):
+- **Provider**: Select `Ollama` (default), `OpenAI`, or `OpenAI Compatible`
+- **Endpoint URL**: `http://host.docker.internal:11434` (Docker) or `http://localhost:11434`
+- **Model**: The model used for all memory operations (extraction, search, analysis)
+- **API Key**: Optional, only needed for OpenAI or compatible providers
+
+**Recommended Ollama Models:**
+```bash
+# Install a good general-purpose model
+ollama pull llama3.2:3b        # Fast, efficient
+ollama pull mistral:7b         # More capable
+ollama pull qwen2.5:14b        # Best quality
+
+# Install embedding model (required)
+ollama pull nomic-embed-text   # Fast embeddings
+ollama pull mxbai-embed-large  # Better quality embeddings
+```
+
+**Embeddings Configuration**:
+- **Provider**: Usually same as extraction provider
+- **Endpoint URL**: Same as extraction endpoint
+- **Model**: `nomic-embed-text` or `mxbai-embed-large`
+
+### Generation Parameters
+
+Fine-tune LLM behavior:
+- **Temperature**: 0.6 (default) - Controls randomness (0.0-2.0)
+- **Top-p**: 0.95 - Nucleus sampling for diversity
+- **Top-k**: 20 - Limits vocabulary choices
+- **Max Tokens**: 2048 - Maximum response length
+
+### Search Configuration
+
+**Semantic Enhancement**:
+- **Enable Semantic Connections**: Find related memories using graph analysis
+- **Enhancement Threshold**: 3 - Minimum memories before enhancement kicks in
+
+**Search Thresholds** (similarity scores 0.0-1.0):
+- **Direct**: 0.7 - Exact topic matches
+- **Semantic**: 0.5 - Related concepts
+- **Experiential**: 0.6 - Past experiences
+- **Contextual**: 0.4 - Situational relevance
+- **Interest**: 0.5 - General interests
+
+**Memory Quality Threshold**: 0.35 - Filters out low-quality memories
+
+### Prompt Templates
+
+The system uses customizable prompts for different operations. You can modify these in the **Prompts** tab to improve extraction quality for your use case. Each prompt includes examples and formatting instructions.
+
+## Testing with DevTools
+
+Mnemosyne includes DevTools for testing memory operations without OpenWebUI.
+
+### Access DevTools
+
+Navigate to `http://localhost:8080` and click **DevTools** in the navigation.
+
+### Test Memory Extraction
+
+1. **Enter user message text** in the extraction panel:
+   ```
+   My name is Alex Chen and I'm a senior software engineer in San Francisco.
+   I love hiking - last weekend I did the Dipsea Trail and got amazing photos
+   of the coastline. I'm vegetarian and really into Radiohead lately. Currently
+   learning Rust for systems programming while working with React/TypeScript
+   at my day job.
+   ```
+
+2. **Enter User ID**: Use a UUID like `550e8400-e29b-41d4-a716-446655440000`
+   - Must be a valid UUID format
+   - Same ID links memories to the same user
+
+3. **Click "Extract Memories"** to process the text
+
+4. **View results**: See extracted memories with tags and metadata
+
+### Test Memory Retrieval
+
+1. **Enter a search prompt**: "I need to plan a weekend activity with Alex. Can you suggest something based on their interests and location?"
+
+2. **Use the same User ID** from extraction
+
+3. **Select optimization level**:
+   - **Fast**: Minimal data, best performance
+   - **Detailed**: Includes search metadata for debugging
+   - **Full**: Everything including AI-generated summary
+
+4. **Click "Retrieve Memories"** to search
+
+5. **View results**: Relevant memories with similarity scores
+
+### Sample Data
+
+Click **"Load Sample Data"** to populate the forms with example conversation and user ID for quick testing.
+
+### Tips for Testing
+
+- Use consistent User IDs to build up memory for a test user
+- Try different prompts to see how semantic search works
+- Check the **Memories** page to view/edit all stored memories
+- Use **Statistics** to monitor memory counts and performance
+
+## Architecture Deep Dive
+
+### Memory Lifecycle
+1. **Extraction**: User messages are analyzed by LLM to extract meaningful memories
+2. **Storage**: Memories are stored in PostgreSQL with vector embeddings in Qdrant
+3. **Retrieval**: When user asks questions, semantic search finds relevant memories
+4. **Context**: Retrieved memories are added to conversation context before sending to AI
+
+### Filter Integration
+The OpenWebUI filter operates in two phases:
+- **Inlet**: Retrieves relevant memories and adds them as context before LLM processing
+- **Outlet**: Extracts new memories from user messages after LLM responds
+
+### Key Features
+- **Semantic Search**: Finds relevant memories using vector similarity
+- **User Isolation**: Memories are stored per-user with proper access controls
+- **Deduplication**: Prevents processing the same message multiple times
+- **Rate Limiting**: Protects against API abuse
+- **Optimization Levels**: Configurable response sizes (fast/detailed/full)
+
+## Local Development (Non-Docker)
+
+### Prerequisites
+- Python 3.11+
+- Node.js 18+
+- PostgreSQL
+- Qdrant
+
+### Backend Setup
+```bash
+# Start Qdrant
 docker run -d -p 6333:6333 -v qdrant_data:/qdrant/storage qdrant/qdrant
-```
 
-2. **Start PostgreSQL**
-```bash
-# Using your system's PostgreSQL or:
-docker run --name postgres -e POSTGRES_PASSWORD= -e POSTGRES_DB=mnemosyne -p 5432:5432 -d postgres:15
-```
+# Start PostgreSQL (or use system installation)
+docker run --name postgres -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=mnemosyne -p 5432:5432 -d postgres:15
 
-3. **Backend setup**
-```bash
+# Setup Python environment
 cd backend
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-export DATABASE_URL="postgresql://postgres:your_password@localhost:5432/mnemosyne"
+
+# Configure environment
+export DATABASE_URL="postgresql://postgres:dev@localhost:5432/mnemosyne"
+export QDRANT_HOST=localhost
+export QDRANT_PORT=6333
+export OLLAMA_BASE_URL=http://localhost:11434
+export SECRET_KEY="your-secret-key-here"
+export DEBUG=1
+
+# Initialize database
 python manage.py migrate
+
+# Start backend server
 python manage.py runserver
 ```
 
-4. **Frontend setup**
+### Frontend Setup
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## Home Server Deployment
-
-Perfect for running on a Raspberry Pi, NUC, or home server for personal use or local network access.
-
-### Prerequisites
-- Home server with Docker and Docker Compose
-- Minimum 2 GB RAM (4 GB recommended for better performance)
-- Ollama running locally or accessible on your network
-
-### Simple Home Server Setup
-
-This setup is ideal for local network access without external domain requirements.
-
-1. **Clone the repository on your home server**
-```bash
-git clone <repository-url>
-cd mnemosyne
-```
-
-2. **Create home server environment file**
-```bash
-cp .env.example .env.homeserver
-```
-
-Edit `.env.homeserver`:
-```bash
-# Basic settings for home server
-DEBUG=False
-SECRET_KEY=your_secret_key_here
-DATABASE_URL=postgresql://postgres:your_password@db:5432/mnemosyne
-QDRANT_HOST=qdrant
-QDRANT_PORT=6333
-ALLOWED_HOSTS=your-server-ip,your-server-domain #Specify all domains and URLs that you expect to interact with this service. Else, the requests will fail due to CORS
-
-# Ollama settings (adjust to your setup)
-OLLAMA_BASE_URL=http://192.168.1.50:11434  # Replace with your Ollama server IP
-```
-
-3. **Modify the home server Docker Compose file if necessary**
-
-The provided `docker-compose.homeserver.yml` includes:
-* PostgreSQL database with persistent storage
-* Qdrant vector database exposed on port 6333
-* The backend APIs exposed on port 8000
-* The frontend exposed on port 8000
-
-4. **Deploy the application**
-```bash
-# Build and start services
-docker-compose -f docker-compose.homeserver.yml up -d
-```
-
-5. **Access your application**
-- Visit `http://YOUR_SERVER_IP:8000` from any device on your network
-- Qdrant dashboard: `http://YOUR_SERVER_IP:6333/dashboard`
-
-
-## Open WebUI Integration (⚡ Optimized)
-
-**🚀 NEW: 60-80% Smaller API Responses + Enhanced Features!**
-
-Mnemosyne can be integrated with Open WebUI to provide long-term memory capabilities to your chat interface. The integration has been significantly optimized for better performance and reliability.
-
-### Key Improvements
-- **60-80% smaller API responses** via intelligent field selection
-- **Three optimization levels**: Fast (production), Detailed (debugging), Full (analysis)
-- **Rate limiting handling** with automatic backoff
-- **Optional API key authentication** for security
-- **Enhanced error handling** and status reporting
-
-**📖 For detailed setup instructions, see [OPENWEBUI_INTEGRATION_GUIDE.md](OPENWEBUI_INTEGRATION_GUIDE.md)**
-
-### Quick Setup
-
-1. **Copy the integration file to Open WebUI**
-
-   Copy the `openwebui_mnemosyne_integration.py` file to your Open WebUI filters directory (typically `/path/to/openwebui/extensions/filters/`).
-
-2. **Configure the connection endpoint**
-
-   The connection method depends on your deployment scenario:
-
-   > ⚠️ **Important:** The `mnemosyne_endpoint` URL must be set correctly based on your deployment configuration:
-   >
-   > - **If both services are running in Docker on the same host:**
-   >   ```
-   >   mnemosyne_endpoint = "http://host.docker.internal:8000"
-   >   ```
-   >   You must also add `host.docker.internal` to your `ALLOWED_HOSTS` in `.env.homeserver`
-   >
-   > - **If running on separate machines:**
-   >   ```
-   >   mnemosyne_endpoint = "http://your-mnemosyne-server-ip:8000"
-   >   ```
-   >
-   > - **If running OpenWebUI outside Docker:**
-   >   ```
-   >   mnemosyne_endpoint = "http://localhost:8000"
-   >   ```
-
-3. **Update Mnemosyne's ALLOWED_HOSTS**
-
-   Edit your `.env.homeserver` file to include all hosts that will connect to Mnemosyne:
-
-   ```bash
-   # Add all connection hosts
-   ALLOWED_HOSTS=localhost,127.0.0.1,your-server-ip,host.docker.internal
-   ```
-
-4. **Activate in Open WebUI**
-
-    In Open WebUI interface:
-    * Go to Settings > Filters
-    * Enable "Mnemosyne Memory Integration"
-    * Configure options like memory limit and threshold as needed
-
-5. **Test the integration**
-
-    Start a conversation in Open WebUI. The integration will:
-    * Extract memories from your conversations automatically
-    * Provide relevant memories when related topics arise
-    * Use your configured user ID to maintain separate memory contexts
-
-## Home Server Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Open WebUI    │    │    Ollama       │    │   Mnemosyne     │
-│   Port: 8000    │◄──►│   Port: 11434   │◄──►│   Port: 8000    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                    ┌─────────────────────────┐
-                    │     Local Network       │
-                    │  (192.168.1.0/24)      │
-                    └─────────────────────────┘
-                                 │
-              ┌──────────────────┴──────────────────┐
-              │                                     │
-    ┌─────────────────┐                   ┌─────────────────┐
-    │   PostgreSQL    │                   │     Qdrant      │
-    │   Port: 5432    │                   │   Port: 6333    │
-    └─────────────────┘                   └─────────────────┘
-```
-
-## Home Server Management
-
-#### System Service (Optional)
-Create a systemd service for automatic startup:
-
-```bash
-sudo nano /etc/systemd/system/mnemosyne.service
-```
-
-```ini
-[Unit]
-Description=Mnemosyne AI Memory Service
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=/home/yourusername/mnemosyne
-ExecStart=/usr/bin/docker-compose -f docker-compose.homeserver.yml up -d
-ExecStop=/usr/bin/docker-compose -f docker-compose.homeserver.yml down
-TimeoutStartSec=0
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable the service:
-```bash
-sudo systemctl enable mnemosyne.service
-sudo systemctl start mnemosyne.service
-```
-
-#### Backup Script for Home Server
-Create `backup.sh`:
-```bash
-#!/bin/bash
-BACKUP_DIR="/home/backups/mnemosyne"
-DATE=$(date +%Y%m%d_%H%M%S)
-
-mkdir -p $BACKUP_DIR
-
-# Backup database
-docker-compose -f docker-compose.homeserver.yml exec -T db pg_dump -U postgres mnemosyne > "$BACKUP_DIR/database_$DATE.sql"
-
-# Backup Qdrant data (stop service first for consistency)
-docker-compose -f docker-compose.homeserver.yml stop qdrant
-tar -czf "$BACKUP_DIR/qdrant_$DATE.tar.gz" ./qdrant_storage/
-docker-compose -f docker-compose.homeserver.yml start qdrant
-
-# Keep only last 7 backups
-find $BACKUP_DIR -name "database_*.sql" -mtime +7 -delete
-find $BACKUP_DIR -name "qdrant_*.tar.gz" -mtime +7 -delete
-
-echo "Backup completed: $DATE"
-```
-
-Make it executable and add to cron:
-```bash
-chmod +x backup.sh
-crontab -e
-# Add: 0 2 * * * /path/to/mnemosyne/backup.sh
-```
-
-#### Monitoring and Logs
-```bash
-# View all service status
-docker-compose -f docker-compose.homeserver.yml ps
-
-# Monitor logs in real-time
-docker-compose -f docker-compose.homeserver.yml logs -f
-
-# Check resource usage
-docker stats
-
-# View app logs only
-docker-compose -f docker-compose.homeserver.yml logs -f app
-
-# Restart if needed
-docker-compose -f docker-compose.homeserver.yml restart app
-```
-
-#### Home Server Tips
-1. **Resource Monitoring**: Consider using Portainer for Docker GUI management
-2. **Auto-updates**: Use Watchtower for automatic container updates
-3. **Notifications**: Set up monitoring with Uptime Kuma or similar
-4. **Storage**: Monitor disk usage, especially for Qdrant vectors and database
-5. **Performance**: Adjust Docker memory limits based on your server capacity
+The development frontend will be available at `http://localhost:5173`
 
 ## Troubleshooting
 
-#### Common Issues
+### Common Issues
 
-1. **Ollama Connection Failed**
+**Connection Errors**: Ensure all services are running and accessible:
 ```bash
-# Check Ollama is running
+# Check Mnemosyne
+curl http://localhost:8080/api/memories/
+
+# Check Ollama
 curl http://localhost:11434/api/tags
 
-# Test from container
-docker-compose -f docker-compose.ai-server.yml exec mnemosyne \
-  curl http://host.docker.internal:11434/api/tags
+# Check service logs
+docker-compose -f docker-compose.homeserver.yml logs -f
 ```
 
-2. **Out of Memory Errors**
-```bash
-# Check memory usage
-free -h
-docker stats
+**Filter Not Working**:
+- Verify the filter is enabled in Open WebUI settings
+- Check that the Mnemosyne endpoint URL is correct
+- Ensure Docker containers can communicate (use `host.docker.internal` for cross-container access)
 
-# Reduce batch size
-echo "VECTOR_BATCH_SIZE=25" >> .env
-docker-compose -f docker-compose.ai-server.yml restart mnemosyne
-```
+**Memory Extraction Failing**:
+- Verify Ollama is running and models are available
+- Check Mnemosyne logs for LLM connection issues
+- Ensure sufficient disk space for vector storage
 
-3. **Slow Vector Search**
-```bash
-# Optimize Qdrant collection
-docker-compose -f docker-compose.ai-server.yml exec mnemosyne \
-  python manage.py optimize_qdrant --recreate
-```
+## API Reference
 
-#### Performance Tuning
+### Key Endpoints
+- `POST /api/memories/extract/` - Extract memories from conversation
+- `POST /api/memories/retrieve/` - Search for relevant memories
+- `GET /api/memories/` - List all memories (with optional user_id filter)
 
-1. **For Lower-End Hardware (< 8GB RAM):**
-```bash
-# Reduce resource allocation
-DJANGO_WORKERS=1
-VECTOR_BATCH_SIZE=25
-QDRANT_MAX_SEGMENT_SIZE=1000000
-```
-
-2. **For High-End Hardware (> 16GB RAM):**
-```bash
-# Increase performance
-DJANGO_WORKERS=4
-VECTOR_BATCH_SIZE=100
-QDRANT_RAM_OPTIMIZED=True
-```
-
-### Integration Examples
-
-#### Basic Memory Storage
-```bash
-# Store a conversation
-curl -X POST http://localhost:8000/api/memories/extract/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "conversation_text": "I love hiking in the mountains every weekend.",
-    "user_id": "user-123"
-  }'
-```
-
-#### Memory Retrieval
-```bash
-# Retrieve relevant memories
-curl -X POST http://localhost:8000/api/memories/retrieve/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "What outdoor activities does the user enjoy?",
-    "user_id": "user-123"
-  }'
-```
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request for any enhancements or bug fixes.
+### Filter Configuration
+The v3 filter includes enhanced features:
+- **Persistent tracking**: Remembers processed messages across restarts
+- **Session isolation**: Multiple chat threads operate independently
+- **Smart status updates**: Shows forwarding progress for slow models
+- **Configurable delays**: Adjustable timing for status messages
 
 ## License
 

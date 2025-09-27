@@ -125,14 +125,18 @@ const DevToolsPage: React.FC = () => {
     };
 
     const loadSampleData = () => {
-        setExtractionText(`User: I really love dark themes in applications, they're easier on my eyes.
-Assistant: I understand you prefer dark themes. Would you like me to help you enable dark mode in various applications?
-User: Yes, that would be great! Also, I work primarily with React and TypeScript projects.
-Assistant: Perfect! I'll remember that you prefer dark themes and work with React/TypeScript. Let me show you how to enable dark mode in VS Code and other development tools.
-User: Thanks! By the way, my name is Alex and I'm based in San Francisco.`);
+        setExtractionText(`My name is Alex Chen and I'm a senior software engineer based in San Francisco. I've been working primarily with React and TypeScript for the past 3 years, though I started my career with Python and Django. I really love dark themes in all my applications - they're much easier on my eyes, especially during long coding sessions.
+
+I'm currently working on migrating our company's legacy jQuery frontend to React. It's a challenging project but really satisfying. We're also introducing TypeScript gradually to improve type safety. My team lead, Sarah Martinez, has been really supportive throughout this migration.
+
+Outside of work, I'm really into hiking and photography. Last weekend I hiked the Dipsea Trail in Marin - got some amazing shots of the Pacific coastline. I'm planning to do Half Dome in Yosemite this summer if I can get a permit. I also play guitar, mostly indie rock and folk music. Been learning some Radiohead songs recently - currently working on "Fake Plastic Trees" and "No Surprises". They're challenging but really beautiful songs.
+
+Oh, I should mention - I'm vegetarian and have been for about 5 years now. It started for health reasons but now it's also about environmental impact. My favorite restaurant here in SF is Shizen, they do amazing vegan sushi.
+
+I'm also learning Rust in my spare time. Coming from TypeScript, the ownership model is quite a mental shift, but I'm really enjoying how it makes you think about memory management. I'm building a small CLI tool for personal finance tracking as my learning project. My wife Emma is also a software engineer, she works at Google on their cloud infrastructure team. We met at a Python conference back in 2018.`);
         setExtractionUserId("550e8400-e29b-41d4-a716-446655440000");
 
-        setRetrievalPrompt("What do you know about this user's preferences?");
+        setRetrievalPrompt("I need to plan a weekend activity with Alex. Can you suggest something based on their interests and location?");
         setRetrievalUserId("550e8400-e29b-41d4-a716-446655440000");
     };
 

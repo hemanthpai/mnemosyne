@@ -47,10 +47,12 @@ cd mnemosyne
 cp .env.example .env
 
 # Edit .env and set required values:
-# - SECRET_KEY (generate with: openssl rand -hex 32)
-# - POSTGRES_PASSWORD
-# - OLLAMA_BASE_URL (default: http://host.docker.internal:11434)
-# - ALLOWED_HOSTS (add your IP/domain)
+# - DATABASE_URL="postgresql://postgres_user:your_password@localhost:5432/mnemosyne"
+# - QDRANT_HOST=localhost
+# - QDRANT_PORT=6333
+# - OLLAMA_BASE_URL=http://localhost:11434
+# - SECRET_KEY="your-secret-key-here"
+# - DEBUG=false
 
 # Start all services
 docker-compose -f docker-compose.homeserver.yml up -d
@@ -116,20 +118,8 @@ Navigate to `http://localhost:8080` and click **Settings** to configure the serv
 **Extraction Settings** (for memory extraction):
 - **Provider**: Select `Ollama` (default), `OpenAI`, or `OpenAI Compatible`
 - **Endpoint URL**: `http://host.docker.internal:11434` (Docker) or `http://localhost:11434`
-- **Model**: The model used for all memory operations (extraction, search, analysis)
+- **Model**: The model used for all memory operations (extraction, search, analysis). Use an instruction following model (vs a thinking/reasoning model). Qwen3-30B-A3B-Intruct-2507 is a great model to use here.
 - **API Key**: Optional, only needed for OpenAI or compatible providers
-
-**Recommended Ollama Models:**
-```bash
-# Install a good general-purpose model
-ollama pull llama3.2:3b        # Fast, efficient
-ollama pull mistral:7b         # More capable
-ollama pull qwen2.5:14b        # Best quality
-
-# Install embedding model (required)
-ollama pull nomic-embed-text   # Fast embeddings
-ollama pull mxbai-embed-large  # Better quality embeddings
-```
 
 **Embeddings Configuration**:
 - **Provider**: Usually same as extraction provider
@@ -146,18 +136,12 @@ Fine-tune LLM behavior:
 
 ### Search Configuration
 
-**Semantic Enhancement**:
-- **Enable Semantic Connections**: Find related memories using graph analysis
-- **Enhancement Threshold**: 3 - Minimum memories before enhancement kicks in
-
 **Search Thresholds** (similarity scores 0.0-1.0):
 - **Direct**: 0.7 - Exact topic matches
 - **Semantic**: 0.5 - Related concepts
 - **Experiential**: 0.6 - Past experiences
 - **Contextual**: 0.4 - Situational relevance
 - **Interest**: 0.5 - General interests
-
-**Memory Quality Threshold**: 0.35 - Filters out low-quality memories
 
 ### Prompt Templates
 
@@ -173,26 +157,24 @@ Navigate to `http://localhost:8080` and click **DevTools** in the navigation.
 
 ### Test Memory Extraction
 
-1. **Enter user message text** in the extraction panel:
+1. **Enter conversation text** in the extraction panel:
    ```
-   My name is Alex Chen and I'm a senior software engineer in San Francisco.
-   I love hiking - last weekend I did the Dipsea Trail and got amazing photos
-   of the coastline. I'm vegetarian and really into Radiohead lately. Currently
-   learning Rust for systems programming while working with React/TypeScript
-   at my day job.
+   User: I love hiking in Colorado, especially the Maroon Bells trail.
+   Assistant: That sounds amazing! When did you last visit?
+   User: Last fall. The aspens were incredible.
    ```
 
 2. **Enter User ID**: Use a UUID like `550e8400-e29b-41d4-a716-446655440000`
    - Must be a valid UUID format
    - Same ID links memories to the same user
 
-3. **Click "Extract Memories"** to process the text
+3. **Click "Extract Memories"** to process the conversation
 
 4. **View results**: See extracted memories with tags and metadata
 
 ### Test Memory Retrieval
 
-1. **Enter a search prompt**: "I need to plan a weekend activity with Alex. Can you suggest something based on their interests and location?"
+1. **Enter a search prompt**: "What outdoor activities does the user enjoy?"
 
 2. **Use the same User ID** from extraction
 
@@ -259,12 +241,12 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Configure environment
-export DATABASE_URL="postgresql://postgres:dev@localhost:5432/mnemosyne"
+export DATABASE_URL="postgresql://postgres_user:your_password@localhost:5432/mnemosyne"
 export QDRANT_HOST=localhost
 export QDRANT_PORT=6333
 export OLLAMA_BASE_URL=http://localhost:11434
 export SECRET_KEY="your-secret-key-here"
-export DEBUG=1
+export DEBUG=true
 
 # Initialize database
 python manage.py migrate
@@ -286,20 +268,8 @@ The development frontend will be available at `http://localhost:5173`
 
 ### Common Issues
 
-**Connection Errors**: Ensure all services are running and accessible:
-```bash
-# Check Mnemosyne
-curl http://localhost:8080/api/memories/
-
-# Check Ollama
-curl http://localhost:11434/api/tags
-
-# Check service logs
-docker-compose -f docker-compose.homeserver.yml logs -f
-```
-
 **Filter Not Working**:
-- Verify the filter is enabled in Open WebUI settings
+- Verify the filter is enabled globally in Open WebUI settings
 - Check that the Mnemosyne endpoint URL is correct
 - Ensure Docker containers can communicate (use `host.docker.internal` for cross-container access)
 

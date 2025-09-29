@@ -34,7 +34,9 @@ Mnemosyne enables AI models to remember important information from past conversa
 
 ### Prerequisites
 - Docker and Docker Compose
-- [Ollama](https://ollama.ai) running locally with your preferred models
+- **LLM Provider** (one of the following):
+  - [Ollama](https://ollama.ai) running locally with your preferred models
+  - OpenAI API key (or OpenAI-compatible endpoint)
 
 ### 1. Set up Mnemosyne
 
@@ -115,16 +117,32 @@ Navigate to `http://localhost:8080` and click **Settings** to configure the serv
 
 ### LLM Configuration
 
-**Extraction Settings** (for memory extraction):
-- **Provider**: Select `Ollama` (default), `OpenAI`, or `OpenAI Compatible`
-- **Endpoint URL**: `http://host.docker.internal:11434` (Docker) or `http://localhost:11434`
-- **Model**: The model used for all memory operations (extraction, search, analysis). Use an instruction following model (vs a thinking/reasoning model). Qwen3-30B-A3B-Intruct-2507 is a great model to use here.
-- **API Key**: Optional, only needed for OpenAI or compatible providers
+**Choose Your Provider:**
+
+**Option 1: Ollama (Local/Self-Hosted)**
+- **Provider**: Select `Ollama`
+- **Endpoint URL**:
+  - Docker: `http://host.docker.internal:11434`
+  - Local: `http://localhost:11434`
+- **Model**: Using an instruction-following model is recommended. Model suggestion: `Qwen3-30B-A3B`
+- **API Key**: Leave empty
+
+**Option 2: OpenAI**
+- **Provider**: Select `OpenAI`
+- **Endpoint URL**: `https://api.openai.com/v1`
+- **Model**: `gpt-4o-mini` or `gpt-4o`
+- **API Key**: Your OpenAI API key
+
+**Option 3: OpenAI-Compatible (Groq, Together, etc.)**
+- **Provider**: Select `OpenAI Compatible`
+- **Endpoint URL**: Your provider's API endpoint
+- **Model**: Provider-specific model name
+- **API Key**: Your provider's API key
 
 **Embeddings Configuration**:
-- **Provider**: Usually same as extraction provider
-- **Endpoint URL**: Same as extraction endpoint
-- **Model**: `nomic-embed-text` or `mxbai-embed-large`
+- **For Ollama**: Use `nomic-embed-text` or `mxbai-embed-large`
+- **For OpenAI**: Use `text-embedding-3-small` or `text-embedding-ada-002`
+- **Endpoint URL**: Same as your LLM endpoint
 
 ### Generation Parameters
 
@@ -263,34 +281,6 @@ npm run dev
 ```
 
 The development frontend will be available at `http://localhost:5173`
-
-## Troubleshooting
-
-### Common Issues
-
-**Filter Not Working**:
-- Verify the filter is enabled globally in Open WebUI settings
-- Check that the Mnemosyne endpoint URL is correct
-- Ensure Docker containers can communicate (use `host.docker.internal` for cross-container access)
-
-**Memory Extraction Failing**:
-- Verify Ollama is running and models are available
-- Check Mnemosyne logs for LLM connection issues
-- Ensure sufficient disk space for vector storage
-
-## API Reference
-
-### Key Endpoints
-- `POST /api/memories/extract/` - Extract memories from conversation
-- `POST /api/memories/retrieve/` - Search for relevant memories
-- `GET /api/memories/` - List all memories (with optional user_id filter)
-
-### Filter Configuration
-The v3 filter includes enhanced features:
-- **Persistent tracking**: Remembers processed messages across restarts
-- **Session isolation**: Multiple chat threads operate independently
-- **Smart status updates**: Shows forwarding progress for slow models
-- **Configurable delays**: Adjustable timing for status messages
 
 ## License
 

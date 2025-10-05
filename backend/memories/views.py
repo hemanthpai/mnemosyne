@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from rest_framework import status, viewsets
+from rest_framework import parsers, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from settings_app.models import LLMSettings
@@ -746,5 +746,235 @@ class DeleteAllMemoriesView(APIView):
             logger.error(f"Error deleting memories: {e}")
             return Response(
                 {"success": False, "error": "An unexpected error occurred"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ImportOpenWebUIHistoryView(APIView):
+    """Import historical conversations from Open WebUI database"""
+
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+
+    def post(self, request):
+        """
+        Start import process from uploaded database file
+
+        Request body:
+        - db_file: Uploaded SQLite database file (multipart/form-data)
+        - target_user_id: (optional) Mnemosyne user ID to assign all memories
+        - openwebui_user_id: (optional) Filter by Open WebUI user
+        - after_date: (optional) Only import after this date (ISO format)
+        - batch_size: (optional) Batch processing size (default: 10)
+        - limit: (optional) Maximum conversations to import
+        - dry_run: (optional) Preview mode (default: false)
+        """
+        import tempfile
+        import threading
+        from pathlib import Path
+        from .openwebui_importer import OpenWebUIImporter
+
+        try:
+            # Get uploaded file
+            if 'db_file' not in request.FILES:
+                return Response(
+                    {"success": False, "error": "No database file uploaded"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            db_file = request.FILES['db_file']
+
+            # Validate file extension
+            if not db_file.name.endswith('.db'):
+                return Response(
+                    {"success": False, "error": "File must be a .db SQLite database"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Validate file size
+            settings = LLMSettings.get_settings()
+            max_size_bytes = settings.max_import_file_size_mb * 1024 * 1024
+
+            if db_file.size > max_size_bytes:
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Database file too large. Maximum size is {settings.max_import_file_size_mb}MB",
+                        "file_size_mb": round(db_file.size / (1024 * 1024), 2),
+                        "max_size_mb": settings.max_import_file_size_mb
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Save uploaded file to temporary location
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp_file:
+                for chunk in db_file.chunks():
+                    tmp_file.write(chunk)
+                tmp_path = tmp_file.name
+
+            # Get optional parameters
+            target_user_id = request.data.get('target_user_id')
+            openwebui_user_id = request.data.get('openwebui_user_id')
+            after_date_str = request.data.get('after_date')
+            dry_run = request.data.get('dry_run', 'false').lower() == 'true'
+
+            # Validate and clamp batch_size
+            try:
+                batch_size = int(request.data.get('batch_size', 10))
+                batch_size = max(1, min(100, batch_size))  # Clamp to 1-100
+            except (ValueError, TypeError):
+                return Response(
+                    {"success": False, "error": "Invalid batch_size. Must be an integer between 1-100."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Validate limit
+            limit = request.data.get('limit')
+            if limit:
+                try:
+                    limit = int(limit)
+                    if limit < 1:
+                        return Response(
+                            {"success": False, "error": "Limit must be a positive integer."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                except (ValueError, TypeError):
+                    return Response(
+                        {"success": False, "error": "Invalid limit. Must be a positive integer."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            # Parse after_date if provided
+            after_date = None
+            if after_date_str:
+                try:
+                    from datetime import timezone
+                    # Parse date string and treat as start of day in UTC
+                    # This ensures consistent filtering regardless of user's timezone
+                    date_obj = datetime.fromisoformat(after_date_str.replace('Z', '')).date()
+                    after_date = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid date format. Use ISO format (YYYY-MM-DD)"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            # Validate target_user_id if provided
+            if target_user_id:
+                try:
+                    uuid.UUID(target_user_id)
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid target_user_id format. Must be UUID."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            # Run import in background thread
+            def run_import():
+                import_thread_id = threading.current_thread().ident
+                logger.info(f"[Thread {import_thread_id}] Starting import in background...")
+
+                # Track if temp file was created successfully
+                temp_file_created = Path(tmp_path).exists()
+
+                try:
+                    try:
+                        with OpenWebUIImporter(tmp_path) as importer:
+                            result = importer.import_conversations(
+                                target_user_id=target_user_id,
+                                openwebui_user_id=openwebui_user_id,
+                                after_date=after_date,
+                                batch_size=batch_size,
+                                limit=limit,
+                                dry_run=dry_run,
+                            )
+                            logger.info(f"[Thread {import_thread_id}] Import completed successfully: {result}")
+                    except Exception as e:
+                        logger.error(f"[Thread {import_thread_id}] Import failed in background: {e}", exc_info=True)
+                finally:
+                    # Always cleanup temp file if it exists
+                    if temp_file_created or Path(tmp_path).exists():
+                        try:
+                            Path(tmp_path).unlink(missing_ok=True)
+                            logger.info(f"[Thread {import_thread_id}] Cleaned up temp file: {tmp_path}")
+                        except Exception as e:
+                            logger.error(f"[Thread {import_thread_id}] Failed to delete temp file: {e}")
+                    logger.info(f"[Thread {import_thread_id}] Background import thread exiting")
+
+            # Initialize progress state BEFORE starting thread to prevent race condition
+            from .openwebui_importer import _import_progress, _progress_lock
+            with _progress_lock:
+                _import_progress.status = "initializing"
+                _import_progress.start_time = datetime.now()
+                _import_progress.end_time = None
+                _import_progress.dry_run = dry_run
+                _import_progress.error_message = None
+                _import_progress.current_conversation_id = None
+                _import_progress.total_conversations = 0
+                _import_progress.processed_conversations = 0
+                _import_progress.extracted_memories = 0
+                _import_progress.failed_conversations = 0
+
+            # Start import thread
+            import_thread = threading.Thread(target=run_import, daemon=True)
+            import_thread.start()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Import started successfully",
+                    "dry_run": dry_run,
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error starting import: {e}")
+            return Response(
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ImportProgressView(APIView):
+    """Get current import progress"""
+
+    def get(self, request):
+        try:
+            from .openwebui_importer import OpenWebUIImporter
+
+            progress = OpenWebUIImporter.get_progress()
+
+            return Response(
+                {
+                    "success": True,
+                    "progress": progress,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error getting import progress: {e}")
+            return Response(
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class CancelImportView(APIView):
+    """Cancel ongoing import"""
+
+    def post(self, request):
+        try:
+            from .openwebui_importer import OpenWebUIImporter
+
+            OpenWebUIImporter.cancel_import()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Import cancellation requested",
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error cancelling import: {e}")
+            return Response(
+                {"success": False, "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

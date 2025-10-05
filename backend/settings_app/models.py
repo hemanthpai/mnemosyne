@@ -188,6 +188,12 @@ Memories: User has impacted wisdom teeth, prefers minimally invasive procedures,
 {"summary": "User has impacted wisdom teeth requiring treatment and strongly prefers minimally invasive dental procedures. They have expressed concerns about pain management and recovery time, with a family history of dental complications that influences their cautious approach to dental decisions."}"""
     )
 
+    # Import Settings
+    max_import_file_size_mb = models.IntegerField(
+        default=500,
+        help_text="Maximum file size for Open WebUI database imports (in MB)"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

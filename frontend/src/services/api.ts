@@ -273,3 +273,105 @@ export const fetchModels = async (
         };
     }
 };
+
+// Open WebUI Import endpoints
+export const startOpenWebUIImport = async (
+    dbFile: File,
+    options?: {
+        target_user_id?: string;
+        openwebui_user_id?: string;
+        after_date?: string;
+        batch_size?: number;
+        limit?: number;
+        dry_run?: boolean;
+    }
+): Promise<{
+    success: boolean;
+    message?: string;
+    dry_run?: boolean;
+    error?: string;
+}> => {
+    try {
+        const formData = new FormData();
+        formData.append('db_file', dbFile);
+
+        if (options?.target_user_id) {
+            formData.append('target_user_id', options.target_user_id);
+        }
+        if (options?.openwebui_user_id) {
+            formData.append('openwebui_user_id', options.openwebui_user_id);
+        }
+        if (options?.after_date) {
+            formData.append('after_date', options.after_date);
+        }
+        if (options?.batch_size) {
+            formData.append('batch_size', options.batch_size.toString());
+        }
+        if (options?.limit) {
+            formData.append('limit', options.limit.toString());
+        }
+        if (options?.dry_run !== undefined) {
+            formData.append('dry_run', options.dry_run.toString());
+        }
+
+        const response = await axios.post(`${API_BASE_URL}/api/memories/import/start/`, formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+            },
+        });
+        return response.data;
+    } catch (error: any) {
+        console.error('Error starting import:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to start import'
+        };
+    }
+};
+
+export const getImportProgress = async (): Promise<{
+    success: boolean;
+    progress?: {
+        total_conversations: number;
+        processed_conversations: number;
+        extracted_memories: number;
+        failed_conversations: number;
+        current_conversation_id: string | null;
+        status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
+        error_message: string | null;
+        start_time: string | null;
+        end_time: string | null;
+        elapsed_seconds: number | null;
+        dry_run: boolean;
+        progress_percentage: number;
+    };
+    error?: string;
+}> => {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/api/memories/import/progress/`);
+        return response.data;
+    } catch (error: any) {
+        console.error('Error getting import progress:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to get import progress'
+        };
+    }
+};
+
+export const cancelImport = async (): Promise<{
+    success: boolean;
+    message?: string;
+    error?: string;
+}> => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/memories/import/cancel/`);
+        return response.data;
+    } catch (error: any) {
+        console.error('Error cancelling import:', error);
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message || 'Failed to cancel import'
+        };
+    }
+};

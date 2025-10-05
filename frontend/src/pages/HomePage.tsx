@@ -33,7 +33,7 @@ const HomePage: React.FC = () => {
                 </div>
 
                 {/* Feature Cards */}
-                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 mb-12">
+                <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
                     {/* Memories Card */}
                     <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300">
                         <div className="p-6">
@@ -116,6 +116,55 @@ const HomePage: React.FC = () => {
                                 className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors duration-200 text-sm"
                             >
                                 View Statistics
+                                <svg
+                                    className="ml-2 w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 7l5 5m0 0l-5 5m5-5H6"
+                                    />
+                                </svg>
+                            </Link>
+                        </div>
+                    </div>
+
+                    {/* Import Card */}
+                    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300">
+                        <div className="p-6">
+                            <div className="flex items-center mb-4">
+                                <div className="bg-orange-100 p-3 rounded-lg">
+                                    <svg
+                                        className="w-6 h-6 text-orange-600"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                                        />
+                                    </svg>
+                                </div>
+                                <h3 className="text-xl font-bold text-gray-900 ml-3">
+                                    Import
+                                </h3>
+                            </div>
+                            <p className="text-gray-600 mb-4 text-sm">
+                                Import historical conversations from Open WebUI
+                                to extract and store memories.
+                            </p>
+                            <Link
+                                to="/import"
+                                className="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-medium rounded-lg hover:bg-orange-700 transition-colors duration-200 text-sm"
+                            >
+                                Import History
                                 <svg
                                     className="ml-2 w-4 h-4"
                                     fill="none"

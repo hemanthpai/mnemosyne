@@ -2,6 +2,7 @@ import React from "react";
 import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import DevToolsPage from "./pages/DevToolsPage";
 import HomePage from "./pages/HomePage";
+import ImportPage from "./pages/ImportPage";
 import MemoriesPage from "./pages/MemoriesPage";
 import MemoryDetailPage from "./pages/MemoryDetailPage"; // Add this import
 import MemoryStatsPage from "./pages/MemoryStatsPage"; // Add this import
@@ -14,6 +15,7 @@ const App: React.FC = () => {
                 <Routes>
                     <Route path="/" element={<HomePage />} />
                     <Route path="/memories" element={<MemoriesPage />} />
+                    <Route path="/import" element={<ImportPage />} />
                     <Route path="/devtools" element={<DevToolsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/stats" element={<MemoryStatsPage />} />{" "}

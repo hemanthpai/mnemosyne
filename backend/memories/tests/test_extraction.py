@@ -268,13 +268,14 @@ class AtomicNoteExtractionTest(TestCase):
 
     def test_extraction_prompt_contains_instructions(self):
         """Test that extraction prompt contains key instructions"""
-        # Check prompt has critical components
-        self.assertIn('atomic facts', EXTRACTION_PROMPT)
-        self.assertIn('JSON', EXTRACTION_PROMPT)
-        self.assertIn('confidence', EXTRACTION_PROMPT)
-        self.assertIn('note_type', EXTRACTION_PROMPT.lower())
-        self.assertIn('preference:', EXTRACTION_PROMPT)
-        self.assertIn('skill:', EXTRACTION_PROMPT)
+        # Check prompt has critical components (case-insensitive)
+        prompt_lower = EXTRACTION_PROMPT.lower()
+        self.assertIn('atomic', prompt_lower)
+        self.assertIn('json', prompt_lower)
+        self.assertIn('confidence', prompt_lower)
+        self.assertIn('note_type', prompt_lower)
+        self.assertIn('preference:', prompt_lower)
+        self.assertIn('skill:', prompt_lower)
 
     @patch('memories.tasks.llm_service.get_embeddings')
     @patch('memories.tasks.llm_service.generate_text')

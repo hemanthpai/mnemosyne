@@ -17,10 +17,126 @@ def normalize_vector(vector: List[float]) -> List[float]:
 
 
 class LLMService:
-    """Simple service for embeddings generation"""
+    """Service for LLM operations: embeddings and text generation"""
 
     def __init__(self):
         self.session = requests.Session()
+
+    def generate_text(
+        self,
+        prompt: str,
+        temperature: float = 0.3,
+        max_tokens: int = 1000
+    ) -> Dict[str, Any]:
+        """
+        Generate text using LLM (for extraction, analysis, etc.)
+
+        Args:
+            prompt: The prompt to send to the LLM
+            temperature: Sampling temperature (0.0-1.0)
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            Dict with 'success', 'text' (generated text), 'error' (if failed)
+        """
+        try:
+            provider = settings.EMBEDDINGS_PROVIDER.lower()
+
+            if provider == "ollama":
+                return self._generate_text_ollama(prompt, temperature, max_tokens)
+            elif provider in ["openai", "openai_compatible"]:
+                return self._generate_text_openai(prompt, temperature, max_tokens)
+            else:
+                return {
+                    "success": False,
+                    "error": f"Unsupported provider: {provider}"
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to generate text: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _generate_text_ollama(
+        self,
+        prompt: str,
+        temperature: float,
+        max_tokens: int
+    ) -> Dict[str, Any]:
+        """Generate text using Ollama"""
+        endpoint = f"{settings.EMBEDDINGS_ENDPOINT_URL}/api/generate"
+
+        # Use the same model as embeddings by default
+        # In production, you might want a separate GENERATION_MODEL setting
+        model = getattr(settings, 'GENERATION_MODEL', settings.EMBEDDINGS_MODEL)
+
+        try:
+            response = self.session.post(
+                endpoint,
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens
+                    }
+                },
+                timeout=settings.EMBEDDINGS_TIMEOUT * 2  # Longer timeout for generation
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            return {
+                "success": True,
+                "text": data["response"],
+                "model": model
+            }
+
+        except Exception as e:
+            logger.error(f"Ollama text generation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _generate_text_openai(
+        self,
+        prompt: str,
+        temperature: float,
+        max_tokens: int
+    ) -> Dict[str, Any]:
+        """Generate text using OpenAI or compatible API"""
+        endpoint = f"{settings.EMBEDDINGS_ENDPOINT_URL}/v1/chat/completions"
+
+        headers = {}
+        if settings.EMBEDDINGS_API_KEY:
+            headers["Authorization"] = f"Bearer {settings.EMBEDDINGS_API_KEY}"
+
+        model = getattr(settings, 'GENERATION_MODEL', settings.EMBEDDINGS_MODEL)
+
+        try:
+            response = self.session.post(
+                endpoint,
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                },
+                headers=headers,
+                timeout=settings.EMBEDDINGS_TIMEOUT * 2
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            return {
+                "success": True,
+                "text": data["choices"][0]["message"]["content"],
+                "model": data.get("model", model)
+            }
+
+        except Exception as e:
+            logger.error(f"OpenAI text generation failed: {e}")
+            return {"success": False, "error": str(e)}
 
     def get_embeddings(self, texts: List[str]) -> Dict[str, Any]:
         """

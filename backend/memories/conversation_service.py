@@ -8,6 +8,16 @@ from .cache_service import cache_service
 
 logger = logging.getLogger(__name__)
 
+# Phase 3: Import tasks for background extraction
+# Lazy import to avoid circular dependency
+def _schedule_extraction(turn_id: str):
+    """Lazy import and schedule extraction task"""
+    try:
+        from .tasks import schedule_extraction
+        schedule_extraction(turn_id)
+    except ImportError:
+        logger.warning("Django-Q not available, skipping background extraction")
+
 
 class ConversationService:
     """Simple service for storing and searching conversations"""
@@ -84,6 +94,9 @@ class ConversationService:
                 'session_id': session_id,
                 'turn_number': turn_number
             })
+
+            # Phase 3: Schedule background extraction (15min delay)
+            _schedule_extraction(str(turn.id))
 
             logger.info(f"Stored turn {turn.id} for user {user_id}")
             return turn

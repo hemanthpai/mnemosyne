@@ -2,6 +2,7 @@ import React from "react";
 import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import DevToolsPage from "./pages/DevToolsPage";
 import HomePage from "./pages/HomePage";
+import ImportPage from "./pages/ImportPage";
 import SettingsPage from "./pages/SettingsPage";
 
 const App: React.FC = () => {
@@ -10,8 +11,7 @@ const App: React.FC = () => {
             <div className="App">
                 <Routes>
                     <Route path="/" element={<HomePage />} />
-                    {/* Import temporarily disabled - will be updated for Phase 1 */}
-                    {/* <Route path="/import" element={<ImportPage />} /> */}
+                    <Route path="/import" element={<ImportPage />} />
                     <Route path="/devtools" element={<DevToolsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                 </Routes>

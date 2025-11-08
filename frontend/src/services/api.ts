@@ -161,9 +161,10 @@ export const deleteAllMemories = async (userId?: string): Promise<DeleteAllMemor
     }
 };
 
-export const getSettings = async (): Promise<LLMSettings> => {
+// Phase 1: Get current embeddings settings (read-only)
+export const getSettings = async (): Promise<any> => {
     try {
-        const response = await axios.get<LLMSettings>(`${API_BASE_URL}/api/settings/`);
+        const response = await axios.get(`${API_BASE_URL}/api/settings/`);
         return response.data;
     } catch (error) {
         console.error('Error fetching settings:', error);

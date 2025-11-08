@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 
+from django.conf import settings as django_settings
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -199,3 +200,31 @@ class ListConversationsView(APIView):
                 {'success': False, 'error': str(e), 'latency_ms': round(latency, 2)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class GetSettingsView(APIView):
+    """Get current Phase 1 embeddings configuration (read-only from environment)"""
+
+    def get(self, request):
+        """Return current embeddings settings (API key masked for security)"""
+
+        api_key = django_settings.EMBEDDINGS_API_KEY
+        api_key_masked = None
+        if api_key:
+            # Show first 4 and last 4 characters, mask the rest
+            if len(api_key) > 8:
+                api_key_masked = f"{api_key[:4]}...{api_key[-4:]}"
+            else:
+                api_key_masked = "***"
+
+        return Response({
+            'success': True,
+            'settings': {
+                'embeddings_provider': django_settings.EMBEDDINGS_PROVIDER,
+                'embeddings_endpoint_url': django_settings.EMBEDDINGS_ENDPOINT_URL,
+                'embeddings_model': django_settings.EMBEDDINGS_MODEL,
+                'embeddings_api_key': api_key_masked,
+                'embeddings_timeout': django_settings.EMBEDDINGS_TIMEOUT,
+            },
+            'note': 'Settings are read-only in Phase 1. Configure via environment variables and restart the service.'
+        })

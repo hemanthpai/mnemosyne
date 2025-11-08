@@ -42,3 +42,134 @@ class ConversationTurn(models.Model):
         will pull structured facts from both user and assistant messages.
         """
         return self.user_message
+
+
+# =============================================================================
+# Phase 3: A-Mem Atomic Notes & Knowledge Graph
+# =============================================================================
+
+
+class AtomicNote(models.Model):
+    """
+    Phase 3: Atomic memory notes (A-Mem architecture)
+
+    Stores individual atomic facts extracted from conversations.
+    Each note represents a single, granular piece of knowledge with
+    context and relationships to other notes.
+
+    Examples:
+    - "prefers dark mode" (preference:ui)
+    - "uses vim keybindings" (preference:editor)
+    - "experienced Python developer" (skill:programming)
+    - "lives in San Francisco" (personal:location)
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.UUIDField(db_index=True)
+
+    # The atomic fact (single, granular piece of knowledge)
+    content = models.TextField()
+
+    # Structured type taxonomy: category:subcategory
+    # Examples: preference:ui, skill:programming, interest:topic, relationship:person
+    note_type = models.CharField(max_length=100, db_index=True)
+
+    # Context about when/why/how this was mentioned
+    context = models.TextField(blank=True)
+
+    # Provenance - which conversation turn this came from
+    source_turn = models.ForeignKey(
+        ConversationTurn,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='extracted_notes'
+    )
+
+    # Confidence score from extraction (0.0-1.0)
+    confidence = models.FloatField(default=1.0)
+
+    # Computed importance score (based on frequency, recency, connections)
+    importance_score = models.FloatField(default=1.0, db_index=True)
+
+    # Vector storage for semantic search
+    vector_id = models.CharField(max_length=255, unique=True)
+
+    # Tags for filtering and organization
+    tags = models.JSONField(default=list, blank=True)
+
+    # Lifecycle timestamps
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-importance_score', '-created_at']
+        indexes = [
+            models.Index(fields=['user_id', '-importance_score']),
+            models.Index(fields=['user_id', 'note_type']),
+            models.Index(fields=['user_id', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.note_type}: {self.content[:50]}"
+
+
+class NoteRelationship(models.Model):
+    """
+    Phase 3: Relationships between atomic notes
+
+    Creates a knowledge graph by linking related notes together.
+    Enables graph traversal to find related context.
+
+    Relationship types:
+    - related_to: General connection
+    - contradicts: Notes that conflict
+    - refines: One note adds detail to another
+    - context_for: Provides context for another note
+    - follows_from: Temporal or causal relationship
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # The two notes being connected
+    from_note = models.ForeignKey(
+        AtomicNote,
+        on_delete=models.CASCADE,
+        related_name='outgoing_relationships'
+    )
+    to_note = models.ForeignKey(
+        AtomicNote,
+        on_delete=models.CASCADE,
+        related_name='incoming_relationships'
+    )
+
+    # Type of relationship
+    relationship_type = models.CharField(
+        max_length=50,
+        db_index=True,
+        choices=[
+            ('related_to', 'Related To'),
+            ('contradicts', 'Contradicts'),
+            ('refines', 'Refines'),
+            ('context_for', 'Context For'),
+            ('follows_from', 'Follows From'),
+        ],
+        default='related_to'
+    )
+
+    # Strength of relationship (0.0-1.0)
+    strength = models.FloatField(default=1.0)
+
+    # When this relationship was discovered/created
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Prevent duplicate relationships
+        unique_together = [['from_note', 'to_note', 'relationship_type']]
+        indexes = [
+            models.Index(fields=['from_note', 'relationship_type']),
+            models.Index(fields=['to_note', 'relationship_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.from_note.content[:30]} -{self.relationship_type}-> {self.to_note.content[:30]}"

@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "corsheaders",
+    "django_q",  # Phase 3: Background job processing
     "memories",
 ]
 
@@ -173,6 +174,21 @@ EMBEDDINGS_TIMEOUT = int(os.getenv("EMBEDDINGS_TIMEOUT", "30"))
 
 # Phase 2: Redis Cache Configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+# Phase 3: Django-Q Background Job Configuration
+Q_CLUSTER = {
+    "name": "mnemosyne",
+    "workers": 2,
+    "timeout": 600,  # 10 minutes max per task
+    "retry": 900,  # Retry failed tasks after 15 minutes
+    "queue_limit": 50,
+    "bulk": 10,
+    "orm": "default",  # Use Django ORM (PostgreSQL) for task queue
+    "save_limit": 250,  # Keep last 250 successful tasks
+    "max_attempts": 3,  # Retry failed tasks up to 3 times
+    "ack_failures": True,  # Acknowledge failed tasks
+    "poll": 0.5,  # Poll for new tasks every 0.5 seconds
+}
 
 # Security headers and HTTPS settings
 SECURE_BROWSER_XSS_FILTER = True

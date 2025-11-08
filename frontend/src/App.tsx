@@ -2,7 +2,6 @@ import React from "react";
 import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import DevToolsPage from "./pages/DevToolsPage";
 import HomePage from "./pages/HomePage";
-import ImportPage from "./pages/ImportPage";
 import SettingsPage from "./pages/SettingsPage";
 
 const App: React.FC = () => {

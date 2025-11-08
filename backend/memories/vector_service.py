@@ -68,7 +68,6 @@ class VectorService:
 
     def store_embedding(
         self,
-        memory_id: str,
         embedding: List[float],
         user_id: str,
         metadata: Dict[str, Any],
@@ -76,11 +75,12 @@ class VectorService:
         """
         Store embedding in Qdrant and return vector ID
 
+        Phase 1: Stores conversation turn embeddings
+
         Args:
-            memory_id: UUID of the memory record
             embedding: Vector embedding
             user_id: UUID of the user
-            metadata: Additional metadata to store
+            metadata: Additional metadata to store (should include turn_id, session_id, etc.)
 
         Returns:
             Vector ID (UUID string)
@@ -92,9 +92,7 @@ class VectorService:
                 id=vector_id,
                 vector=embedding,
                 payload={
-                    "memory_id": memory_id,
                     "user_id": user_id,
-                    "created_at": metadata.get("created_at"),
                     **metadata,
                 },
             )
@@ -102,17 +100,17 @@ class VectorService:
             self.client.upsert(collection_name=self.collection_name, points=[point])
 
             logger.debug(
-                "Stored embedding for memory %s with vector ID %s", memory_id, vector_id
+                "Stored embedding for user %s with vector ID %s", user_id, vector_id
             )
             return vector_id
 
         except Exception as e:
-            logger.error("Failed to store embedding for memory %s: %s", memory_id, e)
+            logger.error("Failed to store embedding for user %s: %s", user_id, e)
             raise
 
     def search_similar(
         self,
-        query_embedding: List[float],
+        embedding: List[float],
         user_id: str,
         limit: int = 10,
         score_threshold: float = 0.0,
@@ -120,14 +118,16 @@ class VectorService:
         """
         Search for similar embeddings
 
+        Phase 1: Returns conversation turn metadata
+
         Args:
-            query_embedding: Query vector
-            user_id: Filter by user ID (optional)
+            embedding: Query vector (renamed from query_embedding for consistency)
+            user_id: Filter by user ID
             limit: Maximum number of results
             score_threshold: Minimum similarity score
 
         Returns:
-            List of search results with memory_id, score, and payload
+            List of search results with metadata, score, and vector_id
         """
         logger.info(
             "Searching for similar embeddings for user %s with limit %d",
@@ -146,7 +146,7 @@ class VectorService:
 
             results = self.client.search(
                 collection_name=self.collection_name,
-                query_vector=query_embedding,
+                query_vector=embedding,
                 limit=limit,
                 query_filter=search_filter,
                 score_threshold=score_threshold,
@@ -154,16 +154,10 @@ class VectorService:
 
             search_results = []
             for hit in results:
-                memory_id = (
-                    hit.payload["memory_id"]
-                    if hit.payload and "memory_id" in hit.payload
-                    else None
-                )
                 search_results.append(
                     {
-                        "memory_id": memory_id,
+                        "metadata": hit.payload if hit.payload else {},
                         "score": hit.score,
-                        "payload": hit.payload,
                         "vector_id": hit.id,
                     }
                 )

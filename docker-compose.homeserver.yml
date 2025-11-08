@@ -31,6 +31,20 @@ services:
       start_period: 30s
     container_name: mnemosyne_qdrant
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"  # Expose for direct access if needed
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    container_name: mnemosyne_redis
+
   app:
     build: .
     ports:
@@ -62,6 +76,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs  # Optional: for persistent logs
@@ -70,3 +86,4 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  redis_data:

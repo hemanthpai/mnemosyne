@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from .models import ConversationTurn
 from .vector_service import vector_service
 from .llm_service import llm_service
+from .cache_service import cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,16 @@ class ConversationService:
             turn.vector_id = vector_id
             turn.save(update_fields=['vector_id'])
 
+            # Phase 2: Cache in working memory
+            cache_service.cache_recent_conversation(user_id, {
+                'id': str(turn.id),
+                'user_message': user_message,
+                'assistant_message': assistant_message,
+                'timestamp': turn.timestamp.isoformat(),
+                'session_id': session_id,
+                'turn_number': turn_number
+            })
+
             logger.info(f"Stored turn {turn.id} for user {user_id}")
             return turn
 
@@ -92,7 +103,7 @@ class ConversationService:
     ) -> List[Dict[str, Any]]:
         """
         Fast path search - direct embedding, no LLM calls
-        Target: 100-300ms
+        Target: <10ms (cache hit), 100-300ms (cache miss)
 
         Args:
             query: Search query text
@@ -106,6 +117,12 @@ class ConversationService:
         Raises:
             ValueError: If embedding generation fails
         """
+        # Phase 2: Check cache first
+        cached_results = cache_service.get_cached_search(user_id, query)
+        if cached_results is not None:
+            logger.info(f"Cache hit for search query: {query[:30]}...")
+            return cached_results[:limit]
+
         # Generate query embedding
         embedding_result = llm_service.get_embeddings([query])
         if not embedding_result['success']:
@@ -139,6 +156,9 @@ class ConversationService:
                     'session_id': turn.session_id,
                     'turn_number': turn.turn_number
                 })
+
+        # Phase 2: Cache search results
+        cache_service.cache_search_result(user_id, query, results)
 
         logger.info(f"Search for user {user_id} returned {len(results)} results")
         return results

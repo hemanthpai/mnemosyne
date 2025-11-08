@@ -678,3 +678,66 @@ def extraction_hook(task):
 
     else:
         logger.error(f"Extraction task {task.name} failed: {task.result}")
+
+
+# =============================================================================
+# Nightly Relationship Building for All Users
+# =============================================================================
+
+def nightly_relationship_building_all_users() -> Dict[str, Any]:
+    """
+    Nightly task to build relationships for all users (scheduled task)
+
+    This is a backup/catch-all task that runs at 2am daily to:
+    1. Process any users who have new notes
+    2. Catch any missed relationships from dynamic processing
+    3. Update importance scores across the graph
+
+    Returns:
+        Dict with processing results
+    """
+    from .models import AtomicNote
+    from django.db.models import Count
+
+    logger.info("Starting nightly relationship building for all users")
+
+    # Get users who have atomic notes
+    users_with_notes = (
+        AtomicNote.objects
+        .values('user_id')
+        .annotate(note_count=Count('id'))
+        .filter(note_count__gt=0)
+    )
+
+    total_users = len(users_with_notes)
+    total_relationships = 0
+    users_processed = 0
+
+    for user_data in users_with_notes:
+        user_id = str(user_data['user_id'])
+        note_count = user_data['note_count']
+
+        logger.info(f"Processing user {user_id} ({note_count} notes)")
+
+        try:
+            result = build_note_relationships(user_id)
+
+            if result['status'] == 'completed':
+                total_relationships += result.get('relationships_created', 0)
+                users_processed += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process relationships for user {user_id}: {e}")
+            continue
+
+    logger.info(
+        f"Nightly relationship building complete: "
+        f"{total_relationships} relationships created for {users_processed}/{total_users} users"
+    )
+
+    return {
+        "status": "completed",
+        "users_processed": users_processed,
+        "total_users": total_users,
+        "relationships_created": total_relationships
+    }

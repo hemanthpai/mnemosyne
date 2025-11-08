@@ -1,5 +1,10 @@
 import axios from 'axios';
 import {
+    StoreConversationTurnResponse,
+    SearchConversationsResponse,
+    ListConversationsResponse,
+    ConversationTurn,
+    // Legacy types
     DeleteAllMemoriesResponse,
     ExtractMemoriesResponse,
     LLMSettings,
@@ -10,22 +15,64 @@ import {
 
 // Auto-detect API base URL based on environment
 const getApiBaseUrl = (): string => {
-    // Check if we're in a browser environment first
     if (typeof window === 'undefined') {
-        return 'http://localhost:8000'; // Fallback for SSR
+        return 'http://localhost:8000';
     }
-    
-    // Use relative URLs - this will work for both development and production
-    // In development: proxied through Vite dev server
-    // In production: served by Django on the same host/port
     return '';
 };
 
 const API_BASE_URL = getApiBaseUrl();
 
-// Memory extraction and retrieval endpoints
+// ============================================================================
+// Phase 1: Simple Conversation API (New)
+// ============================================================================
+
+export const storeConversationTurn = async (
+    userId: string,
+    sessionId: string,
+    userMessage: string,
+    assistantMessage: string
+): Promise<StoreConversationTurnResponse> => {
+    const response = await axios.post(`${API_BASE_URL}/api/conversations/store/`, {
+        user_id: userId,
+        session_id: sessionId,
+        user_message: userMessage,
+        assistant_message: assistantMessage,
+    });
+    return response.data;
+};
+
+export const searchConversations = async (
+    query: string,
+    userId: string,
+    limit: number = 10,
+    threshold: number = 0.5
+): Promise<SearchConversationsResponse> => {
+    const response = await axios.post(`${API_BASE_URL}/api/conversations/search/`, {
+        query,
+        user_id: userId,
+        limit,
+        threshold,
+    });
+    return response.data;
+};
+
+export const listConversations = async (
+    userId: string,
+    limit: number = 50
+): Promise<ListConversationsResponse> => {
+    const response = await axios.get(`${API_BASE_URL}/api/conversations/list/`, {
+        params: { user_id: userId, limit }
+    });
+    return response.data;
+};
+
+// ============================================================================
+// Legacy API (Phase 0 - kept for compatibility during transition)
+// ============================================================================
+
 export const extractMemories = async (
-    conversationText: string, 
+    conversationText: string,
     userId: string,
     options?: { fields?: string[] }
 ): Promise<ExtractMemoriesResponse> => {
@@ -33,7 +80,7 @@ export const extractMemories = async (
         const response = await axios.post<ExtractMemoriesResponse>(`${API_BASE_URL}/api/memories/extract/`, {
             conversation_text: conversationText,
             user_id: userId,
-            fields: options?.fields || ["id", "content"], // Optimized default - 60-80% smaller responses!
+            fields: options?.fields || ["id", "content"],
         });
         return response.data;
     } catch (error) {
@@ -43,7 +90,7 @@ export const extractMemories = async (
 };
 
 export const retrieveMemories = async (
-    prompt: string, 
+    prompt: string,
     userId: string,
     options?: RetrieveMemoriesRequestOptions
 ): Promise<RetrieveMemoriesResponse> => {
@@ -51,13 +98,11 @@ export const retrieveMemories = async (
         const response = await axios.post<RetrieveMemoriesResponse>(`${API_BASE_URL}/api/memories/retrieve/`, {
             prompt,
             user_id: userId,
-            // Optimized defaults for maximum performance
-            fields: options?.fields || ["id", "content"], // 60-80% smaller responses!
-            include_search_metadata: options?.include_search_metadata || false, // Save bandwidth
-            include_summary: options?.include_summary || false, // Save expensive LLM calls
+            fields: options?.fields || ["id", "content"],
+            include_search_metadata: options?.include_search_metadata || false,
+            include_summary: options?.include_summary || false,
             limit: options?.limit || 99,
             threshold: options?.threshold || 0.7,
-            // boosted_threshold removed in backend simplification
         });
         return response.data;
     } catch (error) {
@@ -66,124 +111,57 @@ export const retrieveMemories = async (
     }
 };
 
-// Convenience functions for common use cases
 export const retrieveMemoriesWithSummary = async (
-    prompt: string, 
+    prompt: string,
     userId: string,
     options?: Omit<RetrieveMemoriesRequestOptions, 'include_summary'>
 ): Promise<RetrieveMemoriesResponse> => {
     return retrieveMemories(prompt, userId, {
         ...options,
-        include_summary: true, // Enable expensive summary for this use case
-        fields: options?.fields || ["id", "content", "metadata"], // Include metadata for summary context
+        include_summary: true,
+        fields: options?.fields || ["id", "content", "metadata"],
     });
 };
 
 export const retrieveMemoriesWithSearchDetails = async (
-    prompt: string, 
+    prompt: string,
     userId: string,
     options?: Omit<RetrieveMemoriesRequestOptions, 'include_search_metadata'>
 ): Promise<RetrieveMemoriesResponse> => {
     return retrieveMemories(prompt, userId, {
         ...options,
-        include_search_metadata: true, // Include search scoring info
-        fields: options?.fields || ["id", "content", "created_at"], // Include timestamps for debugging
+        include_search_metadata: true,
+        fields: options?.fields || ["id", "content", "created_at"],
     });
 };
 
-// Memory CRUD endpoints
 export const listAllMemories = async (userId?: string): Promise<Memory[]> => {
     try {
-        const url = userId 
+        const url = userId
             ? `${API_BASE_URL}/api/memories/?user_id=${userId}`
             : `${API_BASE_URL}/api/memories/`;
-        
-        const response = await axios.get<{
-            success: boolean;
-            count: number;
-            memories: Memory[];
-        }>(url);
-        
-        return response.data.memories;
+
+        const response = await axios.get(url);
+        return response.data.memories || [];
     } catch (error) {
         console.error('Error listing memories:', error);
         throw error;
     }
 };
 
-export const getMemory = async (memoryId: string): Promise<Memory> => {
-    try {
-        const response = await axios.get<Memory>(`${API_BASE_URL}/api/memories/${memoryId}/`);
-        return response.data;
-    } catch (error) {
-        console.error('Error fetching memory:', error);
-        throw error;
-    }
-};
-
-export const createMemory = async (memoryData: Partial<Memory>): Promise<Memory> => {
-    try {
-        const response = await axios.post<Memory>(`${API_BASE_URL}/api/memories/`, memoryData);
-        return response.data;
-    } catch (error) {
-        console.error('Error creating memory:', error);
-        throw error;
-    }
-};
-
-export const updateMemory = async (
-    memoryId: string, 
-    memoryData: Partial<Memory>, 
-    partial: boolean = false
-): Promise<Memory> => {
-    try {
-        const method = partial ? 'patch' : 'put';
-        const response = await axios[method]<Memory>(`${API_BASE_URL}/api/memories/${memoryId}/`, memoryData);
-        return response.data;
-    } catch (error) {
-        console.error('Error updating memory:', error);
-        throw error;
-    }
-};
-
-export const deleteMemory = async (memoryId: string): Promise<{ success: boolean }> => {
-    try {
-        await axios.delete(`${API_BASE_URL}/api/memories/${memoryId}/`);
-        return { success: true };
-    } catch (error) {
-        console.error('Error deleting memory:', error);
-        throw error;
-    }
-};
-
-// Add these functions to your existing api.ts file
 export const deleteAllMemories = async (userId?: string): Promise<DeleteAllMemoriesResponse> => {
-    const payload: any = { confirm: true };
-    if (userId) {
-        payload.user_id = userId;
+    try {
+        const url = `${API_BASE_URL}/api/memories/delete-all/`;
+        const response = await axios.delete<DeleteAllMemoriesResponse>(url, {
+            params: userId ? { user_id: userId } : {},
+        });
+        return response.data;
+    } catch (error) {
+        console.error('Error deleting memories:', error);
+        throw error;
     }
-    
-    const response = await fetch(`${API_BASE_URL}/api/memories/delete-all/`, {
-        method: 'DELETE',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to delete memories');
-    }
-
-    return response.json();
 };
 
-export const clearVectorDatabase = async (): Promise<DeleteAllMemoriesResponse> => {
-    return deleteAllMemories(); // Same endpoint, no user_id = clear all
-};
-
-// Settings endpoints
 export const getSettings = async (): Promise<LLMSettings> => {
     try {
         const response = await axios.get<LLMSettings>(`${API_BASE_URL}/api/settings/`);
@@ -204,174 +182,78 @@ export const updateSettings = async (settings: Partial<LLMSettings>): Promise<LL
     }
 };
 
-export const getPromptTokenCounts = async (): Promise<{
+export const testConnection = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/api/memories/test-connection/`);
+        return response.data;
+    } catch (error) {
+        console.error('Error testing connection:', error);
+        throw error;
+    }
+};
+
+export interface MemoryStatsResponse {
     success: boolean;
-    token_counts?: {
-        memory_extraction_prompt: number;
-        memory_search_prompt: number;
-        semantic_connection_prompt: number;
-        memory_summarization_prompt: number;
+    total_memories: number;
+    domain_distribution: Record<string, number>;
+    top_tags: Record<string, number>;
+    vector_collection_info?: {
+        points_count: number;
+        vector_count?: number;
+        status?: string;
+        config?: Record<string, any>;
     };
-    model_name?: string;
-    error?: string;
-}> => {
-    const response = await fetch(`${API_BASE_URL}/api/settings/prompt-token-counts/`);
-    
-    if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    return response.json();
-};
+}
 
-// Backend proxy endpoint validation and model fetching
-export const validateEndpoint = async (
-    url: string,
-    provider_type: string,
-    api_key?: string
-): Promise<{
-    success: boolean;
-    error?: string;
-}> => {
+export const getMemoryStats = async (userId?: string): Promise<MemoryStatsResponse> => {
     try {
-        const response = await axios.post(`${API_BASE_URL}/api/settings/validate-endpoint/`, {
-            url,
-            provider_type,
-            api_key
-        });
+        const url = userId
+            ? `${API_BASE_URL}/api/memories/stats/?user_id=${userId}`
+            : `${API_BASE_URL}/api/memories/stats/`;
+        const response = await axios.get<MemoryStatsResponse>(url);
         return response.data;
-    } catch (error: any) {
-        console.error('Error validating endpoint:', error);
-        return {
-            success: false,
-            error: error.response?.data?.error || error.message || 'Failed to validate endpoint'
-        };
+    } catch (error) {
+        console.error('Error fetching memory stats:', error);
+        throw error;
     }
 };
 
-export const fetchModels = async (
-    url: string,
-    provider_type: string,
-    api_key?: string
-): Promise<{
-    success: boolean;
-    models?: string[];
+export interface ImportProgressResponse {
+    status: string;
+    progress: number;
+    current_chat?: number;
+    total_chats?: number;
+    memories_extracted?: number;
+    errors_encountered?: number;
     error?: string;
-}> => {
-    try {
-        const response = await axios.post(`${API_BASE_URL}/api/settings/fetch-models/`, {
-            url,
-            provider_type,
-            api_key
-        });
-        return response.data;
-    } catch (error: any) {
-        console.error('Error fetching models:', error);
-        return {
-            success: false,
-            error: error.response?.data?.error || error.message || 'Failed to fetch models'
-        };
-    }
+}
+
+export const importOpenWebUIHistory = async (
+    file: File,
+    userId: string,
+    dryRun: boolean = false
+): Promise<{ success: boolean; task_id: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('user_id', userId);
+    formData.append('dry_run', dryRun.toString());
+
+    const response = await axios.post(`${API_BASE_URL}/api/memories/import/start/`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
 };
 
-// Open WebUI Import endpoints
-export const startOpenWebUIImport = async (
-    dbFile: File,
-    options?: {
-        target_user_id?: string;
-        openwebui_user_id?: string;
-        after_date?: string;
-        batch_size?: number;
-        limit?: number;
-        dry_run?: boolean;
-    }
-): Promise<{
-    success: boolean;
-    message?: string;
-    dry_run?: boolean;
-    error?: string;
-}> => {
-    try {
-        const formData = new FormData();
-        formData.append('db_file', dbFile);
-
-        if (options?.target_user_id) {
-            formData.append('target_user_id', options.target_user_id);
-        }
-        if (options?.openwebui_user_id) {
-            formData.append('openwebui_user_id', options.openwebui_user_id);
-        }
-        if (options?.after_date) {
-            formData.append('after_date', options.after_date);
-        }
-        if (options?.batch_size) {
-            formData.append('batch_size', options.batch_size.toString());
-        }
-        if (options?.limit) {
-            formData.append('limit', options.limit.toString());
-        }
-        if (options?.dry_run !== undefined) {
-            formData.append('dry_run', options.dry_run.toString());
-        }
-
-        const response = await axios.post(`${API_BASE_URL}/api/memories/import/start/`, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
-        });
-        return response.data;
-    } catch (error: any) {
-        console.error('Error starting import:', error);
-        return {
-            success: false,
-            error: error.response?.data?.error || error.message || 'Failed to start import'
-        };
-    }
+export const getImportProgress = async (taskId: string): Promise<ImportProgressResponse> => {
+    const response = await axios.get(`${API_BASE_URL}/api/memories/import/progress/`, {
+        params: { task_id: taskId }
+    });
+    return response.data;
 };
 
-export const getImportProgress = async (): Promise<{
-    success: boolean;
-    progress?: {
-        total_conversations: number;
-        processed_conversations: number;
-        extracted_memories: number;
-        failed_conversations: number;
-        current_conversation_id: string | null;
-        status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
-        error_message: string | null;
-        start_time: string | null;
-        end_time: string | null;
-        elapsed_seconds: number | null;
-        dry_run: boolean;
-        progress_percentage: number;
-    };
-    error?: string;
-}> => {
-    try {
-        const response = await axios.get(`${API_BASE_URL}/api/memories/import/progress/`);
-        return response.data;
-    } catch (error: any) {
-        console.error('Error getting import progress:', error);
-        return {
-            success: false,
-            error: error.response?.data?.error || error.message || 'Failed to get import progress'
-        };
-    }
-};
-
-export const cancelImport = async (): Promise<{
-    success: boolean;
-    message?: string;
-    error?: string;
-}> => {
-    try {
-        const response = await axios.post(`${API_BASE_URL}/api/memories/import/cancel/`);
-        return response.data;
-    } catch (error: any) {
-        console.error('Error cancelling import:', error);
-        return {
-            success: false,
-            error: error.response?.data?.error || error.message || 'Failed to cancel import'
-        };
-    }
+export const cancelImport = async (taskId: string): Promise<{ success: boolean }> => {
+    const response = await axios.post(`${API_BASE_URL}/api/memories/import/cancel/`, {
+        task_id: taskId
+    });
+    return response.data;
 };

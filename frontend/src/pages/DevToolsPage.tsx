@@ -1,609 +1,438 @@
-import React, { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { extractMemories, retrieveMemories, retrieveMemoriesWithSummary, retrieveMemoriesWithSearchDetails } from "../services/api";
-import {
-    ExtractMemoriesResponse,
-    RetrieveMemoriesResponse,
-} from "../types/index";
+import React, { useState } from "react";
+import { storeConversationTurn, searchConversations } from "../services/api";
+import { StoreConversationTurnResponse, SearchConversationsResponse } from "../types";
+import LatencyBadge from "../components/LatencyBadge";
+import ConversationTurnCard from "../components/ConversationTurnCard";
 
 const DevToolsPage: React.FC = () => {
-    // Extraction state
-    const [extractionText, setExtractionText] = useState<string>("");
-    const [extractionUserId, setExtractionUserId] = useState<string>("");
-    const [extractionLoading, setExtractionLoading] = useState<boolean>(false);
-    const [extractionResult, setExtractionResult] =
-        useState<ExtractMemoriesResponse | null>(null);
-    const [extractionError, setExtractionError] = useState<string | null>(null);
+    // Sample data
+    const SAMPLE_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
+    const SAMPLE_SESSION = "dev-session-" + Date.now();
 
-    // Retrieval state
-    const [retrievalPrompt, setRetrievalPrompt] = useState<string>("");
-    const [retrievalUserId, setRetrievalUserId] = useState<string>("");
-    const [retrievalLoading, setRetrievalLoading] = useState<boolean>(false);
-    const [retrievalResult, setRetrievalResult] =
-        useState<RetrieveMemoriesResponse | null>(null);
-    const [retrievalError, setRetrievalError] = useState<string | null>(null);
-    
-    // Optimization options
-    const [optimizationLevel, setOptimizationLevel] = useState<"fast" | "detailed" | "full">("fast");
-    const [searchParams] = useSearchParams();
+    // Store Turn State
+    const [userId, setUserId] = useState<string>(SAMPLE_USER_ID);
+    const [sessionId, setSessionId] = useState<string>(SAMPLE_SESSION);
+    const [userMessage, setUserMessage] = useState<string>("");
+    const [assistantMessage, setAssistantMessage] = useState<string>("");
+    const [storeLoading, setStoreLoading] = useState<boolean>(false);
+    const [storeResult, setStoreResult] = useState<StoreConversationTurnResponse | null>(null);
+    const [storeError, setStoreError] = useState<string | null>(null);
 
-    useEffect(() => {
-        // Load initial data from search params if available
-        const initialExtractionText = searchParams.get("extractionText") || "";
-        const initialExtractionUserId =
-            searchParams.get("extractionUserId") || "";
-        const initialRetrievalPrompt =
-            searchParams.get("retrievalPrompt") || "";
-        const initialRetrievalUserId =
-            searchParams.get("retrievalUserId") || "";
+    // Search State
+    const [searchQuery, setSearchQuery] = useState<string>("");
+    const [searchUserId, setSearchUserId] = useState<string>(SAMPLE_USER_ID);
+    const [searchLimit, setSearchLimit] = useState<number>(10);
+    const [searchThreshold, setSearchThreshold] = useState<number>(0.5);
+    const [searchLoading, setSearchLoading] = useState<boolean>(false);
+    const [searchResult, setSearchResult] = useState<SearchConversationsResponse | null>(null);
+    const [searchError, setSearchError] = useState<string | null>(null);
 
-        setExtractionText(initialExtractionText);
-        setExtractionUserId(initialExtractionUserId);
-        setRetrievalPrompt(initialRetrievalPrompt);
-        setRetrievalUserId(initialRetrievalUserId);
-    }, [searchParams]);
+    // Sample conversations
+    const SAMPLE_CONVERSATIONS = [
+        {
+            user: "I love hiking in the mountains",
+            assistant: "That's wonderful! Mountains offer great views and exercise.",
+        },
+        {
+            user: "I prefer reading sci-fi novels",
+            assistant: "Science fiction is fascinating! Any favorite authors?",
+        },
+        {
+            user: "I'm learning to play guitar",
+            assistant: "That's great! Playing an instrument is very rewarding.",
+        },
+    ];
 
-    const handleExtractMemories = async () => {
-        if (!extractionText.trim() || !extractionUserId.trim()) {
-            setExtractionError(
-                "Both conversation text and user ID are required"
-            );
+    const handleStoreTurn = async () => {
+        if (!userMessage.trim() || !assistantMessage.trim()) {
+            setStoreError("Both messages are required");
             return;
         }
 
-        setExtractionLoading(true);
-        setExtractionError(null);
-        setExtractionResult(null);
+        setStoreLoading(true);
+        setStoreError(null);
+        setStoreResult(null);
 
         try {
-            const result = await extractMemories(
-                extractionText,
-                extractionUserId
+            const result = await storeConversationTurn(
+                userId,
+                sessionId,
+                userMessage,
+                assistantMessage
             );
-            setExtractionResult(result);
-        } catch (err) {
-            setExtractionError("Failed to extract memories");
-            console.error("Error extracting memories:", err);
+            setStoreResult(result);
+            // Clear messages after successful store
+            setUserMessage("");
+            setAssistantMessage("");
+        } catch (err: any) {
+            setStoreError(err.response?.data?.error || "Failed to store conversation turn");
         } finally {
-            setExtractionLoading(false);
+            setStoreLoading(false);
         }
     };
 
-    const handleRetrieveMemories = async () => {
-        if (!retrievalPrompt.trim() || !retrievalUserId.trim()) {
-            setRetrievalError("Both prompt and user ID are required");
+    const handleSearch = async () => {
+        if (!searchQuery.trim()) {
+            setSearchError("Search query is required");
             return;
         }
 
-        setRetrievalLoading(true);
-        setRetrievalError(null);
-        setRetrievalResult(null);
+        setSearchLoading(true);
+        setSearchError(null);
+        setSearchResult(null);
 
         try {
-            let result: RetrieveMemoriesResponse;
-            
-            // Use different API calls based on optimization level
-            switch (optimizationLevel) {
-                case "fast":
-                    // Minimal fields, no extras - maximum performance
-                    result = await retrieveMemories(retrievalPrompt, retrievalUserId);
-                    break;
-                case "detailed":
-                    // Include search metadata for debugging
-                    result = await retrieveMemoriesWithSearchDetails(retrievalPrompt, retrievalUserId);
-                    break;
-                case "full":
-                    // Include everything including expensive summary
-                    result = await retrieveMemoriesWithSummary(retrievalPrompt, retrievalUserId, {
-                        include_search_metadata: true,
-                        fields: ["id", "content", "metadata", "created_at", "updated_at"]
-                    });
-                    break;
-            }
-            
-            setRetrievalResult(result);
-        } catch (err) {
-            setRetrievalError("Failed to retrieve memories");
-            console.error("Error retrieving memories:", err);
+            const result = await searchConversations(
+                searchQuery,
+                searchUserId,
+                searchLimit,
+                searchThreshold
+            );
+            setSearchResult(result);
+        } catch (err: any) {
+            setSearchError(err.response?.data?.error || "Failed to search conversations");
         } finally {
-            setRetrievalLoading(false);
+            setSearchLoading(false);
         }
     };
 
-    const clearExtractionForm = () => {
-        setExtractionText("");
-        setExtractionUserId("");
-        setExtractionResult(null);
-        setExtractionError(null);
-    };
-
-    const clearRetrievalForm = () => {
-        setRetrievalPrompt("");
-        setRetrievalUserId("");
-        setRetrievalResult(null);
-        setRetrievalError(null);
-    };
-
-    const loadSampleData = () => {
-        setExtractionText(`My name is Alex Chen and I'm a senior software engineer based in San Francisco. I've been working primarily with React and TypeScript for the past 3 years, though I started my career with Python and Django. I really love dark themes in all my applications - they're much easier on my eyes, especially during long coding sessions.
-
-I'm currently working on migrating our company's legacy jQuery frontend to React. It's a challenging project but really satisfying. We're also introducing TypeScript gradually to improve type safety. My team lead, Sarah Martinez, has been really supportive throughout this migration.
-
-Outside of work, I'm really into hiking and photography. Last weekend I hiked the Dipsea Trail in Marin - got some amazing shots of the Pacific coastline. I'm planning to do Half Dome in Yosemite this summer if I can get a permit. I also play guitar, mostly indie rock and folk music. Been learning some Radiohead songs recently - currently working on "Fake Plastic Trees" and "No Surprises". They're challenging but really beautiful songs.
-
-Oh, I should mention - I'm vegetarian and have been for about 5 years now. It started for health reasons but now it's also about environmental impact. My favorite restaurant here in SF is Shizen, they do amazing vegan sushi.
-
-I'm also learning Rust in my spare time. Coming from TypeScript, the ownership model is quite a mental shift, but I'm really enjoying how it makes you think about memory management. I'm building a small CLI tool for personal finance tracking as my learning project. My wife Emma is also a software engineer, she works at Google on their cloud infrastructure team. We met at a Python conference back in 2018.`);
-        setExtractionUserId("550e8400-e29b-41d4-a716-446655440000");
-
-        setRetrievalPrompt("I need to plan a weekend activity with Alex. Can you suggest something based on their interests and location?");
-        setRetrievalUserId("550e8400-e29b-41d4-a716-446655440000");
+    const loadSample = (sample: { user: string; assistant: string }) => {
+        setUserMessage(sample.user);
+        setAssistantMessage(sample.assistant);
     };
 
     return (
-        <div className="min-h-screen bg-gray-50">
-            {/* Header */}
-            <header className="bg-white shadow-sm">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center py-6">
-                        <div className="flex items-center">
-                            <h1 className="text-3xl font-bold text-gray-900">
-                                DevTools
-                            </h1>
-                            <span className="ml-3 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                                Testing
-                            </span>
-                        </div>
-                        <div className="flex space-x-3">
-                            <button
-                                onClick={loadSampleData}
-                                className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors duration-200"
-                            >
-                                <svg
-                                    className="mr-2 w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2}
-                                        d="M13 10V3L4 14h7v7l9-11h-7z"
-                                    />
-                                </svg>
-                                Load Sample Data
-                            </button>
-                            <Link
-                                to="/"
-                                className="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200"
-                            >
-                                <svg
-                                    className="mr-2 w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2}
-                                        d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                                    />
-                                </svg>
-                                Back to Home
-                            </Link>
-                        </div>
-                    </div>
+        <div style={{ padding: "20px", maxWidth: "1200px", margin: "0 auto" }}>
+            <h1 style={{ marginBottom: "8px" }}>Dev Tools</h1>
+            <p style={{ color: "#666", marginBottom: "24px" }}>
+                Test conversation storage and search with latency visualization
+            </p>
+
+            {/* Quick Test Data */}
+            <div
+                style={{
+                    backgroundColor: "#f5f5f5",
+                    padding: "16px",
+                    borderRadius: "8px",
+                    marginBottom: "24px",
+                }}
+            >
+                <h3 style={{ marginTop: 0, marginBottom: "12px" }}>
+                    📦 Quick Test Data
+                </h3>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    {SAMPLE_CONVERSATIONS.map((sample, idx) => (
+                        <button
+                            key={idx}
+                            onClick={() => loadSample(sample)}
+                            style={{
+                                padding: "8px 16px",
+                                backgroundColor: "#1976d2",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "4px",
+                                cursor: "pointer",
+                                fontSize: "14px",
+                            }}
+                        >
+                            Sample {idx + 1}: {sample.user.substring(0, 30)}...
+                        </button>
+                    ))}
                 </div>
-            </header>
+            </div>
 
-            {/* Main Content */}
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Description Section */}
-                <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-                    <h2 className="text-xl font-semibold text-gray-900 mb-2">
-                        Memory Testing Tools
-                    </h2>
-                    <p className="text-gray-600">
-                        Test memory extraction and retrieval functionality with
-                        real data. Use the sample data or enter your own to see
-                        how the system processes and retrieves memories.
-                    </p>
-                </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+                {/* Store Conversation Turn */}
+                <div
+                    style={{
+                        border: "1px solid #e0e0e0",
+                        borderRadius: "8px",
+                        padding: "20px",
+                        backgroundColor: "#fff",
+                    }}
+                >
+                    <h2 style={{ marginTop: 0 }}>💾 Store Conversation Turn</h2>
 
-                <div className="grid lg:grid-cols-2 gap-8">
-                    {/* Memory Extraction Section */}
-                    <div className="bg-white rounded-lg shadow-md">
-                        <div className="px-6 py-4 border-b border-gray-200">
-                            <div className="flex items-center justify-between">
-                                <h2 className="text-xl font-bold text-gray-900">
-                                    Memory Extraction
-                                </h2>
-                                <button
-                                    onClick={clearExtractionForm}
-                                    className="text-sm text-gray-500 hover:text-gray-700"
-                                >
-                                    Clear
-                                </button>
-                            </div>
-                            <p className="text-sm text-gray-600 mt-1">
-                                Extract memories from conversation text
-                            </p>
-                        </div>
-
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    User ID
-                                </label>
-                                <input
-                                    type="text"
-                                    value={extractionUserId}
-                                    onChange={(e) =>
-                                        setExtractionUserId(e.target.value)
-                                    }
-                                    placeholder="Enter UUID for the user"
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Conversation Text
-                                </label>
-                                <textarea
-                                    value={extractionText}
-                                    onChange={(e) =>
-                                        setExtractionText(e.target.value)
-                                    }
-                                    placeholder="Enter conversation text to extract memories from..."
-                                    rows={8}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-
-                            <button
-                                onClick={handleExtractMemories}
-                                disabled={extractionLoading}
-                                className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {extractionLoading
-                                    ? "Extracting..."
-                                    : "Extract Memories"}
-                            </button>
-
-                            {/* Extraction Results */}
-                            {extractionError && (
-                                <div className="bg-red-50 border border-red-200 rounded-md p-4">
-                                    <p className="text-red-800">
-                                        {extractionError}
-                                    </p>
-                                </div>
-                            )}
-
-                            {extractionResult && (
-                                <div className="bg-green-50 border border-green-200 rounded-md p-4">
-                                    <h3 className="font-medium text-green-800 mb-2">
-                                        Extraction Result:
-                                    </h3>
-                                    <div className="text-sm text-green-700">
-                                        <p>
-                                            <strong>Success:</strong>{" "}
-                                            {extractionResult.success
-                                                ? "Yes"
-                                                : "No"}
-                                        </p>
-                                        <p>
-                                            <strong>Memories Extracted:</strong>{" "}
-                                            {
-                                                extractionResult.memories_extracted
-                                            }
-                                        </p>
-                                        {extractionResult.memories &&
-                                            extractionResult.memories.length >
-                                                0 && (
-                                                <div className="mt-3">
-                                                    <p className="font-medium mb-2">
-                                                        Retrieved Memories:
-                                                    </p>
-                                                    <div className="space-y-2">
-                                                        {extractionResult.memories.map(
-                                                            (memory, index) => (
-                                                                <div
-                                                                    key={
-                                                                        memory.id ||
-                                                                        index
-                                                                    }
-                                                                    className="bg-white p-3 rounded border"
-                                                                >
-                                                                    <p className="text-sm text-gray-800">
-                                                                        {
-                                                                            memory.content
-                                                                        }
-                                                                    </p>
-                                                                </div>
-                                                            )
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
+                    <div style={{ marginBottom: "12px" }}>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                            User ID:
+                        </label>
+                        <input
+                            type="text"
+                            value={userId}
+                            onChange={(e) => setUserId(e.target.value)}
+                            style={{
+                                width: "100%",
+                                padding: "8px",
+                                fontSize: "14px",
+                                borderRadius: "4px",
+                                border: "1px solid #ccc",
+                            }}
+                        />
                     </div>
 
-                    {/* Memory Retrieval Section */}
-                    <div className="bg-white rounded-lg shadow-md">
-                        <div className="px-6 py-4 border-b border-gray-200">
-                            <div className="flex items-center justify-between">
-                                <h2 className="text-xl font-bold text-gray-900">
-                                    Memory Retrieval
-                                </h2>
-                                <button
-                                    onClick={clearRetrievalForm}
-                                    className="text-sm text-gray-500 hover:text-gray-700"
-                                >
-                                    Clear
-                                </button>
-                            </div>
-                            <p className="text-sm text-gray-600 mt-1">
-                                Retrieve relevant memories for a prompt
-                            </p>
-                        </div>
-
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    User ID
-                                </label>
-                                <input
-                                    type="text"
-                                    value={retrievalUserId}
-                                    onChange={(e) =>
-                                        setRetrievalUserId(e.target.value)
-                                    }
-                                    placeholder="Enter UUID for the user"
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Prompt
-                                </label>
-                                <textarea
-                                    value={retrievalPrompt}
-                                    onChange={(e) =>
-                                        setRetrievalPrompt(e.target.value)
-                                    }
-                                    placeholder="Enter a prompt to retrieve relevant memories..."
-                                    rows={4}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Response Optimization Level
-                                </label>
-                                <select
-                                    value={optimizationLevel}
-                                    onChange={(e) => setOptimizationLevel(e.target.value as "fast" | "detailed" | "full")}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                >
-                                    <option value="fast">Fast - Minimal fields only (60-80% smaller responses)</option>
-                                    <option value="detailed">Detailed - Include search metadata for debugging</option>
-                                    <option value="full">Full - Everything including expensive LLM summary</option>
-                                </select>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    💡 "Fast" mode is recommended for production use
-                                </p>
-                            </div>
-
-                            <button
-                                onClick={handleRetrieveMemories}
-                                disabled={retrievalLoading}
-                                className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {retrievalLoading
-                                    ? "Retrieving..."
-                                    : "Retrieve Memories"}
-                            </button>
-
-                            {/* Retrieval Results */}
-                            {retrievalError && (
-                                <div className="bg-red-50 border border-red-200 rounded-md p-4">
-                                    <p className="text-red-800">
-                                        {retrievalError}
-                                    </p>
-                                </div>
-                            )}
-
-                            {retrievalResult && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-                                    <h3 className="font-medium text-blue-800 mb-2">
-                                        Retrieval Result:
-                                    </h3>
-                                    <div className="text-sm text-blue-700 space-y-2">
-                                        <p>
-                                            <strong>Success:</strong>{" "}
-                                            {retrievalResult.success
-                                                ? "Yes"
-                                                : "No"}
-                                        </p>
-                                        <p>
-                                            <strong>Memories Found:</strong>{" "}
-                                            {retrievalResult.memories?.length ||
-                                                0}
-                                        </p>
-                                        {/* Optimized summary display - only shows when included */}
-                                        {retrievalResult.memory_summary && (
-                                            <div className="bg-blue-50 p-4 rounded mt-3">
-                                                <strong>Memory Summary:</strong>
-                                                <p className="mt-2 text-sm">
-                                                    {retrievalResult.memory_summary.summary}
-                                                </p>
-                                                <p className="text-xs text-gray-500 mt-1">
-                                                    💡 Summary generation uses additional LLM calls - enable "Full" mode to include
-                                                </p>
-                                            </div>
-                                        )}
-
-                                        {retrievalResult.memories &&
-                                            retrievalResult.memories.length >
-                                                0 && (
-                                                <div className="mt-3">
-                                                    <div className="flex justify-between items-center mb-2">
-                                                        <p className="font-medium">
-                                                            Retrieved Memories:
-                                                        </p>
-                                                        {optimizationLevel !== "fast" && (
-                                                            <div className="text-xs text-gray-500">
-                                                                <span className="mr-3">Threshold: <span className="bg-blue-100 text-blue-800 px-1 rounded">≥0.7</span></span>
-                                                                <span>Mode: <span className="bg-green-100 text-green-800 px-1 rounded">{optimizationLevel}</span></span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    <div className="space-y-2">
-                                                        {retrievalResult.memories.map(
-                                                            (memory, index) => (
-                                                                <div
-                                                                    key={
-                                                                        memory.id ||
-                                                                        index
-                                                                    }
-                                                                    className="bg-white p-3 rounded border"
-                                                                >
-                                                                    <div className="flex justify-between items-start mb-2">
-                                                                        <p className="text-sm text-gray-800 flex-1">
-                                                                            {
-                                                                                memory.content
-                                                                            }
-                                                                        </p>
-                                                                        {memory.search_metadata && (
-                                                                            <div className="ml-3 flex flex-col items-end space-y-1">
-                                                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                                                                    memory.search_metadata.search_score >= 0.7 
-                                                                                        ? 'bg-green-100 text-green-800'
-                                                                                        : 'bg-gray-100 text-gray-800'
-                                                                                }`}>
-                                                                                    {memory.search_metadata.search_score.toFixed(2)}
-                                                                                </span>
-                                                                                {memory.search_metadata.search_type && (
-                                                                                    <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                                                                        {memory.search_metadata.search_type}
-                                                                                    </span>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                    <div className="flex justify-between items-center text-xs text-gray-500">
-                                                                        <span>
-                                                                            {memory.created_at ? (
-                                                                                <>Created: {new Date(memory.created_at).toLocaleString()}</>
-                                                                            ) : (
-                                                                                <>ID: {memory.id.slice(0, 8)}...</>
-                                                                            )}
-                                                                        </span>
-                                                                        {memory.search_metadata && optimizationLevel !== "fast" && (
-                                                                            <span className="text-gray-400">
-                                                                                {optimizationLevel === "full" && memory.search_metadata.search_time_ms 
-                                                                                    ? `Search Time: ${memory.search_metadata.search_time_ms}ms`
-                                                                                    : `Score: ${memory.search_metadata.search_score.toFixed(2)}`
-                                                                                }
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                    {memory.metadata?.tags && memory.metadata.tags.length > 0 && (
-                                                                        <div className="mt-2 flex flex-wrap gap-1">
-                                                                            {memory.metadata.tags.slice(0, 5).map((tag, tagIndex) => (
-                                                                                <span
-                                                                                    key={tagIndex}
-                                                                                    className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded"
-                                                                                >
-                                                                                    {tag}
-                                                                                </span>
-                                                                            ))}
-                                                                            {memory.metadata.tags.length > 5 && (
-                                                                                <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs rounded">
-                                                                                    +{memory.metadata.tags.length - 5} more
-                                                                                </span>
-                                                                            )}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            )
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
+                    <div style={{ marginBottom: "12px" }}>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                            Session ID:
+                        </label>
+                        <input
+                            type="text"
+                            value={sessionId}
+                            onChange={(e) => setSessionId(e.target.value)}
+                            style={{
+                                width: "100%",
+                                padding: "8px",
+                                fontSize: "14px",
+                                borderRadius: "4px",
+                                border: "1px solid #ccc",
+                            }}
+                        />
                     </div>
+
+                    <div style={{ marginBottom: "12px" }}>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                            User Message:
+                        </label>
+                        <textarea
+                            value={userMessage}
+                            onChange={(e) => setUserMessage(e.target.value)}
+                            rows={3}
+                            style={{
+                                width: "100%",
+                                padding: "8px",
+                                fontSize: "14px",
+                                borderRadius: "4px",
+                                border: "1px solid #ccc",
+                                fontFamily: "inherit",
+                            }}
+                            placeholder="Enter user message..."
+                        />
+                    </div>
+
+                    <div style={{ marginBottom: "16px" }}>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                            Assistant Message:
+                        </label>
+                        <textarea
+                            value={assistantMessage}
+                            onChange={(e) => setAssistantMessage(e.target.value)}
+                            rows={3}
+                            style={{
+                                width: "100%",
+                                padding: "8px",
+                                fontSize: "14px",
+                                borderRadius: "4px",
+                                border: "1px solid #ccc",
+                                fontFamily: "inherit",
+                            }}
+                            placeholder="Enter assistant response..."
+                        />
+                    </div>
+
+                    <button
+                        onClick={handleStoreTurn}
+                        disabled={storeLoading}
+                        style={{
+                            width: "100%",
+                            padding: "12px",
+                            backgroundColor: storeLoading ? "#ccc" : "#4caf50",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "4px",
+                            fontSize: "16px",
+                            fontWeight: "600",
+                            cursor: storeLoading ? "not-allowed" : "pointer",
+                        }}
+                    >
+                        {storeLoading ? "Storing..." : "Store Turn"}
+                    </button>
+
+                    {storeError && (
+                        <div
+                            style={{
+                                marginTop: "12px",
+                                padding: "12px",
+                                backgroundColor: "#ffebee",
+                                border: "1px solid #ef5350",
+                                borderRadius: "4px",
+                                color: "#c62828",
+                            }}
+                        >
+                            ❌ {storeError}
+                        </div>
+                    )}
+
+                    {storeResult && (
+                        <div
+                            style={{
+                                marginTop: "12px",
+                                padding: "12px",
+                                backgroundColor: "#e8f5e9",
+                                border: "1px solid #66bb6a",
+                                borderRadius: "4px",
+                            }}
+                        >
+                            <div style={{ marginBottom: "8px" }}>
+                                ✅ <strong>Success!</strong>
+                            </div>
+                            <div style={{ fontSize: "14px", marginBottom: "8px" }}>
+                                Turn ID: {storeResult.turn_id}
+                                <br />
+                                Turn Number: #{storeResult.turn_number}
+                            </div>
+                            <LatencyBadge latencyMs={storeResult.latency_ms} targetMs={100} />
+                        </div>
+                    )}
                 </div>
 
-                {/* API Status Section */}
-                <div className="mt-8 bg-white rounded-lg shadow-md p-6">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">
-                        API Status & Tips
-                    </h3>
-                    <div className="grid md:grid-cols-2 gap-6">
+                {/* Search Conversations */}
+                <div
+                    style={{
+                        border: "1px solid #e0e0e0",
+                        borderRadius: "8px",
+                        padding: "20px",
+                        backgroundColor: "#fff",
+                    }}
+                >
+                    <h2 style={{ marginTop: 0 }}>🔍 Search Conversations</h2>
+
+                    <div style={{ marginBottom: "12px" }}>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                            Search Query:
+                        </label>
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{
+                                width: "100%",
+                                padding: "8px",
+                                fontSize: "14px",
+                                borderRadius: "4px",
+                                border: "1px solid #ccc",
+                            }}
+                            placeholder="e.g., hiking, reading, music..."
+                        />
+                    </div>
+
+                    <div style={{ marginBottom: "12px" }}>
+                        <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                            User ID:
+                        </label>
+                        <input
+                            type="text"
+                            value={searchUserId}
+                            onChange={(e) => setSearchUserId(e.target.value)}
+                            style={{
+                                width: "100%",
+                                padding: "8px",
+                                fontSize: "14px",
+                                borderRadius: "4px",
+                                border: "1px solid #ccc",
+                            }}
+                        />
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
                         <div>
-                            <h4 className="font-medium text-gray-700 mb-2">
-                                Memory Extraction
-                            </h4>
-                            <ul className="text-sm text-gray-600 space-y-1">
-                                <li>
-                                    • Extracts important information from
-                                    conversations
-                                </li>
-                                <li>
-                                    • Uses the specified LLM to identify
-                                    memorable content
-                                </li>
-                                <li>
-                                    • Supports OpenAI, OpenAI-compatible (LM Studio), and Ollama endpoints
-                                </li>
-                                <li>
-                                    • Stores extracted memories with embeddings
-                                    for fast retrieval
-                                </li>
-                            </ul>
+                            <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                                Limit: {searchLimit}
+                            </label>
+                            <input
+                                type="range"
+                                min="1"
+                                max="50"
+                                value={searchLimit}
+                                onChange={(e) => setSearchLimit(Number(e.target.value))}
+                                style={{ width: "100%" }}
+                            />
                         </div>
                         <div>
-                            <h4 className="font-medium text-gray-700 mb-2">
-                                Memory Retrieval
-                            </h4>
-                            <ul className="text-sm text-gray-600 space-y-1">
-                                <li>
-                                    • Finds relevant memories based on prompts
-                                </li>
-                                <li>
-                                    • Uses semantic search with embeddings for
-                                    speed and accuracy
-                                </li>
-                                <li>
-                                    • Returns ranked list of relevant memories
-                                    with optimized response sizes
-                                </li>
-                                <li>
-                                    • Three optimization levels: Fast (60-80% smaller), Detailed, Full
-                                </li>
-                                <li>
-                                    • Quality filtering with 0.7 similarity threshold
-                                </li>
-                                <li>
-                                    • Response sizes: Fast (minimal), Detailed (+metadata), Full (+summary)
-                                </li>
-                            </ul>
+                            <label style={{ display: "block", marginBottom: "4px", fontSize: "14px" }}>
+                                Threshold: {searchThreshold.toFixed(2)}
+                            </label>
+                            <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={searchThreshold}
+                                onChange={(e) => setSearchThreshold(Number(e.target.value))}
+                                style={{ width: "100%" }}
+                            />
                         </div>
                     </div>
+
+                    <button
+                        onClick={handleSearch}
+                        disabled={searchLoading}
+                        style={{
+                            width: "100%",
+                            padding: "12px",
+                            backgroundColor: searchLoading ? "#ccc" : "#2196f3",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "4px",
+                            fontSize: "16px",
+                            fontWeight: "600",
+                            cursor: searchLoading ? "not-allowed" : "pointer",
+                        }}
+                    >
+                        {searchLoading ? "Searching..." : "Search"}
+                    </button>
+
+                    {searchError && (
+                        <div
+                            style={{
+                                marginTop: "12px",
+                                padding: "12px",
+                                backgroundColor: "#ffebee",
+                                border: "1px solid #ef5350",
+                                borderRadius: "4px",
+                                color: "#c62828",
+                            }}
+                        >
+                            ❌ {searchError}
+                        </div>
+                    )}
+
+                    {searchResult && (
+                        <div style={{ marginTop: "12px" }}>
+                            <div style={{ marginBottom: "12px" }}>
+                                <LatencyBadge latencyMs={searchResult.latency_ms} targetMs={300} label="Search" />
+                                <div style={{ marginTop: "8px", fontSize: "14px", color: "#666" }}>
+                                    Found {searchResult.count} result(s)
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
-            </main>
+            </div>
+
+            {/* Search Results */}
+            {searchResult && searchResult.results.length > 0 && (
+                <div style={{ marginTop: "24px" }}>
+                    <h2>Search Results ({searchResult.count})</h2>
+                    {searchResult.results.map((result) => (
+                        <ConversationTurnCard
+                            key={result.id}
+                            turn={{
+                                id: result.id,
+                                user_id: searchUserId,
+                                session_id: result.session_id,
+                                turn_number: result.turn_number,
+                                user_message: result.user_message,
+                                assistant_message: result.assistant_message,
+                                timestamp: result.timestamp,
+                                vector_id: "",
+                                extracted: false,
+                            }}
+                            score={result.score}
+                            highlight={searchQuery}
+                        />
+                    ))}
+                </div>
+            )}
         </div>
     );
 };

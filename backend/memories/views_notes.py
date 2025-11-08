@@ -6,12 +6,13 @@ import logging
 import uuid
 from typing import Dict, Any
 
+from django_q.tasks import async_task
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.db.models import Q, Count
 
-from .models import AtomicNote, NoteRelationship
+from .models import AtomicNote, NoteRelationship, ConversationTurn
 
 logger = logging.getLogger(__name__)
 
@@ -293,3 +294,74 @@ class GetNoteTypesView(APIView):
             'success': True,
             'note_types': list(note_types)
         })
+
+
+class TriggerExtractionView(APIView):
+    """Manually trigger atomic note extraction for a conversation turn"""
+
+    def post(self, request):
+        """
+        POST /api/notes/extract/
+
+        Body:
+            - turn_id (required): UUID of the conversation turn to extract
+            - force (optional): Force re-extraction even if already extracted
+        """
+        turn_id = request.data.get('turn_id')
+        force = request.data.get('force', False)
+
+        if not turn_id:
+            return Response(
+                {'success': False, 'error': 'Missing required field: turn_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate UUID
+        try:
+            uuid.UUID(turn_id)
+        except ValueError:
+            return Response(
+                {'success': False, 'error': 'Invalid turn_id format (must be UUID)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            turn = ConversationTurn.objects.get(id=turn_id)
+
+            # Check if already extracted
+            if turn.extracted and not force:
+                return Response(
+                    {
+                        'success': False,
+                        'error': 'Turn already extracted. Use force=true to re-extract.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Reset extraction flag if forcing
+            if force and turn.extracted:
+                turn.extracted = False
+                turn.save()
+                logger.info(f"Forcing re-extraction for turn {turn_id}")
+
+            # Schedule extraction task
+            task_id = async_task(
+                'memories.tasks.extract_atomic_notes',
+                str(turn.id),
+                q_options={'timeout': 300}
+            )
+
+            logger.info(f"Scheduled manual extraction for turn {turn_id}, task_id: {task_id}")
+
+            return Response({
+                'success': True,
+                'message': 'Extraction task scheduled',
+                'task_id': task_id,
+                'turn_id': str(turn.id)
+            })
+
+        except ConversationTurn.DoesNotExist:
+            return Response(
+                {'success': False, 'error': 'Turn not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )

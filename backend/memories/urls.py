@@ -15,7 +15,8 @@ from .views_notes import (
     ListAtomicNotesView,
     GetAtomicNoteView,
     DeleteAtomicNoteView,
-    GetNoteTypesView
+    GetNoteTypesView,
+    TriggerExtractionView
 )
 
 urlpatterns = [
@@ -38,4 +39,5 @@ urlpatterns = [
     path('notes/get/', GetAtomicNoteView.as_view(), name='get_atomic_note'),
     path('notes/delete/', DeleteAtomicNoteView.as_view(), name='delete_atomic_note'),
     path('notes/types/', GetNoteTypesView.as_view(), name='get_note_types'),
+    path('notes/extract/', TriggerExtractionView.as_view(), name='trigger_extraction'),
 ]

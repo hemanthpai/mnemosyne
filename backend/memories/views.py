@@ -283,7 +283,7 @@ class UpdateSettingsView(APIView):
                           'embeddings_api_key', 'embeddings_timeout',
                           'generation_provider', 'generation_endpoint_url', 'generation_model',
                           'generation_api_key', 'generation_temperature', 'generation_max_tokens',
-                          'generation_timeout']:
+                          'generation_timeout', 'extraction_prompt', 'relationship_prompt']:
                 if field in request.data:
                     value = request.data[field]
 

@@ -38,13 +38,15 @@ export const searchConversations = async (
     query: string,
     userId: string,
     limit: number = 10,
-    threshold: number = 0.5
+    threshold: number = 0.5,
+    mode: 'fast' | 'deep' = 'fast'  // Phase 3: Search mode
 ): Promise<SearchConversationsResponse> => {
     const response = await axios.post(`${API_BASE_URL}/api/conversations/search/`, {
         query,
         user_id: userId,
         limit,
         threshold,
+        mode,  // Phase 3: Pass search mode to backend
     });
     return response.data;
 };

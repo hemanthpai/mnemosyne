@@ -24,6 +24,7 @@ const DevToolsPage: React.FC = () => {
     const [searchUserId, setSearchUserId] = useState<string>(SAMPLE_USER_ID);
     const [searchLimit, setSearchLimit] = useState<number>(10);
     const [searchThreshold, setSearchThreshold] = useState<number>(0.5);
+    const [searchMode, setSearchMode] = useState<'fast' | 'deep'>('fast');  // Phase 3: Search mode
     const [searchLoading, setSearchLoading] = useState<boolean>(false);
     const [searchResult, setSearchResult] = useState<SearchConversationsResponse | null>(null);
     const [searchError, setSearchError] = useState<string | null>(null);
@@ -87,7 +88,8 @@ const DevToolsPage: React.FC = () => {
                 searchQuery,
                 searchUserId,
                 searchLimit,
-                searchThreshold
+                searchThreshold,
+                searchMode  // Phase 3: Pass search mode
             );
             setSearchResult(result);
         } catch (err: any) {
@@ -113,7 +115,7 @@ const DevToolsPage: React.FC = () => {
                                 Dev Tools
                             </h1>
                             <span className="ml-3 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                                Phase 1
+                                Phase 3
                             </span>
                         </div>
                         <Link
@@ -400,6 +402,55 @@ const DevToolsPage: React.FC = () => {
                         </div>
                     </div>
 
+                    {/* Phase 3: Search Mode Toggle */}
+                    <div style={{ marginBottom: "16px" }}>
+                        <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", fontWeight: "600" }}>
+                            Search Mode:
+                        </label>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                                onClick={() => setSearchMode('fast')}
+                                style={{
+                                    flex: 1,
+                                    padding: "10px",
+                                    backgroundColor: searchMode === 'fast' ? "#2196f3" : "#f5f5f5",
+                                    color: searchMode === 'fast' ? "white" : "#333",
+                                    border: searchMode === 'fast' ? "2px solid #1976d2" : "2px solid #e0e0e0",
+                                    borderRadius: "4px",
+                                    fontSize: "14px",
+                                    fontWeight: "600",
+                                    cursor: "pointer",
+                                    transition: "all 0.2s"
+                                }}
+                            >
+                                ⚡ Fast
+                                <div style={{ fontSize: "11px", fontWeight: "normal", marginTop: "2px" }}>
+                                    Cache + Conversations
+                                </div>
+                            </button>
+                            <button
+                                onClick={() => setSearchMode('deep')}
+                                style={{
+                                    flex: 1,
+                                    padding: "10px",
+                                    backgroundColor: searchMode === 'deep' ? "#9c27b0" : "#f5f5f5",
+                                    color: searchMode === 'deep' ? "white" : "#333",
+                                    border: searchMode === 'deep' ? "2px solid #7b1fa2" : "2px solid #e0e0e0",
+                                    borderRadius: "4px",
+                                    fontSize: "14px",
+                                    fontWeight: "600",
+                                    cursor: "pointer",
+                                    transition: "all 0.2s"
+                                }}
+                            >
+                                🧠 Deep
+                                <div style={{ fontSize: "11px", fontWeight: "normal", marginTop: "2px" }}>
+                                    + Atomic Notes + Graph
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+
                     <button
                         onClick={handleSearch}
                         disabled={searchLoading}
@@ -437,6 +488,20 @@ const DevToolsPage: React.FC = () => {
                         <div style={{ marginTop: "12px" }}>
                             <div style={{ marginBottom: "12px" }}>
                                 <LatencyBadge latencyMs={searchResult.latency_ms} targetMs={300} label="Search" />
+                                {/* Phase 3: Show mode indicator */}
+                                {searchResult.mode && (
+                                    <div style={{
+                                        marginTop: "8px",
+                                        padding: "6px 12px",
+                                        backgroundColor: searchResult.mode === 'deep' ? "#f3e5f5" : "#e3f2fd",
+                                        border: searchResult.mode === 'deep' ? "1px solid #9c27b0" : "1px solid #2196f3",
+                                        borderRadius: "4px",
+                                        fontSize: "12px",
+                                        display: "inline-block"
+                                    }}>
+                                        {searchResult.mode === 'deep' ? '🧠 Deep Mode' : '⚡ Fast Mode'}
+                                    </div>
+                                )}
                                 <div style={{ marginTop: "8px", fontSize: "14px", color: "#666" }}>
                                     Found {searchResult.count} result(s)
                                 </div>
@@ -450,24 +515,165 @@ const DevToolsPage: React.FC = () => {
             {searchResult && searchResult.results.length > 0 && (
                 <div style={{ marginTop: "24px" }}>
                     <h2>Search Results ({searchResult.count})</h2>
-                    {searchResult.results.map((result) => (
-                        <ConversationTurnCard
-                            key={result.id}
-                            turn={{
-                                id: result.id,
-                                user_id: searchUserId,
-                                session_id: result.session_id,
-                                turn_number: result.turn_number,
-                                user_message: result.user_message,
-                                assistant_message: result.assistant_message,
-                                timestamp: result.timestamp,
-                                vector_id: "",
-                                extracted: false,
-                            }}
-                            score={result.score}
-                            highlight={searchQuery}
-                        />
-                    ))}
+                    {searchResult.results.map((result) => {
+                        // Phase 3: Check if this is an atomic note or a conversation
+                        const isAtomicNote = result.content !== undefined;
+
+                        if (isAtomicNote) {
+                            // Render atomic note
+                            return (
+                                <div
+                                    key={result.id}
+                                    style={{
+                                        border: "2px solid #9c27b0",
+                                        borderRadius: "8px",
+                                        padding: "16px",
+                                        marginBottom: "16px",
+                                        backgroundColor: "#fafafa"
+                                    }}
+                                >
+                                    <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+                                        <div>
+                                            <span style={{
+                                                backgroundColor: "#9c27b0",
+                                                color: "white",
+                                                padding: "4px 8px",
+                                                borderRadius: "4px",
+                                                fontSize: "12px",
+                                                fontWeight: "600",
+                                                marginRight: "8px"
+                                            }}>
+                                                📝 Atomic Note
+                                            </span>
+                                            {result.source && (
+                                                <span style={{
+                                                    backgroundColor: result.source === 'graph_traversal' ? "#ff9800" : "#2196f3",
+                                                    color: "white",
+                                                    padding: "4px 8px",
+                                                    borderRadius: "4px",
+                                                    fontSize: "11px",
+                                                    marginRight: "8px"
+                                                }}>
+                                                    {result.source === 'graph_traversal' ? '🔗 Graph' : '🎯 Direct'}
+                                                </span>
+                                            )}
+                                            <span style={{
+                                                backgroundColor: "#e0e0e0",
+                                                padding: "4px 8px",
+                                                borderRadius: "4px",
+                                                fontSize: "11px",
+                                                color: "#666"
+                                            }}>
+                                                {result.note_type}
+                                            </span>
+                                        </div>
+                                        <div style={{ textAlign: "right" }}>
+                                            {result.score !== undefined && (
+                                                <div style={{
+                                                    fontSize: "12px",
+                                                    color: "#666",
+                                                    marginBottom: "4px"
+                                                }}>
+                                                    Score: {result.score.toFixed(3)}
+                                                </div>
+                                            )}
+                                            {result.confidence !== undefined && (
+                                                <div style={{
+                                                    fontSize: "11px",
+                                                    color: "#666"
+                                                }}>
+                                                    Confidence: {result.confidence.toFixed(2)}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div style={{
+                                        fontSize: "16px",
+                                        fontWeight: "500",
+                                        marginBottom: "8px",
+                                        color: "#333"
+                                    }}>
+                                        {result.content}
+                                    </div>
+
+                                    {result.context && (
+                                        <div style={{
+                                            fontSize: "13px",
+                                            color: "#666",
+                                            fontStyle: "italic",
+                                            marginBottom: "8px"
+                                        }}>
+                                            Context: {result.context}
+                                        </div>
+                                    )}
+
+                                    {result.tags && result.tags.length > 0 && (
+                                        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+                                            {result.tags.map((tag, idx) => (
+                                                <span
+                                                    key={idx}
+                                                    style={{
+                                                        backgroundColor: "#e8eaf6",
+                                                        color: "#3f51b5",
+                                                        padding: "2px 8px",
+                                                        borderRadius: "12px",
+                                                        fontSize: "11px"
+                                                    }}
+                                                >
+                                                    #{tag}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {result.depth !== undefined && result.depth > 0 && (
+                                        <div style={{
+                                            fontSize: "11px",
+                                            color: "#ff9800",
+                                            marginTop: "8px",
+                                            fontWeight: "600"
+                                        }}>
+                                            🔗 Found via {result.relationship_type} relationship (depth: {result.depth})
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        } else {
+                            // Render conversation turn
+                            return (
+                                <div key={result.id}>
+                                    <ConversationTurnCard
+                                        turn={{
+                                            id: result.id,
+                                            user_id: searchUserId,
+                                            session_id: result.session_id || "",
+                                            turn_number: result.turn_number || 0,
+                                            user_message: result.user_message || "",
+                                            assistant_message: result.assistant_message || "",
+                                            timestamp: result.timestamp || "",
+                                            vector_id: "",
+                                            extracted: false,
+                                        }}
+                                        score={result.score}
+                                        highlight={searchQuery}
+                                    />
+                                    {/* Phase 3: Show source indicator for multi-tier search */}
+                                    {result.source && (
+                                        <div style={{
+                                            fontSize: "11px",
+                                            color: "#666",
+                                            marginTop: "-12px",
+                                            marginBottom: "12px",
+                                            paddingLeft: "16px"
+                                        }}>
+                                            Source: {result.source === 'working_memory' ? '💾 Cache' : '🔍 Vector Search'}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
+                    })}
                 </div>
             )}
             </main>

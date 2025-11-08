@@ -68,7 +68,7 @@ class StoreConversationTurnView(APIView):
 
 
 class SearchConversationsView(APIView):
-    """Fast path search - direct embedding"""
+    """Search conversations - supports fast and deep modes (Phase 3)"""
 
     def post(self, request):
         start_time = time.time()
@@ -78,6 +78,7 @@ class SearchConversationsView(APIView):
         user_id = request.data.get('user_id')
         limit = request.data.get('limit', 10)
         threshold = request.data.get('threshold', 0.5)
+        mode = request.data.get('mode', 'fast')  # Phase 3: Search mode
 
         if not all([query, user_id]):
             return Response(
@@ -104,27 +105,44 @@ class SearchConversationsView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        try:
-            results = conversation_service.search_fast(
-                query=query,
-                user_id=user_id,
-                limit=limit,
-                threshold=threshold
+        # Validate mode
+        if mode not in ['fast', 'deep']:
+            return Response(
+                {'success': False, 'error': 'Invalid mode. Must be "fast" or "deep"'},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
+        try:
+            # Phase 3: Call appropriate search method based on mode
+            if mode == 'deep':
+                results = conversation_service.search_deep(
+                    query=query,
+                    user_id=user_id,
+                    limit=limit,
+                    threshold=threshold
+                )
+            else:
+                results = conversation_service.search_fast(
+                    query=query,
+                    user_id=user_id,
+                    limit=limit,
+                    threshold=threshold
+                )
+
             latency = (time.time() - start_time) * 1000  # ms
-            logger.info(f"Search completed in {latency:.0f}ms, found {len(results)} results")
+            logger.info(f"Search ({mode} mode) completed in {latency:.0f}ms, found {len(results)} results")
 
             return Response({
                 'success': True,
                 'count': len(results),
                 'results': results,
+                'mode': mode,  # Phase 3: Include mode in response
                 'latency_ms': round(latency, 2)
             })
 
         except Exception as e:
             latency = (time.time() - start_time) * 1000
-            logger.error(f"Search failed after {latency:.0f}ms: {e}")
+            logger.error(f"Search ({mode} mode) failed after {latency:.0f}ms: {e}")
             return Response(
                 {'success': False, 'error': str(e), 'latency_ms': round(latency, 2)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

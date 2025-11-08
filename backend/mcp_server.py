@@ -89,36 +89,56 @@ class MemoryMCPServer:
         query: str,
         user_id: str,
         limit: int = 10,
-        threshold: float = 0.5
+        threshold: float = 0.5,
+        mode: str = "fast"
     ) -> Dict[str, Any]:
         """
         Search memories with semantic similarity
 
-        Latency: <10ms (cache hit), 100-300ms (cache miss)
+        Phase 3: Now supports deep mode with multi-tier search!
+
+        Modes:
+        - fast: Cache + raw conversations (100-300ms)
+        - deep: Cache + raw + atomic notes + graph (1-2s, more accurate)
 
         Args:
             query: Search query text
             user_id: UUID of the user
             limit: Maximum number of results
             threshold: Minimum similarity score
+            mode: "fast" or "deep" (default: fast)
 
         Returns:
             Search results with relevance scores
         """
         try:
-            results = conversation_service.search_fast(
-                query=query,
-                user_id=user_id,
-                limit=limit,
-                threshold=threshold
-            )
+            if mode == "deep":
+                logger.info(f"Deep mode search for: {query[:50]}...")
+                results = conversation_service.search_deep(
+                    query=query,
+                    user_id=user_id,
+                    limit=limit,
+                    threshold=threshold
+                )
+                latency = "1-2s"
+            else:
+                logger.info(f"Fast mode search for: {query[:50]}...")
+                results = conversation_service.search_fast(
+                    query=query,
+                    user_id=user_id,
+                    limit=limit,
+                    threshold=threshold
+                )
+                latency = "<10ms (cache hit), 100-300ms (cache miss)"
 
             return {
                 "success": True,
                 "count": len(results),
                 "results": results,
                 "query": query,
-                "threshold": threshold
+                "threshold": threshold,
+                "mode": mode,
+                "latency": latency
             }
 
         except Exception as e:
@@ -127,7 +147,8 @@ class MemoryMCPServer:
                 "success": False,
                 "error": str(e),
                 "count": 0,
-                "results": []
+                "results": [],
+                "mode": mode
             }
 
     def store_conversation_turn(

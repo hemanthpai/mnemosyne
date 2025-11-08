@@ -8,6 +8,12 @@ from .cache_service import cache_service
 
 logger = logging.getLogger(__name__)
 
+# Phase 3: Lazy import graph service to avoid circular dependency
+def _get_graph_service():
+    """Lazy import graph service"""
+    from .graph_service import graph_service
+    return graph_service
+
 # Phase 3: Import tasks for background extraction
 # Lazy import to avoid circular dependency
 def _schedule_extraction(turn_id: str):
@@ -175,6 +181,102 @@ class ConversationService:
 
         logger.info(f"Search for user {user_id} returned {len(results)} results")
         return results
+
+    def search_deep(
+        self,
+        query: str,
+        user_id: str,
+        limit: int = 10,
+        threshold: float = 0.5
+    ) -> List[Dict[str, Any]]:
+        """
+        Deep mode: Multi-tier search across all memory stores
+
+        Searches across three tiers for comprehensive context:
+        1. Working memory (cache) - <10ms
+        2. Raw conversations (vector search) - 100-300ms
+        3. Atomic notes + graph traversal - 200-500ms
+
+        Combines and deduplicates results from all tiers.
+
+        Args:
+            query: Search query text
+            user_id: UUID of the user
+            limit: Maximum number of results per tier
+            threshold: Minimum similarity score
+
+        Returns:
+            Combined and ranked results from all tiers
+        """
+        try:
+            all_results = []
+            seen_ids = set()
+
+            # Tier 1: Check working memory cache
+            logger.info(f"Deep search tier 1: working memory cache")
+            working_memory = cache_service.get_working_memory(user_id, limit=20)
+
+            # Simple keyword matching on cached conversations
+            for conv in working_memory:
+                # Check if query terms appear in user message
+                if any(term.lower() in conv['user_message'].lower()
+                       for term in query.split()):
+                    conv['source'] = 'working_memory'
+                    conv['score'] = 0.8  # High score for recent cached items
+                    all_results.append(conv)
+                    seen_ids.add(conv['id'])
+
+            # Tier 2: Raw conversation search
+            logger.info(f"Deep search tier 2: raw conversations")
+            raw_results = self.search_fast(
+                query=query,
+                user_id=user_id,
+                limit=limit,
+                threshold=threshold
+            )
+
+            for result in raw_results:
+                if result['id'] not in seen_ids:
+                    result['source'] = 'raw_conversation'
+                    all_results.append(result)
+                    seen_ids.add(result['id'])
+
+            # Tier 3: Atomic notes with graph traversal
+            logger.info(f"Deep search tier 3: atomic notes + graph")
+            graph_service = _get_graph_service()
+            atomic_results = graph_service.search_with_graph(
+                query=query,
+                user_id=user_id,
+                limit=limit,
+                threshold=threshold,
+                traverse_depth=1  # 1-hop traversal
+            )
+
+            for result in atomic_results:
+                if result['id'] not in seen_ids:
+                    all_results.append(result)
+                    seen_ids.add(result['id'])
+
+            # Rank by score (or combined_score for graph results)
+            all_results.sort(
+                key=lambda x: x.get('combined_score') or x.get('score', 0),
+                reverse=True
+            )
+
+            logger.info(
+                f"Deep search for user {user_id}: "
+                f"{len(working_memory)} cache + "
+                f"{len(raw_results)} raw + "
+                f"{len(atomic_results)} atomic = "
+                f"{len(all_results)} total"
+            )
+
+            return all_results
+
+        except Exception as e:
+            logger.error(f"Deep search failed: {e}", exc_info=True)
+            # Fallback to fast search on error
+            return self.search_fast(query, user_id, limit, threshold)
 
     def list_recent(
         self,

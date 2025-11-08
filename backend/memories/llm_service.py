@@ -1,10 +1,19 @@
 import logging
+import math
 from typing import List, Dict, Any
 
 import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_vector(vector: List[float]) -> List[float]:
+    """Normalize a vector to unit length for cosine similarity"""
+    magnitude = math.sqrt(sum(x * x for x in vector))
+    if magnitude == 0:
+        return vector
+    return [x / magnitude for x in vector]
 
 
 class LLMService:
@@ -60,7 +69,10 @@ class LLMService:
                 )
                 response.raise_for_status()
                 data = response.json()
-                embeddings.append(data["embedding"])
+                # Normalize embedding for proper cosine similarity
+                raw_embedding = data["embedding"]
+                normalized_embedding = normalize_vector(raw_embedding)
+                embeddings.append(normalized_embedding)
 
             except Exception as e:
                 logger.error(f"Ollama embedding failed: {e}")
@@ -93,8 +105,9 @@ class LLMService:
             response.raise_for_status()
             data = response.json()
 
-            # Extract embeddings in order
-            embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
+            # Extract and normalize embeddings in order
+            raw_embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
+            embeddings = [normalize_vector(emb) for emb in raw_embeddings]
 
             return {
                 "success": True,

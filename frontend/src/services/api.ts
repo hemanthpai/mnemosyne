@@ -3,7 +3,6 @@ import {
     StoreConversationTurnResponse,
     SearchConversationsResponse,
     ListConversationsResponse,
-    ConversationTurn,
     // Legacy types
     DeleteAllMemoriesResponse,
     ExtractMemoriesResponse,
@@ -256,4 +255,40 @@ export const cancelImport = async (taskId: string): Promise<{ success: boolean }
         task_id: taskId
     });
     return response.data;
+};
+
+// ============================================================================
+// Deprecated/Stub Functions (for backward compatibility with old pages)
+// ============================================================================
+
+// Alias for importOpenWebUIHistory
+export const startOpenWebUIImport = importOpenWebUIHistory;
+
+// Memory CRUD stubs (not implemented in Phase 1)
+export const getMemory = async (_id: string): Promise<Memory> => {
+    throw new Error('getMemory not implemented in Phase 1 - Please use DevTools page to test conversation storage and search');
+};
+
+export const updateMemory = async (_id: string, _data: Partial<Memory>, _updateVector?: boolean): Promise<Memory> => {
+    throw new Error('updateMemory not implemented in Phase 1 - Memory editing will be added in Phase 3');
+};
+
+export const deleteMemory = async (_id: string): Promise<{ success: boolean }> => {
+    throw new Error('deleteMemory not implemented in Phase 1 - Memory deletion will be added in Phase 3');
+};
+
+// Settings helper stubs (not needed in Phase 1)
+export const fetchModels = async (_endpoint: string, _provider: string, _apiKey?: string): Promise<{ success: boolean; models?: string[]; error?: string }> => {
+    console.warn('fetchModels not implemented in Phase 1 - Settings are configured via environment variables');
+    return { success: false, models: [], error: 'Not implemented in Phase 1' };
+};
+
+export const validateEndpoint = async (_endpoint: string, _provider: string, _apiKey?: string): Promise<{ success: boolean; valid?: boolean; error?: string }> => {
+    console.warn('validateEndpoint not implemented in Phase 1 - Settings are configured via environment variables');
+    return { success: false, valid: false, error: 'Not implemented in Phase 1' };
+};
+
+export const getPromptTokenCounts = async (): Promise<{ success: boolean; token_counts?: any }> => {
+    console.warn('getPromptTokenCounts not implemented in Phase 1 - Prompts are simplified');
+    return { success: false };
 };

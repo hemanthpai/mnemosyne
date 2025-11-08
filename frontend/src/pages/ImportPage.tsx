@@ -20,6 +20,7 @@ const ImportPage: React.FC = () => {
     const [success, setSuccess] = useState<string | null>(null);
 
     // Progress state
+    const [taskId, setTaskId] = useState<string | null>(null);
     const [progress, setProgress] = useState<any>(null);
     const [polling, setPolling] = useState<boolean>(false);
     // @ts-ignore - pollFailureCount is used in setPollFailureCount callback
@@ -29,77 +30,83 @@ const ImportPage: React.FC = () => {
     useEffect(() => {
         let interval: NodeJS.Timeout | null = null;
 
-        if (polling) {
+        if (polling && taskId) {
             interval = setInterval(async () => {
                 try {
-                    const result = await getImportProgress();
+                    const result = await getImportProgress(taskId);
 
                     // Reset failure count on successful response
                     setPollFailureCount(0);
 
-                    if (result.success && result.progress) {
-                        // Never reset progress to null once we've started importing
-                        // This prevents flickering when transitioning from idle to initializing
-                        if (result.progress.status === 'idle' && result.progress.total_conversations === 0 && !importing) {
-                            // Only reset to null if we're truly not in an import session
-                            setProgress(null);
-                        } else {
-                            // Always update progress - use a state update function to ensure we never go backwards
-                            setProgress((prevProgress: any) => {
-                                // Prevent ALL numeric counters from decreasing AND status from reverting
-                                if (prevProgress && result.progress) {
-                                    // Status priority: idle < initializing < running < completed/failed/cancelled
-                                    // Never let status revert to an earlier state
-                                    const statusPriority: any = {
-                                        'idle': 0,
-                                        'initializing': 1,
-                                        'running': 2,
-                                        'completed': 3,
-                                        'failed': 3,
-                                        'cancelled': 3
-                                    };
+                    // Map API response to expected format
+                    const mappedProgress = {
+                        status: result.status || 'idle',
+                        total_conversations: result.total_chats || 0,
+                        processed_conversations: result.current_chat || 0,
+                        extracted_memories: result.memories_extracted || 0,
+                        failed_conversations: result.errors_encountered || 0,
+                        elapsed_seconds: 0, // Not provided by API
+                        progress_percentage: result.progress || 0,
+                        dry_run: dryRun,
+                        error_message: result.error || '',
+                        current_conversation_id: result.current_chat?.toString() || ''
+                    };
 
-                                    const prevPriority = statusPriority[prevProgress.status] || 0;
-                                    const newPriority = statusPriority[result.progress.status] || 0;
-                                    const effectiveStatus = newPriority >= prevPriority ? result.progress.status : prevProgress.status;
+                    // Never reset progress to null once we've started importing
+                    if (mappedProgress.status === 'idle' && mappedProgress.total_conversations === 0 && !importing) {
+                        setProgress(null);
+                    } else {
+                        // Always update progress - use a state update function to ensure we never go backwards
+                        setProgress((prevProgress: any) => {
+                            if (prevProgress) {
+                                // Status priority: idle < initializing < running < completed/failed/cancelled
+                                const statusPriority: any = {
+                                    'idle': 0,
+                                    'initializing': 1,
+                                    'running': 2,
+                                    'completed': 3,
+                                    'failed': 3,
+                                    'cancelled': 3
+                                };
 
-                                    return {
-                                        ...result.progress,
-                                        status: effectiveStatus,
-                                        // Preserve dry_run - once true, stays true for the session
-                                        dry_run: prevProgress.dry_run || result.progress.dry_run,
-                                        total_conversations: Math.max(prevProgress.total_conversations || 0, result.progress.total_conversations || 0),
-                                        processed_conversations: Math.max(prevProgress.processed_conversations || 0, result.progress.processed_conversations || 0),
-                                        extracted_memories: Math.max(prevProgress.extracted_memories || 0, result.progress.extracted_memories || 0),
-                                        failed_conversations: Math.max(prevProgress.failed_conversations || 0, result.progress.failed_conversations || 0),
-                                        elapsed_seconds: Math.max(prevProgress.elapsed_seconds || 0, result.progress.elapsed_seconds || 0),
-                                        progress_percentage: Math.max(prevProgress.progress_percentage || 0, result.progress.progress_percentage || 0),
-                                    };
-                                }
-                                return result.progress;
-                            });
-                        }
+                                const prevPriority = statusPriority[prevProgress.status] || 0;
+                                const newPriority = statusPriority[mappedProgress.status] || 0;
+                                const effectiveStatus = newPriority >= prevPriority ? mappedProgress.status : prevProgress.status;
 
-                        // Stop polling if import completed, failed, or cancelled
-                        if (['completed', 'failed', 'cancelled'].includes(result.progress.status)) {
-                            // Wait a bit before stopping polling to ensure we have the final state
-                            setTimeout(() => {
-                                setPolling(false);
-                                setImporting(false);
-                            }, 500);
-
-                            if (result.progress.status === 'completed') {
-                                setSuccess(
-                                    `Import completed! Processed ${result.progress.processed_conversations} conversations and extracted ${result.progress.extracted_memories} memories.`
-                                );
-                                setError(null);
-                            } else if (result.progress.status === 'failed') {
-                                setError(result.progress.error_message || 'Import failed');
-                                setSuccess(null);
-                            } else if (result.progress.status === 'cancelled') {
-                                setSuccess(null);
-                                setError(`Import cancelled. Processed ${result.progress.processed_conversations} of ${result.progress.total_conversations} conversations (${result.progress.extracted_memories} memories extracted)`);
+                                return {
+                                    ...mappedProgress,
+                                    status: effectiveStatus,
+                                    dry_run: prevProgress.dry_run || mappedProgress.dry_run,
+                                    total_conversations: Math.max(prevProgress.total_conversations || 0, mappedProgress.total_conversations || 0),
+                                    processed_conversations: Math.max(prevProgress.processed_conversations || 0, mappedProgress.processed_conversations || 0),
+                                    extracted_memories: Math.max(prevProgress.extracted_memories || 0, mappedProgress.extracted_memories || 0),
+                                    failed_conversations: Math.max(prevProgress.failed_conversations || 0, mappedProgress.failed_conversations || 0),
+                                    elapsed_seconds: Math.max(prevProgress.elapsed_seconds || 0, mappedProgress.elapsed_seconds || 0),
+                                    progress_percentage: Math.max(prevProgress.progress_percentage || 0, mappedProgress.progress_percentage || 0),
+                                };
                             }
+                            return mappedProgress;
+                        });
+                    }
+
+                    // Stop polling if import completed, failed, or cancelled
+                    if (['completed', 'failed', 'cancelled'].includes(mappedProgress.status)) {
+                        setTimeout(() => {
+                            setPolling(false);
+                            setImporting(false);
+                        }, 500);
+
+                        if (mappedProgress.status === 'completed') {
+                            setSuccess(
+                                `Import completed! Processed ${mappedProgress.processed_conversations} conversations and extracted ${mappedProgress.extracted_memories} memories.`
+                            );
+                            setError(null);
+                        } else if (mappedProgress.status === 'failed') {
+                            setError(mappedProgress.error_message || 'Import failed');
+                            setSuccess(null);
+                        } else if (mappedProgress.status === 'cancelled') {
+                            setSuccess(null);
+                            setError(`Import cancelled. Processed ${mappedProgress.processed_conversations} of ${mappedProgress.total_conversations} conversations (${mappedProgress.extracted_memories} memories extracted)`);
                         }
                     }
                 } catch (err) {
@@ -125,7 +132,7 @@ const ImportPage: React.FC = () => {
                 clearInterval(interval);
             }
         };
-    }, [polling, importing]);
+    }, [polling, importing, taskId, dryRun]);
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files && event.target.files[0]) {
@@ -149,20 +156,19 @@ const ImportPage: React.FC = () => {
         setImporting(true);
 
         try {
-            const result = await startOpenWebUIImport(selectedFile, {
-                target_user_id: targetUserId || undefined,
-                openwebui_user_id: openwebuiUserId || undefined,
-                after_date: afterDate || undefined,
-                batch_size: batchSize,
-                limit: limit ? parseInt(limit) : undefined,
-                dry_run: dryRun,
-            });
+            // Note: API only accepts userId and dryRun, other options not implemented yet
+            const result = await startOpenWebUIImport(
+                selectedFile,
+                targetUserId || 'default-user',
+                dryRun
+            );
 
-            if (result.success) {
-                setSuccess(result.message || 'Import started successfully');
+            if (result.success && result.task_id) {
+                setTaskId(result.task_id);
+                setSuccess('Import started successfully');
                 setPolling(true); // Start polling for progress
             } else {
-                setError(result.error || 'Failed to start import');
+                setError('Failed to start import');
                 setImporting(false);
             }
         } catch (err) {
@@ -176,13 +182,18 @@ const ImportPage: React.FC = () => {
     };
 
     const handleCancelImport = async () => {
+        if (!taskId) {
+            setError('No import task to cancel');
+            return;
+        }
+
         try {
             setSuccess('Cancelling import... (will stop after current conversation completes)');
-            const result = await cancelImport();
+            const result = await cancelImport(taskId);
             if (result.success) {
                 // Success message will be updated by polling when status changes
             } else {
-                setError(result.error || 'Failed to cancel import');
+                setError('Failed to cancel import');
             }
         } catch (err) {
             const errorMessage = err instanceof Error
@@ -205,6 +216,7 @@ const ImportPage: React.FC = () => {
         setProgress(null);
         setImporting(false);
         setPolling(false);
+        setTaskId(null);
     };
 
     const formatElapsedTime = (seconds: number | null) => {

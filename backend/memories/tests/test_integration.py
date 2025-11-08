@@ -106,23 +106,34 @@ class Phase3PipelineIntegrationTest(TestCase):
             'embeddings': [[0.1] * 1024]
         }
 
-        # Mock search results
-        mock_search.return_value = {
-            'success': True,
-            'results': [
-                {
-                    'id': str(uuid.uuid4()),
-                    'score': 0.95,
-                    'metadata': {
-                        'user_message': 'I prefer dark mode',
-                        'assistant_message': 'Noted!',
-                        'session_id': 'session-1',
-                        'turn_number': 1,
-                        'timestamp': '2025-01-01T00:00:00Z'
-                    }
+        # Mock search results - vector_service.search_similar returns a list directly
+        turn_id = str(uuid.uuid4())
+        mock_search.return_value = [
+            {
+                'id': str(uuid.uuid4()),
+                'score': 0.95,
+                'metadata': {
+                    'turn_id': turn_id,
+                    'user_id': self.user_id,
+                    'user_message': 'I prefer dark mode',
+                    'assistant_message': 'Noted!',
+                    'session_id': 'session-1',
+                    'turn_number': 1,
+                    'timestamp': '2025-01-01T00:00:00Z'
                 }
-            ]
-        }
+            }
+        ]
+
+        # Create the actual turn in the database
+        ConversationTurn.objects.create(
+            id=turn_id,
+            user_id=self.user_id,
+            session_id='session-1',
+            turn_number=1,
+            user_message='I prefer dark mode',
+            assistant_message='Noted!',
+            vector_id='test-vec-1'
+        )
 
         # Search
         response = self.client.post(

@@ -48,9 +48,9 @@ class NoteRelationshipBuildingTest(TestCase):
             confidence=0.8
         )
 
-    @patch('memories.tasks.graph_service.search_atomic_notes')
     @patch('memories.tasks.llm_service.generate_text')
-    def test_build_relationships_success(self, mock_generate, mock_search):
+    @patch('memories.graph_service.graph_service.search_atomic_notes')
+    def test_build_relationships_success(self, mock_search, mock_generate):
         """Test successful relationship building"""
         # Mock search to return similar notes
         mock_search.return_value = [
@@ -88,9 +88,9 @@ class NoteRelationshipBuildingTest(TestCase):
         self.assertEqual(rel.relationship_type, 'context_for')
         self.assertEqual(rel.strength, 0.9)
 
-    @patch('memories.tasks.graph_service.search_atomic_notes')
     @patch('memories.tasks.llm_service.generate_text')
-    def test_build_relationships_skips_weak_relationships(self, mock_generate, mock_search):
+    @patch('memories.graph_service.graph_service.search_atomic_notes')
+    def test_build_relationships_skips_weak_relationships(self, mock_search, mock_generate):
         """Test that weak relationships (< 0.3) are skipped"""
         mock_search.return_value = [
             {'id': str(self.note1.id), 'content': self.note1.content, 'note_type': self.note1.note_type}
@@ -117,9 +117,9 @@ class NoteRelationshipBuildingTest(TestCase):
         self.assertEqual(result['relationships_created'], 0)
         self.assertEqual(NoteRelationship.objects.count(), 0)
 
-    @patch('memories.tasks.graph_service.search_atomic_notes')
     @patch('memories.tasks.llm_service.generate_text')
-    def test_build_relationships_updates_existing(self, mock_generate, mock_search):
+    @patch('memories.graph_service.graph_service.search_atomic_notes')
+    def test_build_relationships_updates_existing(self, mock_search, mock_generate):
         """Test that existing relationships are updated if new strength is higher"""
         # Create existing relationship
         existing = NoteRelationship.objects.create(
@@ -157,7 +157,7 @@ class NoteRelationshipBuildingTest(TestCase):
         self.assertEqual(existing.strength, 0.9)
         self.assertEqual(existing.relationship_type, 'context_for')
 
-    @patch('memories.tasks.graph_service.search_atomic_notes')
+    @patch('memories.graph_service.graph_service.search_atomic_notes')
     def test_build_relationships_no_similar_notes(self, mock_search):
         """Test behavior when no similar notes found"""
         # No similar notes
@@ -168,7 +168,7 @@ class NoteRelationshipBuildingTest(TestCase):
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['relationships_created'], 0)
 
-    @patch('memories.tasks.graph_service.search_atomic_notes')
+    @patch('memories.graph_service.graph_service.search_atomic_notes')
     def test_build_relationships_excludes_self(self, mock_search):
         """Test that note doesn't create relationship with itself"""
         # Search returns the note itself
@@ -188,7 +188,7 @@ class NoteRelationshipBuildingTest(TestCase):
             # Should filter out self from search results
             # LLM should only see note1, not note2
             call_args = mock_gen.call_args
-            prompt = call_args[0][0]  # Get prompt argument
+            prompt = call_args.kwargs['prompt']  # Get prompt from keyword arguments
 
             self.assertNotIn(str(self.note2.id), prompt)
             self.assertIn(str(self.note1.id), prompt)
@@ -286,7 +286,7 @@ class ImportanceScoreTest(TestCase):
                 user_id=self.user_id,
                 content=f"note {i}",
                 note_type="test:type",
-                vector_id=f"vec-{i}",
+                vector_id=f"vec-cap-{i}",  # Unique prefix to avoid collision
                 confidence=0.8
             )
             NoteRelationship.objects.create(

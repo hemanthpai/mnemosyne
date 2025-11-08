@@ -273,7 +273,7 @@ class AtomicNoteExtractionTest(TestCase):
         self.assertIn('atomic', prompt_lower)
         self.assertIn('json', prompt_lower)
         self.assertIn('confidence', prompt_lower)
-        self.assertIn('note_type', prompt_lower)
+        self.assertIn('type', prompt_lower)  # Changed from 'note_type' to 'type'
         self.assertIn('preference:', prompt_lower)
         self.assertIn('skill:', prompt_lower)
 

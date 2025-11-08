@@ -106,7 +106,7 @@ const SettingsPage: React.FC = () => {
                                 Settings
                             </h1>
                             <span className="ml-3 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                                Phase 3
+                                Configuration
                             </span>
                         </div>
                         <Link
@@ -165,7 +165,7 @@ const SettingsPage: React.FC = () => {
                 {/* Information Banner */}
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-8">
                     <h2 className="text-lg font-semibold text-blue-900 mb-2">
-                        ⚙️ Phase 3: Editable Configuration
+                        ⚙️ Editable Configuration
                     </h2>
                     <p className="text-blue-800 mb-3">
                         Settings are stored in the database and can be edited directly from this page.
@@ -364,11 +364,11 @@ const SettingsPage: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Generation Configuration (Phase 3) */}
+                {/* Generation Configuration */}
                 <div className="mt-8 bg-white rounded-lg shadow-md">
                     <div className="px-6 py-4 border-b border-gray-200">
                         <h2 className="text-xl font-bold text-gray-900">
-                            Generation Configuration (Phase 3)
+                            Generation Configuration
                         </h2>
                         <p className="mt-1 text-sm text-gray-600">
                             Separate configuration for text generation (atomic note extraction, relationship building). Leave fields blank to use embeddings configuration.

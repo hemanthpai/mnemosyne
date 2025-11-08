@@ -24,7 +24,7 @@ const DevToolsPage: React.FC = () => {
     const [searchUserId, setSearchUserId] = useState<string>(SAMPLE_USER_ID);
     const [searchLimit, setSearchLimit] = useState<number>(10);
     const [searchThreshold, setSearchThreshold] = useState<number>(0.5);
-    const [searchMode, setSearchMode] = useState<'fast' | 'deep'>('fast');  // Phase 3: Search mode
+    const [searchMode, setSearchMode] = useState<'fast' | 'deep'>('fast');
     const [searchLoading, setSearchLoading] = useState<boolean>(false);
     const [searchResult, setSearchResult] = useState<SearchConversationsResponse | null>(null);
     const [searchError, setSearchError] = useState<string | null>(null);
@@ -89,7 +89,7 @@ const DevToolsPage: React.FC = () => {
                 searchUserId,
                 searchLimit,
                 searchThreshold,
-                searchMode  // Phase 3: Pass search mode
+                searchMode
             );
             setSearchResult(result);
         } catch (err: any) {
@@ -115,7 +115,7 @@ const DevToolsPage: React.FC = () => {
                                 Dev Tools
                             </h1>
                             <span className="ml-3 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                                Phase 3
+                                Development
                             </span>
                         </div>
                         <Link
@@ -402,7 +402,7 @@ const DevToolsPage: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Phase 3: Search Mode Toggle */}
+                    {/* Search Mode Toggle */}
                     <div style={{ marginBottom: "16px" }}>
                         <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", fontWeight: "600" }}>
                             Search Mode:
@@ -488,7 +488,7 @@ const DevToolsPage: React.FC = () => {
                         <div style={{ marginTop: "12px" }}>
                             <div style={{ marginBottom: "12px" }}>
                                 <LatencyBadge latencyMs={searchResult.latency_ms} targetMs={300} label="Search" />
-                                {/* Phase 3: Show mode indicator */}
+                                {/* Show mode indicator */}
                                 {searchResult.mode && (
                                     <div style={{
                                         marginTop: "8px",
@@ -516,7 +516,7 @@ const DevToolsPage: React.FC = () => {
                 <div style={{ marginTop: "24px" }}>
                     <h2>Search Results ({searchResult.count})</h2>
                     {searchResult.results.map((result) => {
-                        // Phase 3: Check if this is an atomic note or a conversation
+                        // Check if this is an atomic note or a conversation
                         const isAtomicNote = result.content !== undefined;
 
                         if (isAtomicNote) {
@@ -658,7 +658,7 @@ const DevToolsPage: React.FC = () => {
                                         score={result.score}
                                         highlight={searchQuery}
                                     />
-                                    {/* Phase 3: Show source indicator for multi-tier search */}
+                                    {/* Show source indicator for multi-tier search */}
                                     {result.source && (
                                         <div style={{
                                             fontSize: "11px",

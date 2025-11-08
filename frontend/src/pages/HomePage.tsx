@@ -33,7 +33,7 @@ const HomePage: React.FC = () => {
                 </div>
 
                 {/* Feature Cards */}
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
                     {/* DevTools Card */}
                     <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300">
                         <div className="p-6">
@@ -120,8 +120,7 @@ const HomePage: React.FC = () => {
                                 </h3>
                             </div>
                             <p className="text-gray-600 mb-4 text-sm">
-                                View current embeddings configuration. Phase 1
-                                settings are read-only from environment variables.
+                                Configure LLM providers, models, and parameters for both embeddings and text generation.
                             </p>
                             <Link
                                 to="/settings"
@@ -192,12 +191,60 @@ const HomePage: React.FC = () => {
                             </Link>
                         </div>
                     </div>
+
+                    {/* Import Card */}
+                    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300">
+                        <div className="p-6">
+                            <div className="flex items-center mb-4">
+                                <div className="bg-orange-100 p-3 rounded-lg">
+                                    <svg
+                                        className="w-6 h-6 text-orange-600"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                                        />
+                                    </svg>
+                                </div>
+                                <h3 className="text-xl font-bold text-gray-900 ml-3">
+                                    Import
+                                </h3>
+                            </div>
+                            <p className="text-gray-600 mb-4 text-sm">
+                                Import conversation history from Open WebUI and extract atomic notes automatically.
+                            </p>
+                            <Link
+                                to="/import"
+                                className="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-medium rounded-lg hover:bg-orange-700 transition-colors duration-200 text-sm"
+                            >
+                                Import Data
+                                <svg
+                                    className="ml-2 w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 7l5 5m0 0l-5 5m5-5H6"
+                                    />
+                                </svg>
+                            </Link>
+                        </div>
+                    </div>
                 </div>
 
-                {/* API Features */}
+                {/* Core Features */}
                 <div className="bg-white rounded-lg shadow-md p-8">
                     <h3 className="text-2xl font-bold text-gray-900 mb-6">
-                        Phase 1: Fast Path API
+                        Core Features
                     </h3>
                     <div className="grid md:grid-cols-3 gap-6">
                         <div className="text-center">

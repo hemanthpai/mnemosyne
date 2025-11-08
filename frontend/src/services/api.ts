@@ -16,7 +16,7 @@ const getApiBaseUrl = (): string => {
 const API_BASE_URL = getApiBaseUrl();
 
 // ============================================================================
-// Phase 1: Simple Conversation API (New)
+// Conversation API
 // ============================================================================
 
 export const storeConversationTurn = async (
@@ -39,14 +39,14 @@ export const searchConversations = async (
     userId: string,
     limit: number = 10,
     threshold: number = 0.5,
-    mode: 'fast' | 'deep' = 'fast'  // Phase 3: Search mode
+    mode: 'fast' | 'deep' = 'fast'
 ): Promise<SearchConversationsResponse> => {
     const response = await axios.post(`${API_BASE_URL}/api/conversations/search/`, {
         query,
         user_id: userId,
         limit,
         threshold,
-        mode,  // Phase 3: Pass search mode to backend
+        mode,
     });
     return response.data;
 };
@@ -62,7 +62,7 @@ export const listConversations = async (
 };
 
 // ============================================================================
-// Phase 1: Settings API
+// Settings API
 // ============================================================================
 
 export const getSettings = async (): Promise<any> => {
@@ -86,7 +86,7 @@ export const updateSettings = async (settings: any): Promise<any> => {
 };
 
 // ============================================================================
-// Import API (Phase 0 - will be updated for Phase 1)
+// Import API
 // ============================================================================
 
 export interface ImportProgressResponse {

@@ -1,5 +1,5 @@
 // ============================================================================
-// Phase 1: ConversationTurn Types (New Simplified Architecture)
+// ConversationTurn Types
 // ============================================================================
 
 export interface ConversationTurn {
@@ -27,11 +27,11 @@ export interface SearchConversationsResponse {
     count: number;
     results: Array<SearchResult>;
     latency_ms: number;
-    mode?: 'fast' | 'deep';  // Phase 3: Search mode indicator
+    mode?: 'fast' | 'deep';
     error?: string;
 }
 
-// Phase 3: Unified search result type (supports both conversations and atomic notes)
+// Unified search result type (supports both conversations and atomic notes)
 export interface SearchResult {
     id: string;
     user_message?: string;  // For conversation results
@@ -42,7 +42,7 @@ export interface SearchResult {
     session_id?: string;
     turn_number?: number;
 
-    // Phase 3: Atomic note fields
+    // Atomic note fields
     note_type?: string;
     context?: string;
     confidence?: number;
@@ -50,11 +50,11 @@ export interface SearchResult {
     tags?: string[];
     created_at?: string;
 
-    // Phase 3: Multi-tier search metadata
+    // Multi-tier search metadata
     source?: 'working_memory' | 'raw_conversation' | 'atomic_note' | 'graph_traversal';
     combined_score?: number;
 
-    // Phase 3: Graph traversal metadata
+    // Graph traversal metadata
     depth?: number;
     relationship_type?: string;
     relationship_strength?: number;
@@ -69,7 +69,7 @@ export interface ListConversationsResponse {
 }
 
 // ============================================================================
-// Phase 3: Atomic Notes and Knowledge Graph Types
+// Atomic Notes and Knowledge Graph Types
 // ============================================================================
 
 export interface AtomicNote {
@@ -97,7 +97,7 @@ export interface NoteRelationship {
 }
 
 // ============================================================================
-// Phase 1: Simplified Settings (Embeddings Only)
+// Settings Types
 // ============================================================================
 
 export interface SimplifiedSettings {

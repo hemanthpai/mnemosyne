@@ -2,7 +2,7 @@ import React from 'react';
 
 interface LatencyBadgeProps {
     latencyMs: number;
-    targetMs?: number; // Default 100ms for Phase 1
+    targetMs?: number; // Default 100ms target
     label?: string;
 }
 

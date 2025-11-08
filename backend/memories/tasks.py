@@ -3,6 +3,17 @@ Phase 3: Background tasks for atomic note extraction and relationship building
 
 These tasks run asynchronously via Django-Q to extract structured knowledge
 from conversation turns without blocking user interactions.
+
+Based on A-MEM research (NeurIPS 2025):
+"A-MEM: Agentic Memory for LLM Agents" by Xu et al.
+Paper: docs/research/A-MEM_NeurIPS_2025.pdf
+ArXiv: 2502.12110
+
+Key principles from A-MEM:
+- Atomic notes: discrete, self-contained units of knowledge
+- Zettelkasten method: single fact per note
+- Rich metadata: context, tags, relationships
+- Dynamic knowledge graph through note relationships
 """
 
 import logging
@@ -307,13 +318,14 @@ def build_note_relationships(user_id: str) -> Dict[str, Any]:
 # Helper: Schedule Extraction Task
 # =============================================================================
 
-def schedule_extraction(turn_id: str, delay_seconds: int = 900):
+def schedule_extraction(turn_id: str, delay_seconds: int = 0):
     """
     Schedule extraction task for a conversation turn
 
     Args:
         turn_id: UUID of the ConversationTurn
-        delay_seconds: Delay before extraction (default: 900s = 15min)
+        delay_seconds: Delay before extraction (default: 0s = immediate)
+                      Queue will naturally space out processing
     """
     async_task(
         'memories.tasks.extract_atomic_notes',

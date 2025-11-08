@@ -22,30 +22,70 @@ class LLMService:
     def __init__(self):
         self.session = requests.Session()
 
+    def _get_generation_config(self) -> Dict[str, Any]:
+        """
+        Get generation configuration from Settings (with environment fallback)
+
+        Returns:
+            Dict with generation configuration
+        """
+        try:
+            from .settings_model import Settings
+            db_settings = Settings.get_settings()
+
+            return {
+                'provider': db_settings.generation_provider or db_settings.embeddings_provider,
+                'endpoint_url': db_settings.generation_endpoint_url or db_settings.embeddings_endpoint_url,
+                'model': db_settings.generation_model or db_settings.embeddings_model,
+                'api_key': db_settings.generation_api_key or db_settings.embeddings_api_key,
+                'temperature': db_settings.generation_temperature,
+                'max_tokens': db_settings.generation_max_tokens,
+                'timeout': db_settings.generation_timeout,
+            }
+        except Exception as e:
+            # Fallback to environment variables
+            logger.warning(f"Failed to get Settings from database, using environment: {e}")
+            return {
+                'provider': settings.EMBEDDINGS_PROVIDER,
+                'endpoint_url': settings.EMBEDDINGS_ENDPOINT_URL,
+                'model': getattr(settings, 'GENERATION_MODEL', settings.EMBEDDINGS_MODEL),
+                'api_key': settings.EMBEDDINGS_API_KEY,
+                'temperature': 0.3,
+                'max_tokens': 1000,
+                'timeout': settings.EMBEDDINGS_TIMEOUT * 2,
+            }
+
     def generate_text(
         self,
         prompt: str,
-        temperature: float = 0.3,
-        max_tokens: int = 1000
+        temperature: float = None,
+        max_tokens: int = None
     ) -> Dict[str, Any]:
         """
         Generate text using LLM (for extraction, analysis, etc.)
 
         Args:
             prompt: The prompt to send to the LLM
-            temperature: Sampling temperature (0.0-1.0)
-            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature (0.0-1.0), uses config default if None
+            max_tokens: Maximum tokens to generate, uses config default if None
 
         Returns:
             Dict with 'success', 'text' (generated text), 'error' (if failed)
         """
         try:
-            provider = settings.EMBEDDINGS_PROVIDER.lower()
+            config = self._get_generation_config()
+            provider = config['provider'].lower()
+
+            # Use config defaults if not provided
+            if temperature is None:
+                temperature = config['temperature']
+            if max_tokens is None:
+                max_tokens = config['max_tokens']
 
             if provider == "ollama":
-                return self._generate_text_ollama(prompt, temperature, max_tokens)
+                return self._generate_text_ollama(prompt, temperature, max_tokens, config)
             elif provider in ["openai", "openai_compatible"]:
-                return self._generate_text_openai(prompt, temperature, max_tokens)
+                return self._generate_text_openai(prompt, temperature, max_tokens, config)
             else:
                 return {
                     "success": False,
@@ -60,14 +100,12 @@ class LLMService:
         self,
         prompt: str,
         temperature: float,
-        max_tokens: int
+        max_tokens: int,
+        config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Generate text using Ollama"""
-        endpoint = f"{settings.EMBEDDINGS_ENDPOINT_URL}/api/generate"
-
-        # Use the same model as embeddings by default
-        # In production, you might want a separate GENERATION_MODEL setting
-        model = getattr(settings, 'GENERATION_MODEL', settings.EMBEDDINGS_MODEL)
+        endpoint = f"{config['endpoint_url']}/api/generate"
+        model = config['model']
 
         try:
             response = self.session.post(
@@ -81,7 +119,7 @@ class LLMService:
                         "num_predict": max_tokens
                     }
                 },
-                timeout=settings.EMBEDDINGS_TIMEOUT * 2  # Longer timeout for generation
+                timeout=config['timeout']
             )
             response.raise_for_status()
             data = response.json()
@@ -100,16 +138,16 @@ class LLMService:
         self,
         prompt: str,
         temperature: float,
-        max_tokens: int
+        max_tokens: int,
+        config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Generate text using OpenAI or compatible API"""
-        endpoint = f"{settings.EMBEDDINGS_ENDPOINT_URL}/v1/chat/completions"
+        endpoint = f"{config['endpoint_url']}/v1/chat/completions"
+        model = config['model']
 
         headers = {}
-        if settings.EMBEDDINGS_API_KEY:
-            headers["Authorization"] = f"Bearer {settings.EMBEDDINGS_API_KEY}"
-
-        model = getattr(settings, 'GENERATION_MODEL', settings.EMBEDDINGS_MODEL)
+        if config['api_key']:
+            headers["Authorization"] = f"Bearer {config['api_key']}"
 
         try:
             response = self.session.post(
@@ -123,7 +161,7 @@ class LLMService:
                     "max_tokens": max_tokens
                 },
                 headers=headers,
-                timeout=settings.EMBEDDINGS_TIMEOUT * 2
+                timeout=config['timeout']
             )
             response.raise_for_status()
             data = response.json()

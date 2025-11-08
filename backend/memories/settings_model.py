@@ -55,12 +55,43 @@ class Settings(models.Model):
         help_text="Request timeout in seconds"
     )
 
-    # Phase 3: Generation Model (for extraction and relationship building)
+    # Phase 3: Generation Configuration (for extraction and relationship building)
+    # Separate from embeddings to allow different providers/endpoints
+    generation_provider = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Provider for text generation (defaults to embeddings_provider if empty)"
+    )
+    generation_endpoint_url = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text="API endpoint URL for generation (defaults to embeddings_endpoint_url if empty)"
+    )
     generation_model = models.CharField(
         max_length=200,
         blank=True,
         default='',
         help_text="Model for text generation (defaults to embeddings_model if empty)"
+    )
+    generation_api_key = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text="API key for generation (defaults to embeddings_api_key if empty)"
+    )
+    generation_temperature = models.FloatField(
+        default=0.3,
+        help_text="Sampling temperature for generation (0.0-1.0)"
+    )
+    generation_max_tokens = models.IntegerField(
+        default=1000,
+        help_text="Maximum tokens to generate"
+    )
+    generation_timeout = models.IntegerField(
+        default=60,
+        help_text="Request timeout in seconds for generation"
     )
 
     # Metadata
@@ -130,26 +161,44 @@ class Settings(models.Model):
         Convert settings to dictionary
 
         Args:
-            mask_api_key: If True, mask the API key for security
+            mask_api_key: If True, mask the API keys for security
 
         Returns:
             Dictionary of settings
         """
-        api_key = self.embeddings_api_key
-        if mask_api_key and api_key:
-            # Show first 4 and last 4 characters
-            if len(api_key) > 8:
-                api_key = f"{api_key[:4]}...{api_key[-4:]}"
+        # Mask embeddings API key
+        embeddings_api_key = self.embeddings_api_key
+        if mask_api_key and embeddings_api_key:
+            if len(embeddings_api_key) > 8:
+                embeddings_api_key = f"{embeddings_api_key[:4]}...{embeddings_api_key[-4:]}"
             else:
-                api_key = "***"
+                embeddings_api_key = "***"
+
+        # Mask generation API key
+        generation_api_key = self.generation_api_key
+        if mask_api_key and generation_api_key:
+            if len(generation_api_key) > 8:
+                generation_api_key = f"{generation_api_key[:4]}...{generation_api_key[-4:]}"
+            else:
+                generation_api_key = "***"
 
         return {
+            # Embeddings configuration
             'embeddings_provider': self.embeddings_provider,
             'embeddings_endpoint_url': self.embeddings_endpoint_url,
             'embeddings_model': self.embeddings_model,
-            'embeddings_api_key': api_key,
+            'embeddings_api_key': embeddings_api_key,
             'embeddings_timeout': self.embeddings_timeout,
+
+            # Generation configuration (with fallbacks)
+            'generation_provider': self.generation_provider or self.embeddings_provider,
+            'generation_endpoint_url': self.generation_endpoint_url or self.embeddings_endpoint_url,
             'generation_model': self.generation_model or self.embeddings_model,
+            'generation_api_key': generation_api_key or embeddings_api_key,
+            'generation_temperature': self.generation_temperature,
+            'generation_max_tokens': self.generation_max_tokens,
+            'generation_timeout': self.generation_timeout,
+
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 

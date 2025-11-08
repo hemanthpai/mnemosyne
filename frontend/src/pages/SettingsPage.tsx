@@ -357,10 +357,82 @@ const SettingsPage: React.FC = () => {
                                     </p>
                                 </div>
 
-                                {/* Generation Model (Phase 3) */}
+                            </div>
+                        ) : (
+                            <p className="text-gray-500 text-center py-8">No settings available</p>
+                        )}
+                    </div>
+                </div>
+
+                {/* Generation Configuration (Phase 3) */}
+                <div className="mt-8 bg-white rounded-lg shadow-md">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <h2 className="text-xl font-bold text-gray-900">
+                            Generation Configuration (Phase 3)
+                        </h2>
+                        <p className="mt-1 text-sm text-gray-600">
+                            Separate configuration for text generation (atomic note extraction, relationship building). Leave fields blank to use embeddings configuration.
+                        </p>
+                    </div>
+
+                    <div className="p-6">
+                        {settings ? (
+                            <div className="space-y-6">
+                                {/* Generation Provider */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Generation Model (Phase 3)
+                                        Provider
+                                    </label>
+                                    {editMode ? (
+                                        <select
+                                            value={editedSettings.generation_provider || ''}
+                                            onChange={(e) => handleFieldChange('generation_provider', e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            <option value="">(use embeddings provider)</option>
+                                            <option value="ollama">ollama</option>
+                                            <option value="openai">openai</option>
+                                            <option value="openai_compatible">openai_compatible</option>
+                                        </select>
+                                    ) : (
+                                        <div className="flex items-center">
+                                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getProviderBadgeColor(settings.generation_provider)}`}>
+                                                {settings.generation_provider || `${settings.embeddings_provider} (default)`}
+                                            </span>
+                                        </div>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        {editMode ? 'Leave blank to use embeddings provider' : 'Provider for text generation'}
+                                    </p>
+                                </div>
+
+                                {/* Generation Endpoint URL */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Endpoint URL
+                                    </label>
+                                    {editMode ? (
+                                        <input
+                                            type="text"
+                                            value={editedSettings.generation_endpoint_url || ''}
+                                            onChange={(e) => handleFieldChange('generation_endpoint_url', e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            placeholder="Leave blank to use embeddings endpoint"
+                                        />
+                                    ) : (
+                                        <div className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-900 font-mono text-sm">
+                                            {settings.generation_endpoint_url || <span className="text-gray-400 italic">{settings.embeddings_endpoint_url} (default)</span>}
+                                        </div>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        {editMode ? 'Separate API endpoint for generation (e.g., use OpenAI for generation while Ollama handles embeddings)' : 'API endpoint for generation requests'}
+                                    </p>
+                                </div>
+
+                                {/* Generation Model */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Model
                                     </label>
                                     {editMode ? (
                                         <input
@@ -372,11 +444,107 @@ const SettingsPage: React.FC = () => {
                                         />
                                     ) : (
                                         <div className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-900">
-                                            {settings.generation_model || <span className="text-gray-400 italic">Using embeddings model</span>}
+                                            {settings.generation_model || <span className="text-gray-400 italic">{settings.embeddings_model} (default)</span>}
                                         </div>
                                     )}
                                     <p className="mt-1 text-xs text-gray-500">
-                                        {editMode ? 'Model for text generation (extraction, relationships). Defaults to embeddings model if empty.' : 'Used for atomic note extraction and relationship building'}
+                                        {editMode ? 'Model name for text generation (e.g., gpt-4, llama3, mistral)' : 'Model for atomic note extraction and relationship building'}
+                                    </p>
+                                </div>
+
+                                {/* Generation API Key */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        API Key
+                                    </label>
+                                    {editMode ? (
+                                        <input
+                                            type="password"
+                                            value={editedSettings.generation_api_key || ''}
+                                            onChange={(e) => handleFieldChange('generation_api_key', e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            placeholder="Leave blank to use embeddings API key"
+                                        />
+                                    ) : (
+                                        <div className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-900 font-mono text-sm">
+                                            {settings.generation_api_key || <span className="text-gray-400 italic">Using embeddings API key</span>}
+                                        </div>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        {editMode ? 'Separate API key for generation provider (if different from embeddings)' : 'Stored in database (masked for security)'}
+                                    </p>
+                                </div>
+
+                                {/* Generation Temperature */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Temperature
+                                    </label>
+                                    {editMode ? (
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="1"
+                                            step="0.1"
+                                            value={editedSettings.generation_temperature}
+                                            onChange={(e) => handleFieldChange('generation_temperature', parseFloat(e.target.value))}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    ) : (
+                                        <div className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-900">
+                                            {settings.generation_temperature}
+                                        </div>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        {editMode ? 'Sampling temperature (0.0-1.0). Lower = more focused, higher = more creative. Default: 0.3' : 'Controls randomness in generation'}
+                                    </p>
+                                </div>
+
+                                {/* Generation Max Tokens */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Max Tokens
+                                    </label>
+                                    {editMode ? (
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="100000"
+                                            value={editedSettings.generation_max_tokens}
+                                            onChange={(e) => handleFieldChange('generation_max_tokens', parseInt(e.target.value))}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    ) : (
+                                        <div className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-900">
+                                            {settings.generation_max_tokens}
+                                        </div>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        {editMode ? 'Maximum tokens to generate per request (1-100000). Default: 1000' : 'Maximum length of generated text'}
+                                    </p>
+                                </div>
+
+                                {/* Generation Timeout */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Timeout (seconds)
+                                    </label>
+                                    {editMode ? (
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="600"
+                                            value={editedSettings.generation_timeout}
+                                            onChange={(e) => handleFieldChange('generation_timeout', parseInt(e.target.value))}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    ) : (
+                                        <div className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-900">
+                                            {settings.generation_timeout}
+                                        </div>
+                                    )}
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        {editMode ? 'Request timeout in seconds (1-600). Default: 60' : 'Timeout for generation requests'}
                                     </p>
                                 </div>
                             </div>

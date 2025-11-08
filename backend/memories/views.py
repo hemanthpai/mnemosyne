@@ -280,19 +280,22 @@ class UpdateSettingsView(APIView):
             # Update fields from request
             updated_fields = []
             for field in ['embeddings_provider', 'embeddings_endpoint_url', 'embeddings_model',
-                          'embeddings_api_key', 'embeddings_timeout', 'generation_model']:
+                          'embeddings_api_key', 'embeddings_timeout',
+                          'generation_provider', 'generation_endpoint_url', 'generation_model',
+                          'generation_api_key', 'generation_temperature', 'generation_max_tokens',
+                          'generation_timeout']:
                 if field in request.data:
                     value = request.data[field]
 
                     # Validation
-                    if field == 'embeddings_provider':
-                        if value not in ['ollama', 'openai', 'openai_compatible']:
+                    if field in ['embeddings_provider', 'generation_provider']:
+                        if value and value not in ['ollama', 'openai', 'openai_compatible', '']:
                             return Response(
                                 {'success': False, 'error': f'Invalid provider: {value}'},
                                 status=status.HTTP_400_BAD_REQUEST
                             )
 
-                    elif field == 'embeddings_timeout':
+                    elif field in ['embeddings_timeout', 'generation_timeout']:
                         try:
                             value = int(value)
                             if value < 1 or value > 600:
@@ -303,6 +306,34 @@ class UpdateSettingsView(APIView):
                         except (ValueError, TypeError):
                             return Response(
                                 {'success': False, 'error': 'Invalid timeout value'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'generation_temperature':
+                        try:
+                            value = float(value)
+                            if value < 0.0 or value > 1.0:
+                                return Response(
+                                    {'success': False, 'error': 'Temperature must be between 0.0 and 1.0'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid temperature value'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'generation_max_tokens':
+                        try:
+                            value = int(value)
+                            if value < 1 or value > 100000:
+                                return Response(
+                                    {'success': False, 'error': 'Max tokens must be between 1 and 100000'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid max_tokens value'},
                                 status=status.HTTP_400_BAD_REQUEST
                             )
 

@@ -2,7 +2,12 @@
 OpenWebUI History Importer
 
 This module handles importing historical conversations from Open WebUI's SQLite database
-and extracting memories from them using mnemosyne's existing extraction pipeline.
+and storing them as conversation turns in Phase 3 architecture.
+
+Phase 3 Update:
+- Parses conversations into individual turns (user + assistant pairs)
+- Stores using conversation_service.store_turn()
+- Automatic atomic note extraction and relationship building via background tasks
 """
 
 import json
@@ -16,11 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import transaction
 
-# PHASE 1 NOTE: This file is based on Phase 0 architecture
-# These imports are commented out until the importer is updated for Phase 1
-# from .llm_service import llm_service
-# from .memory_search_service import memory_search_service  # Deleted in Phase 1
-# from .models import Memory  # Replaced with ConversationTurn in Phase 1
+from .conversation_service import conversation_service
+from .models import ConversationTurn
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ class ImportProgress:
     def __init__(self):
         self.total_conversations = 0
         self.processed_conversations = 0
-        self.extracted_memories = 0
+        self.stored_turns = 0  # Phase 3: Track conversation turns instead of memories
         self.failed_conversations = 0
         self.current_conversation_id = None
         self.status = "idle"  # idle, running, completed, failed, cancelled
@@ -59,7 +61,8 @@ class ImportProgress:
         return {
             "total_conversations": self.total_conversations,
             "processed_conversations": self.processed_conversations,
-            "extracted_memories": self.extracted_memories,
+            "stored_turns": self.stored_turns,  # Phase 3: Report turns instead of memories
+            "extracted_memories": self.stored_turns,  # Backward compatibility
             "failed_conversations": self.failed_conversations,
             "current_conversation_id": self.current_conversation_id,
             "status": self.status,
@@ -165,15 +168,15 @@ class OpenWebUIImporter:
 
         return conversations
 
-    def extract_user_messages(self, chat_json: str) -> List[str]:
+    def parse_chat_messages(self, chat_json: str) -> List[Dict[str, Any]]:
         """
-        Extract user messages from chat JSON
+        Parse chat JSON into messages
 
         Args:
             chat_json: JSON string containing chat messages
 
         Returns:
-            List of user message contents
+            List of message dictionaries with 'role' and 'content'
         """
         try:
             chat_data = json.loads(chat_json)
@@ -190,146 +193,139 @@ class OpenWebUIImporter:
             elif isinstance(chat_data, list):
                 messages = chat_data
 
-            # Extract user messages
-            user_messages = []
+            # Extract and normalize messages
+            parsed_messages = []
             for msg in messages:
-                if isinstance(msg, dict) and msg.get("role") == "user":
+                if isinstance(msg, dict):
+                    role = msg.get("role", "")
                     content = msg.get("content", "")
-                    if content and isinstance(content, str):
-                        user_messages.append(content.strip())
 
-            return user_messages
+                    if role in ["user", "assistant"] and content and isinstance(content, str):
+                        parsed_messages.append({
+                            "role": role,
+                            "content": content.strip()
+                        })
+
+            return parsed_messages
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Failed to parse chat JSON: {e}")
             return []
 
-    def format_conversation_text(self, user_messages: List[str]) -> str:
+    def create_conversation_turns(self, messages: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
         """
-        Format user messages into conversation text for extraction
+        Create conversation turns from messages (user + assistant pairs)
 
         Args:
-            user_messages: List of user message strings
+            messages: List of message dicts with 'role' and 'content'
 
         Returns:
-            Formatted conversation text
+            List of (user_message, assistant_message) tuples
         """
-        if not user_messages:
-            return ""
+        turns = []
+        i = 0
 
-        # Join messages with clear separation
-        conversation_parts = [f"User: {msg}" for msg in user_messages]
-        return "\n\n".join(conversation_parts)
+        while i < len(messages):
+            # Look for user message
+            if messages[i]["role"] == "user":
+                user_msg = messages[i]["content"]
 
-    def extract_memories_from_conversation(
-        self, conversation_text: str, mnemosyne_user_id: str, dry_run: bool = False
+                # Look for next assistant message
+                assistant_msg = ""
+                if i + 1 < len(messages) and messages[i + 1]["role"] == "assistant":
+                    assistant_msg = messages[i + 1]["content"]
+                    i += 2  # Skip both user and assistant
+                else:
+                    # User message without assistant response (skip it)
+                    i += 1
+                    continue
+
+                # Only add complete turns (both user and assistant)
+                if user_msg and assistant_msg:
+                    turns.append((user_msg, assistant_msg))
+            else:
+                # Skip orphaned assistant messages
+                i += 1
+
+        return turns
+
+    def store_conversation_turns(
+        self, turns: List[Tuple[str, str]], mnemosyne_user_id: str,
+        session_id: str, dry_run: bool = False
     ) -> Tuple[int, List[Dict[str, Any]]]:
         """
-        Extract memories from conversation using existing extraction pipeline
+        Store conversation turns using Phase 3 architecture
+
+        Phase 3: Stores turns as ConversationTurn objects, which automatically:
+        - Generate embeddings
+        - Cache in working memory
+        - Schedule background extraction of atomic notes
+        - Schedule relationship building
 
         Args:
-            conversation_text: Formatted conversation text
+            turns: List of (user_message, assistant_message) tuples
             mnemosyne_user_id: Mnemosyne user ID (UUID)
-            dry_run: If True, don't actually store memories
+            session_id: Session identifier for this conversation
+            dry_run: If True, don't actually store turns
 
         Returns:
-            Tuple of (memories_extracted_count, extracted_memories_list)
+            Tuple of (turns_stored_count, stored_turn_details_list)
         """
-        # Maximum conversation length (consistent with ExtractMemoriesView limit)
-        MAX_CONVERSATION_LENGTH = 50000
-
-        if not conversation_text or len(conversation_text.strip()) < 10:
+        if not turns:
             return 0, []
-
-        # Enforce maximum length with truncation
-        if len(conversation_text) > MAX_CONVERSATION_LENGTH:
-            logger.warning(
-                f"Conversation text too long ({len(conversation_text)} chars), truncating to {MAX_CONVERSATION_LENGTH}"
-            )
-            conversation_text = conversation_text[:MAX_CONVERSATION_LENGTH]
 
         try:
-            # PHASE 1 NOTE: This importer is based on Phase 0 architecture
-            # It needs to be rewritten for Phase 1 (raw conversation storage)
-            # For now, returning empty to prevent crashes
-            logger.warning("OpenWebUI importer not yet updated for Phase 1 - returning empty")
-            return 0, []
+            stored_turns = []
 
-            # Legacy Phase 0 code (commented out):
-            # from settings_app.models import LLMSettings
-            # settings = LLMSettings.get_settings()
-            # system_prompt = settings.memory_extraction_prompt
+            for user_msg, assistant_msg in turns:
+                # Truncate if needed
+                MAX_MESSAGE_LENGTH = 10000
+                if len(user_msg) > MAX_MESSAGE_LENGTH:
+                    logger.warning(f"User message too long ({len(user_msg)} chars), truncating")
+                    user_msg = user_msg[:MAX_MESSAGE_LENGTH]
 
-            # Add timestamp for context
-            now = datetime.now()
-            system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-
-            # Query LLM for memory extraction
-            from .llm_service import MEMORY_EXTRACTION_FORMAT
-
-            llm_result = llm_service.query_llm(
-                system_prompt=system_prompt_with_date,
-                prompt=conversation_text,
-                response_format=MEMORY_EXTRACTION_FORMAT,
-                max_tokens=16384,
-            )
-
-            if not llm_result["success"]:
-                logger.error(
-                    f"LLM extraction failed: {llm_result.get('error', 'Unknown error')}"
-                )
-                return 0, []
-
-            # Parse extraction results
-            try:
-                memories_data = json.loads(llm_result["response"].strip())
-                if not isinstance(memories_data, list):
-                    logger.error("LLM response is not a list")
-                    return 0, []
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse LLM response: {e}")
-                return 0, []
-
-            # Store memories
-            stored_memories = []
-            for memory_data in memories_data:
-                if not isinstance(memory_data, dict):
-                    continue
-
-                content = memory_data.get("content", "")
-                if not content:
-                    continue
-
-                # Prepare metadata with historical import tag
-                metadata = {
-                    "tags": memory_data.get("tags", []),
-                    "extraction_source": "openwebui_historical_import",
-                    "model_used": llm_result.get("model", "unknown"),
-                    "import_date": datetime.now().isoformat(),
-                }
+                if len(assistant_msg) > MAX_MESSAGE_LENGTH:
+                    logger.warning(f"Assistant message too long ({len(assistant_msg)} chars), truncating")
+                    assistant_msg = assistant_msg[:MAX_MESSAGE_LENGTH]
 
                 if dry_run:
                     # Don't actually store, just return what would be stored
-                    stored_memories.append(
-                        {"content": content, "metadata": metadata}
-                    )
+                    stored_turns.append({
+                        "user_message": user_msg,
+                        "assistant_message": assistant_msg,
+                        "session_id": session_id,
+                        "dry_run": True
+                    })
                 else:
-                    # Store using existing service
-                    memory = memory_search_service.store_memory_with_embedding(
-                        content=content, user_id=mnemosyne_user_id, metadata=metadata
-                    )
-                    stored_memories.append(
-                        {
-                            "id": str(memory.id),
-                            "content": memory.content,
-                            "metadata": memory.metadata,
-                        }
+                    # Store using conversation_service (Phase 3)
+                    # This will automatically:
+                    # 1. Generate embeddings
+                    # 2. Cache in working memory
+                    # 3. Schedule extraction task (immediate via Django-Q)
+                    # 4. Extraction will schedule relationship building
+                    turn = conversation_service.store_turn(
+                        user_id=mnemosyne_user_id,
+                        session_id=session_id,
+                        user_message=user_msg,
+                        assistant_message=assistant_msg
                     )
 
-            return len(stored_memories), stored_memories
+                    stored_turns.append({
+                        "id": str(turn.id),
+                        "turn_number": turn.turn_number,
+                        "user_message": user_msg[:100] + "..." if len(user_msg) > 100 else user_msg,
+                        "assistant_message": assistant_msg[:100] + "..." if len(assistant_msg) > 100 else assistant_msg,
+                        "session_id": session_id,
+                        "extracted": turn.extracted
+                    })
+
+                    logger.debug(f"Stored turn {turn.turn_number} for session {session_id}")
+
+            logger.info(f"Stored {len(stored_turns)} turns for user {mnemosyne_user_id}")
+            return len(stored_turns), stored_turns
 
         except Exception as e:
-            logger.error(f"Unexpected error during memory extraction: {e}")
+            logger.error(f"Unexpected error storing conversation turns: {e}", exc_info=True)
             return 0, []
 
     def map_openwebui_user_to_mnemosyne(
@@ -449,21 +445,27 @@ class OpenWebUIImporter:
                         _import_progress.current_conversation_id = conv["id"]
 
                     try:
-                        # Extract user messages
-                        user_messages = self.extract_user_messages(conv["chat"])
+                        # Phase 3: Parse chat into messages
+                        messages = self.parse_chat_messages(conv["chat"])
 
-                        if not user_messages:
+                        if not messages:
                             logger.debug(
-                                f"No user messages in conversation {conv['id']}"
+                                f"No messages in conversation {conv['id']}"
                             )
                             with _progress_lock:
                                 _import_progress.processed_conversations += 1
                             continue
 
-                        # Format conversation
-                        conversation_text = self.format_conversation_text(
-                            user_messages
-                        )
+                        # Phase 3: Create conversation turns (user + assistant pairs)
+                        turns = self.create_conversation_turns(messages)
+
+                        if not turns:
+                            logger.debug(
+                                f"No complete turns in conversation {conv['id']}"
+                            )
+                            with _progress_lock:
+                                _import_progress.processed_conversations += 1
+                            continue
 
                         # Determine target user ID
                         if target_user_id:
@@ -473,32 +475,36 @@ class OpenWebUIImporter:
                                 conv["user_id"]
                             )
 
-                        # Extract memories
-                        memories_count, memories = (
-                            self.extract_memories_from_conversation(
-                                conversation_text, mnemosyne_user_id, dry_run
-                            )
+                        # Generate session ID for this conversation
+                        # Use OpenWebUI conversation ID as session ID
+                        session_id = f"openwebui-import-{conv['id']}"
+
+                        # Phase 3: Store conversation turns
+                        # This will automatically trigger extraction and relationship building
+                        turns_count, stored_turns = self.store_conversation_turns(
+                            turns, mnemosyne_user_id, session_id, dry_run
                         )
 
-                        total_memories_extracted += memories_count
+                        total_memories_extracted += turns_count
 
                         # Update progress with lock (grouped related updates)
                         with _progress_lock:
-                            _import_progress.extracted_memories = total_memories_extracted
+                            _import_progress.stored_turns = total_memories_extracted
                             _import_progress.processed_conversations += 1
 
                         conversation_details.append(
                             {
                                 "conversation_id": conv["id"],
                                 "title": conv.get("title", "Untitled"),
-                                "user_messages_count": len(user_messages),
-                                "memories_extracted": memories_count,
+                                "turns_count": len(turns),
+                                "turns_stored": turns_count,
                                 "mnemosyne_user_id": mnemosyne_user_id,
+                                "session_id": session_id
                             }
                         )
 
                         logger.info(
-                            f"Processed conversation {conv['id']}: {memories_count} memories extracted"
+                            f"Processed conversation {conv['id']}: {turns_count} turns stored"
                         )
 
                     except Exception as e:
@@ -521,7 +527,8 @@ class OpenWebUIImporter:
                 "success": True,
                 "total_conversations": len(conversations),
                 "processed_conversations": _import_progress.processed_conversations,
-                "total_memories_extracted": total_memories_extracted,
+                "total_turns_stored": total_memories_extracted,  # Phase 3: Turns instead of memories
+                "total_memories_extracted": total_memories_extracted,  # Backward compatibility
                 "failed_conversations": failed_conversations,
                 "dry_run": dry_run,
                 "conversation_details": conversation_details,

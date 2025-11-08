@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mnemosyne": {
+      "command": "python3",
+      "args": [
+        "/path/to/mnemosyne/backend/mcp_server.py"
+      ],
+      "description": "Mnemosyne AI Memory Service - Long-term memory for AI assistants"
+    }
+  }
+}

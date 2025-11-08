@@ -33,5 +33,12 @@ class ConversationTurn(models.Model):
         return f"Turn {self.turn_number} in session {self.session_id[:8]}"
 
     def get_full_text(self):
-        """Get combined text for embedding"""
-        return f"User: {self.user_message}\nAssistant: {self.assistant_message}"
+        """Get text for embedding - user message only for Phase 1
+
+        Rationale: Memory search is about finding what the USER said/did/prefers.
+        Assistant responses are often acknowledgments that add semantic noise.
+
+        Both messages are still stored for context. Phase 3 atomic extraction
+        will pull structured facts from both user and assistant messages.
+        """
+        return self.user_message

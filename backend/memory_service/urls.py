@@ -37,8 +37,7 @@ def serve_react_static(request, path):
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", include("settings_app.urls")),
-    path("api/memories/", include("memories.urls")),
+    path("api/", include("memories.urls")),
     path("health/", health_check, name="health_check"),
     # Serve React static files - note the updated regex
     re_path(r"^(?P<path>assets/.*)$", serve_react_static),

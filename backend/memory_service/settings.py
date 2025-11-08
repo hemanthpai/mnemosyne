@@ -45,13 +45,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "memories",
-    "settings_app",
 ]
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    "memories.security.SecurityHeadersMiddleware",  # Add security headers
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -166,20 +164,12 @@ LOGGING = {
     },
 }
 
-# Rate Limiting Configuration (DIY-friendly defaults)
-# Adjust these values based on your server capacity and usage patterns
-
-# Memory extraction rate limits (more expensive operations)
-RATE_LIMIT_EXTRACT_PER_MINUTE = int(os.environ.get('RATE_LIMIT_EXTRACT_PER_MINUTE', 20))
-
-# Memory retrieval rate limits (lighter operations)  
-RATE_LIMIT_RETRIEVE_PER_MINUTE = int(os.environ.get('RATE_LIMIT_RETRIEVE_PER_MINUTE', 60))
-
-# Security Configuration (DIY-friendly)
-# Optional API keys for additional protection (comma-separated list)
-MNEMOSYNE_API_KEYS = [
-    key.strip() for key in os.environ.get('MNEMOSYNE_API_KEYS', '').split(',') if key.strip()
-]
+# Embeddings Configuration
+EMBEDDINGS_ENDPOINT_URL = os.getenv("EMBEDDINGS_ENDPOINT_URL", "http://localhost:11434")
+EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "mxbai-embed-large")
+EMBEDDINGS_PROVIDER = os.getenv("EMBEDDINGS_PROVIDER", "ollama")  # ollama, openai, openai_compatible
+EMBEDDINGS_API_KEY = os.getenv("EMBEDDINGS_API_KEY", None)
+EMBEDDINGS_TIMEOUT = int(os.getenv("EMBEDDINGS_TIMEOUT", "30"))
 
 # Security headers and HTTPS settings
 SECURE_BROWSER_XSS_FILTER = True

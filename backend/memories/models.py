@@ -1,42 +1,37 @@
 import uuid
-
 from django.db import models
 
 
-class Memory(models.Model):
+class ConversationTurn(models.Model):
+    """Stores raw conversation turns with embeddings for fast retrieval"""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user_id = models.UUIDField()
-    content = models.TextField()
-    metadata = models.JSONField(default=dict, blank=True)
+    user_id = models.UUIDField(db_index=True)
+    session_id = models.CharField(max_length=255, db_index=True)
+    turn_number = models.IntegerField()
 
-    # Store vector DB reference instead of actual embedding
-    vector_id = models.CharField(max_length=255, null=True, blank=True)
+    # Raw conversation data
+    user_message = models.TextField()
+    assistant_message = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    # Vector storage
+    vector_id = models.CharField(max_length=255, unique=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    # For Phase 3: Track extraction status
+    extracted = models.BooleanField(default=False)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ['-timestamp']
         indexes = [
-            models.Index(fields=["user_id"]),
-            models.Index(fields=["created_at"]),
-            models.Index(fields=["vector_id"]),
+            models.Index(fields=['user_id', '-timestamp']),
+            models.Index(fields=['session_id', 'turn_number']),
         ]
+        unique_together = [['session_id', 'turn_number']]
 
     def __str__(self):
-        return f"Memory {self.id} for user {self.user_id}"
+        return f"Turn {self.turn_number} in session {self.session_id[:8]}"
 
-    def get_all_searchable_text(self):
-        """Get all text that should be searchable"""
-        searchable_parts = [self.content]
-        
-        # Add tags from metadata
-        searchable_parts.extend(self.metadata.get("tags", []))
-        
-        # Add context from metadata if present
-        context = self.metadata.get("context", "")
-        if context:
-            searchable_parts.append(context)
-            
-        return " ".join(searchable_parts)
+    def get_full_text(self):
+        """Get combined text for embedding"""
+        return f"User: {self.user_message}\nAssistant: {self.assistant_message}"

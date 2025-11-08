@@ -16,9 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import transaction
 
-from .llm_service import llm_service
-from .memory_search_service import memory_search_service
-from .models import Memory
+# PHASE 1 NOTE: This file is based on Phase 0 architecture
+# These imports are commented out until the importer is updated for Phase 1
+# from .llm_service import llm_service
+# from .memory_search_service import memory_search_service  # Deleted in Phase 1
+# from .models import Memory  # Replaced with ConversationTurn in Phase 1
 
 logger = logging.getLogger(__name__)
 
@@ -247,11 +249,16 @@ class OpenWebUIImporter:
             conversation_text = conversation_text[:MAX_CONVERSATION_LENGTH]
 
         try:
-            # Use the existing LLM service to extract memories
-            from settings_app.models import LLMSettings
+            # PHASE 1 NOTE: This importer is based on Phase 0 architecture
+            # It needs to be rewritten for Phase 1 (raw conversation storage)
+            # For now, returning empty to prevent crashes
+            logger.warning("OpenWebUI importer not yet updated for Phase 1 - returning empty")
+            return 0, []
 
-            settings = LLMSettings.get_settings()
-            system_prompt = settings.memory_extraction_prompt
+            # Legacy Phase 0 code (commented out):
+            # from settings_app.models import LLMSettings
+            # settings = LLMSettings.get_settings()
+            # system_prompt = settings.memory_extraction_prompt
 
             # Add timestamp for context
             now = datetime.now()

@@ -33,16 +33,9 @@ echo "Qdrant connected successfully"
 echo "Initializing Qdrant collection..."
 python manage.py init_qdrant
 
-# Create default settings if they don't exist (now safe after migrations)
-echo "Ensuring default settings exist..."
-python manage.py shell -c "
-from settings_app.models import LLMSettings
-if not LLMSettings.objects.exists():
-    LLMSettings.objects.create()
-    print('Created default settings')
-else:
-    print('Settings already exist')
-"
+# Phase 1: Settings are configured via environment variables
+# No need to create default settings in database
+echo "Phase 1: Settings configured via environment variables"
 
 # Collect static files
 echo "Collecting static files..."

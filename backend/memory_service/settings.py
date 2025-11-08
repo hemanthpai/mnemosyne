@@ -171,6 +171,9 @@ EMBEDDINGS_PROVIDER = os.getenv("EMBEDDINGS_PROVIDER", "ollama")  # ollama, open
 EMBEDDINGS_API_KEY = os.getenv("EMBEDDINGS_API_KEY", None)
 EMBEDDINGS_TIMEOUT = int(os.getenv("EMBEDDINGS_TIMEOUT", "30"))
 
+# Phase 2: Redis Cache Configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
 # Security headers and HTTPS settings
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True

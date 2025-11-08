@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { storeConversationTurn, searchConversations } from "../services/api";
 import { StoreConversationTurnResponse, SearchConversationsResponse } from "../types";
 import LatencyBadge from "../components/LatencyBadge";
@@ -102,11 +103,47 @@ const DevToolsPage: React.FC = () => {
     };
 
     return (
-        <div style={{ padding: "20px", maxWidth: "1200px", margin: "0 auto" }}>
-            <h1 style={{ marginBottom: "8px" }}>Dev Tools</h1>
-            <p style={{ color: "#666", marginBottom: "24px" }}>
-                Test conversation storage and search with latency visualization
-            </p>
+        <div className="min-h-screen bg-gray-50">
+            {/* Header */}
+            <header className="bg-white shadow-sm">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex justify-between items-center py-6">
+                        <div className="flex items-center">
+                            <h1 className="text-3xl font-bold text-gray-900">
+                                Dev Tools
+                            </h1>
+                            <span className="ml-3 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
+                                Phase 1
+                            </span>
+                        </div>
+                        <Link
+                            to="/"
+                            className="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200"
+                        >
+                            <svg
+                                className="mr-2 w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                                />
+                            </svg>
+                            Back to Home
+                        </Link>
+                    </div>
+                </div>
+            </header>
+
+            {/* Main Content */}
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                <p className="text-gray-600 mb-6">
+                    Test conversation storage and search with latency visualization
+                </p>
 
             {/* Quick Test Data */}
             <div
@@ -433,6 +470,7 @@ const DevToolsPage: React.FC = () => {
                     ))}
                 </div>
             )}
+            </main>
         </div>
     );
 };

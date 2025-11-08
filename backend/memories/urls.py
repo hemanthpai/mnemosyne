@@ -11,6 +11,12 @@ from .import_views import (
     ImportProgressView,
     CancelImportView
 )
+from .views_notes import (
+    ListAtomicNotesView,
+    GetAtomicNoteView,
+    DeleteAtomicNoteView,
+    GetNoteTypesView
+)
 
 urlpatterns = [
     # Conversation endpoints
@@ -26,4 +32,10 @@ urlpatterns = [
     # Settings endpoints
     path('settings/', GetSettingsView.as_view(), name='get_settings'),
     path('settings/update/', UpdateSettingsView.as_view(), name='update_settings'),
+
+    # Atomic notes endpoints (Phase 3)
+    path('notes/list/', ListAtomicNotesView.as_view(), name='list_atomic_notes'),
+    path('notes/get/', GetAtomicNoteView.as_view(), name='get_atomic_note'),
+    path('notes/delete/', DeleteAtomicNoteView.as_view(), name='delete_atomic_note'),
+    path('notes/types/', GetNoteTypesView.as_view(), name='get_note_types'),
 ]

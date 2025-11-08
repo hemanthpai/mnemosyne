@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from .conversation_service import conversation_service
-from .models import ConversationTurn
+from .models import ConversationTurn, AtomicNote, NoteRelationship
 
 logger = logging.getLogger(__name__)
 

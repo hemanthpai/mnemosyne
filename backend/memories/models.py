@@ -173,3 +173,10 @@ class NoteRelationship(models.Model):
 
     def __str__(self):
         return f"{self.from_note.content[:30]} -{self.relationship_type}-> {self.to_note.content[:30]}"
+
+
+# =============================================================================
+# Settings Model
+# =============================================================================
+
+from .settings_model import Settings  # noqa: E402

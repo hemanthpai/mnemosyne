@@ -75,6 +75,16 @@ export const getSettings = async (): Promise<any> => {
     }
 };
 
+export const updateSettings = async (settings: any): Promise<any> => {
+    try {
+        const response = await axios.put(`${API_BASE_URL}/api/settings/update/`, settings);
+        return response.data;
+    } catch (error) {
+        console.error('Error updating settings:', error);
+        throw error;
+    }
+};
+
 // ============================================================================
 // Import API (Phase 0 - will be updated for Phase 1)
 // ============================================================================

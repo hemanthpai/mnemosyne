@@ -221,28 +221,116 @@ class ListConversationsView(APIView):
 
 
 class GetSettingsView(APIView):
-    """Get current Phase 1 embeddings configuration (read-only from environment)"""
+    """Get current settings (from database or environment fallback)"""
 
     def get(self, request):
-        """Return current embeddings settings (API key masked for security)"""
+        """Return current settings (API key masked for security)"""
+        try:
+            from .settings_model import Settings
 
-        api_key = django_settings.EMBEDDINGS_API_KEY
-        api_key_masked = None
-        if api_key:
-            # Show first 4 and last 4 characters, mask the rest
-            if len(api_key) > 8:
-                api_key_masked = f"{api_key[:4]}...{api_key[-4:]}"
-            else:
-                api_key_masked = "***"
+            # Get settings from database (with environment fallback)
+            settings = Settings.get_settings()
+            settings_dict = settings.to_dict(mask_api_key=True)
 
-        return Response({
-            'success': True,
-            'settings': {
-                'embeddings_provider': django_settings.EMBEDDINGS_PROVIDER,
-                'embeddings_endpoint_url': django_settings.EMBEDDINGS_ENDPOINT_URL,
-                'embeddings_model': django_settings.EMBEDDINGS_MODEL,
-                'embeddings_api_key': api_key_masked,
-                'embeddings_timeout': django_settings.EMBEDDINGS_TIMEOUT,
-            },
-            'note': 'Settings are read-only in Phase 1. Configure via environment variables and restart the service.'
-        })
+            return Response({
+                'success': True,
+                'settings': settings_dict,
+                'source': 'database',
+                'note': 'Settings are editable via the UI. Changes take effect immediately.'
+            })
+
+        except Exception as e:
+            logger.error(f"Failed to get settings: {e}")
+
+            # Fallback to environment variables
+            api_key = django_settings.EMBEDDINGS_API_KEY
+            api_key_masked = None
+            if api_key:
+                if len(api_key) > 8:
+                    api_key_masked = f"{api_key[:4]}...{api_key[-4:]}"
+                else:
+                    api_key_masked = "***"
+
+            return Response({
+                'success': True,
+                'settings': {
+                    'embeddings_provider': django_settings.EMBEDDINGS_PROVIDER,
+                    'embeddings_endpoint_url': django_settings.EMBEDDINGS_ENDPOINT_URL,
+                    'embeddings_model': django_settings.EMBEDDINGS_MODEL,
+                    'embeddings_api_key': api_key_masked,
+                    'embeddings_timeout': django_settings.EMBEDDINGS_TIMEOUT,
+                    'generation_model': getattr(django_settings, 'GENERATION_MODEL', django_settings.EMBEDDINGS_MODEL),
+                },
+                'source': 'environment',
+                'note': 'Using environment variables. Database settings not available.'
+            })
+
+
+class UpdateSettingsView(APIView):
+    """Update settings in database"""
+
+    def put(self, request):
+        """Update settings with provided values"""
+        try:
+            from .settings_model import Settings
+
+            # Get current settings
+            settings = Settings.get_settings()
+
+            # Update fields from request
+            updated_fields = []
+            for field in ['embeddings_provider', 'embeddings_endpoint_url', 'embeddings_model',
+                          'embeddings_api_key', 'embeddings_timeout', 'generation_model']:
+                if field in request.data:
+                    value = request.data[field]
+
+                    # Validation
+                    if field == 'embeddings_provider':
+                        if value not in ['ollama', 'openai', 'openai_compatible']:
+                            return Response(
+                                {'success': False, 'error': f'Invalid provider: {value}'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'embeddings_timeout':
+                        try:
+                            value = int(value)
+                            if value < 1 or value > 600:
+                                return Response(
+                                    {'success': False, 'error': 'Timeout must be between 1 and 600 seconds'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid timeout value'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field in ['embeddings_endpoint_url', 'embeddings_model']:
+                        if not value or not value.strip():
+                            return Response(
+                                {'success': False, 'error': f'{field} cannot be empty'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    setattr(settings, field, value)
+                    updated_fields.append(field)
+
+            # Save settings
+            settings.save()
+
+            logger.info(f"Settings updated: {', '.join(updated_fields)}")
+
+            return Response({
+                'success': True,
+                'message': f'Updated {len(updated_fields)} setting(s)',
+                'updated_fields': updated_fields,
+                'settings': settings.to_dict(mask_api_key=True)
+            })
+
+        except Exception as e:
+            logger.error(f"Failed to update settings: {e}", exc_info=True)
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

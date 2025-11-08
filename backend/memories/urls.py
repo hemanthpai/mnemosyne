@@ -3,7 +3,8 @@ from .views import (
     StoreConversationTurnView,
     SearchConversationsView,
     ListConversationsView,
-    GetSettingsView
+    GetSettingsView,
+    UpdateSettingsView
 )
 from .import_views import (
     StartImportView,
@@ -22,6 +23,7 @@ urlpatterns = [
     path('import/progress/', ImportProgressView.as_view(), name='import_progress'),
     path('import/cancel/', CancelImportView.as_view(), name='cancel_import'),
 
-    # Settings endpoint (read-only)
+    # Settings endpoints
     path('settings/', GetSettingsView.as_view(), name='get_settings'),
+    path('settings/update/', UpdateSettingsView.as_view(), name='update_settings'),
 ]

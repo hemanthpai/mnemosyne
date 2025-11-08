@@ -144,8 +144,13 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
 
         logger.info(f"Extracting atomic notes from turn {turn_id} (attempt {retry_count + 1}/3)")
 
+        # Get extraction prompt (custom from settings or default)
+        from .settings_model import Settings
+        settings = Settings.get_settings()
+        extraction_template = settings.extraction_prompt or EXTRACTION_PROMPT
+
         # Generate extraction prompt
-        prompt = EXTRACTION_PROMPT.format(
+        prompt = extraction_template.format(
             user_message=turn.user_message,
             assistant_message=turn.assistant_message
         )
@@ -427,8 +432,13 @@ def build_note_relationships_for_note(note_id: str, retry_count: int = 0) -> Dic
             for i, n in enumerate(similar_notes[:5])  # Limit to top 5 for prompt
         ])
 
+        # Get relationship prompt (custom from settings or default)
+        from .settings_model import Settings
+        settings = Settings.get_settings()
+        relationship_template = settings.relationship_prompt or RELATIONSHIP_PROMPT
+
         # Generate relationship analysis prompt
-        prompt = RELATIONSHIP_PROMPT.format(
+        prompt = relationship_template.format(
             new_note_content=note.content,
             new_note_type=note.note_type,
             new_note_context=note.context or "none",

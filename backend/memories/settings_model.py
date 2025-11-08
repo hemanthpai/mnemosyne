@@ -94,6 +94,19 @@ class Settings(models.Model):
         help_text="Request timeout in seconds for generation"
     )
 
+    # Prompt Customization
+    # Allow users to customize the prompts used for extraction and relationship building
+    extraction_prompt = models.TextField(
+        blank=True,
+        default='',
+        help_text="Custom prompt for atomic note extraction (uses default if empty)"
+    )
+    relationship_prompt = models.TextField(
+        blank=True,
+        default='',
+        help_text="Custom prompt for relationship building (uses default if empty)"
+    )
+
     # Metadata
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.CharField(max_length=200, blank=True, default='system')
@@ -198,6 +211,10 @@ class Settings(models.Model):
             'generation_temperature': self.generation_temperature,
             'generation_max_tokens': self.generation_max_tokens,
             'generation_timeout': self.generation_timeout,
+
+            # Prompt customization
+            'extraction_prompt': self.extraction_prompt,
+            'relationship_prompt': self.relationship_prompt,
 
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

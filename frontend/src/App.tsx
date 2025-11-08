@@ -3,9 +3,6 @@ import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import DevToolsPage from "./pages/DevToolsPage";
 import HomePage from "./pages/HomePage";
 import ImportPage from "./pages/ImportPage";
-import MemoriesPage from "./pages/MemoriesPage";
-import MemoryDetailPage from "./pages/MemoryDetailPage"; // Add this import
-import MemoryStatsPage from "./pages/MemoryStatsPage"; // Add this import
 import SettingsPage from "./pages/SettingsPage";
 
 const App: React.FC = () => {
@@ -14,12 +11,10 @@ const App: React.FC = () => {
             <div className="App">
                 <Routes>
                     <Route path="/" element={<HomePage />} />
-                    <Route path="/memories" element={<MemoriesPage />} />
-                    <Route path="/import" element={<ImportPage />} />
+                    {/* Import temporarily disabled - will be updated for Phase 1 */}
+                    {/* <Route path="/import" element={<ImportPage />} /> */}
                     <Route path="/devtools" element={<DevToolsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
-                    <Route path="/stats" element={<MemoryStatsPage />} />{" "}
-                    <Route path="/memory/:id" element={<MemoryDetailPage />} />
                 </Routes>
             </div>
         </Router>

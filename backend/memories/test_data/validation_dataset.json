@@ -1,0 +1,448 @@
+{
+  "dataset_version": "1.0",
+  "description": "Independent validation dataset with different writing styles, topics, and patterns to test for overfitting",
+  "test_conversations": [
+    {
+      "id": "health_001",
+      "category": "health_wellness",
+      "user_message": "I've been doing yoga every day since 2020. Started with basic poses but now I can hold a headstand for 2 minutes. My instructor says I have great form.",
+      "assistant_message": "That's impressive progress! Yoga is wonderful for flexibility and mindfulness.",
+      "ground_truth_notes": [
+        {"content": "practices yoga daily", "type": "interest:hobby"},
+        {"content": "started yoga in 2020", "type": "personal:background"},
+        {"content": "can hold headstand for 2 minutes", "type": "skill:physical"},
+        {"content": "has good form in yoga", "type": "skill:physical"}
+      ],
+      "should_not_extract": [
+        "Yoga is wonderful for flexibility"
+      ]
+    },
+    {
+      "id": "travel_001",
+      "category": "travel_lifestyle",
+      "user_message": "Backpacked through Southeast Asia for 6 months last year. Fell in love with Thai street food - especially pad thai and mango sticky rice. Planning to go back to Vietnam next summer.",
+      "assistant_message": "Six months of travel sounds amazing! Those are classic Thai dishes.",
+      "ground_truth_notes": [
+        {"content": "backpacked through Southeast Asia", "type": "personal:background"},
+        {"content": "traveled for 6 months", "type": "personal:background"},
+        {"content": "loves Thai street food", "type": "interest:food"},
+        {"content": "enjoys pad thai", "type": "interest:food"},
+        {"content": "enjoys mango sticky rice", "type": "interest:food"},
+        {"content": "planning to visit Vietnam", "type": "goal:travel"}
+      ],
+      "should_not_extract": [
+        "Six months sounds amazing"
+      ]
+    },
+    {
+      "id": "business_001",
+      "category": "entrepreneurship",
+      "user_message": "Launched my SaaS startup in January. We're at $15K MRR now with 200 paying customers. Using Stripe for payments, Vercel for hosting. The hardest part has been customer acquisition.",
+      "assistant_message": "Congrats on the launch! Customer acquisition is always a challenge for startups.",
+      "ground_truth_notes": [
+        {"content": "founded a SaaS startup", "type": "personal:background"},
+        {"content": "startup generates $15K monthly recurring revenue", "type": "personal:background"},
+        {"content": "has 200 paying customers", "type": "personal:background"},
+        {"content": "uses Stripe", "type": "skill:tool"},
+        {"content": "uses Vercel", "type": "skill:tool"},
+        {"content": "finds customer acquisition challenging", "type": "goal:business"}
+      ],
+      "should_not_extract": [
+        "Customer acquisition is always a challenge"
+      ]
+    },
+    {
+      "id": "arts_001",
+      "category": "creative_arts",
+      "user_message": "Been painting with acrylics for about 3 years now, mostly abstract expressionism. Sold a few pieces at local galleries. I find the texture of heavy-body acrylics really satisfying to work with.",
+      "assistant_message": "Abstract expressionism is such a powerful style! The texture work sounds beautiful.",
+      "ground_truth_notes": [
+        {"content": "paints with acrylics", "type": "interest:hobby"},
+        {"content": "has 3 years painting experience", "type": "skill:art"},
+        {"content": "specializes in abstract expressionism", "type": "interest:art"},
+        {"content": "has sold artwork at galleries", "type": "personal:background"},
+        {"content": "prefers heavy-body acrylics", "type": "preference:tool"},
+        {"content": "enjoys texture in painting", "type": "preference:art"}
+      ],
+      "should_not_extract": [
+        "Abstract expressionism is powerful"
+      ]
+    },
+    {
+      "id": "gaming_001",
+      "category": "gaming_esports",
+      "user_message": "I'm Diamond rank in League of Legends, mainly play support role. My champion pool is Thresh, Nautilus, and Leona. Trying to hit Masters this season but stuck in D2 right now.",
+      "assistant_message": "Diamond is already impressive! Support is such an important role.",
+      "ground_truth_notes": [
+        {"content": "plays League of Legends", "type": "interest:gaming"},
+        {"content": "ranked Diamond in League of Legends", "type": "skill:gaming"},
+        {"content": "plays support role", "type": "preference:gaming"},
+        {"content": "plays Thresh", "type": "skill:gaming"},
+        {"content": "plays Nautilus", "type": "skill:gaming"},
+        {"content": "plays Leona", "type": "skill:gaming"},
+        {"content": "goal to reach Masters rank", "type": "goal:gaming"},
+        {"content": "currently ranked Diamond 2", "type": "skill:gaming"}
+      ],
+      "should_not_extract": [
+        "Diamond is impressive"
+      ]
+    },
+    {
+      "id": "cooking_001",
+      "category": "culinary",
+      "user_message": "I make sourdough bread every weekend. Maintain two starters - one white flour, one whole wheat. The whole process is so meditative, from feeding the starter to shaping the loaves.",
+      "assistant_message": "Sourdough baking is definitely an art form! The patience it requires is admirable.",
+      "ground_truth_notes": [
+        {"content": "bakes sourdough bread", "type": "interest:hobby"},
+        {"content": "bakes weekly", "type": "interest:hobby"},
+        {"content": "maintains sourdough starters", "type": "skill:cooking"},
+        {"content": "has white flour starter", "type": "preference:cooking"},
+        {"content": "has whole wheat starter", "type": "preference:cooking"},
+        {"content": "finds breadmaking meditative", "type": "preference:hobby"}
+      ],
+      "should_not_extract": [
+        "Sourdough baking is an art form"
+      ]
+    },
+    {
+      "id": "writing_001",
+      "category": "creative_writing",
+      "user_message": "Currently working on my second novel - urban fantasy set in Chicago. First one took 4 years to write, this one's going faster. Write best in coffee shops weirdly, can't focus at home.",
+      "assistant_message": "Urban fantasy is such a fun genre! Coffee shop ambiance really helps some writers.",
+      "ground_truth_notes": [
+        {"content": "writes novels", "type": "interest:hobby"},
+        {"content": "writing second novel", "type": "goal:creative"},
+        {"content": "writes urban fantasy", "type": "preference:writing"},
+        {"content": "novel set in Chicago", "type": "personal:project"},
+        {"content": "first novel took 4 years", "type": "personal:background"},
+        {"content": "prefers writing in coffee shops", "type": "preference:environment"},
+        {"content": "difficulty focusing at home", "type": "preference:environment"}
+      ],
+      "should_not_extract": [
+        "Urban fantasy is fun"
+      ]
+    },
+    {
+      "id": "fitness_001",
+      "category": "fitness_training",
+      "user_message": "Deadlift 405lbs now after 2 years of powerlifting training. Follow Wendler's 5/3/1 program. Recovery's been the biggest learning curve - used to overtrain constantly.",
+      "assistant_message": "405 is a solid milestone! Wendler's program is tried and true.",
+      "ground_truth_notes": [
+        {"content": "deadlifts 405 pounds", "type": "skill:fitness"},
+        {"content": "trains in powerlifting", "type": "interest:fitness"},
+        {"content": "has 2 years powerlifting experience", "type": "skill:fitness"},
+        {"content": "follows Wendler 5/3/1 program", "type": "preference:fitness"},
+        {"content": "learned importance of recovery", "type": "skill:fitness"},
+        {"content": "previously overtrained", "type": "personal:background"}
+      ],
+      "should_not_extract": [
+        "405 is a solid milestone"
+      ]
+    },
+    {
+      "id": "parenting_001",
+      "category": "family_parenting",
+      "user_message": "Homeschooling our two kids (8 and 10). Use a mix of Montessori and Charlotte Mason methods. Takes a ton of prep work but seeing them actually excited about learning makes it worth it.",
+      "assistant_message": "Homeschooling is such a commitment! Those are both excellent educational philosophies.",
+      "ground_truth_notes": [
+        {"content": "homeschools children", "type": "personal:background"},
+        {"content": "has two children", "type": "personal:background"},
+        {"content": "children aged 8 and 10", "type": "personal:background"},
+        {"content": "uses Montessori method", "type": "preference:education"},
+        {"content": "uses Charlotte Mason method", "type": "preference:education"},
+        {"content": "finds preparation time-consuming", "type": "preference:education"},
+        {"content": "values children's enthusiasm for learning", "type": "preference:values"}
+      ],
+      "should_not_extract": [
+        "Homeschooling is a commitment"
+      ]
+    },
+    {
+      "id": "music_prod_001",
+      "category": "music_production",
+      "user_message": "Produce lo-fi hip hop beats in Ableton. Got a Push 2 controller last month and it's changed my workflow completely. Sample a lot from old jazz records.",
+      "assistant_message": "The Push 2 is an amazing controller! Lo-fi hip hop has such a great vibe.",
+      "ground_truth_notes": [
+        {"content": "produces lo-fi hip hop", "type": "interest:music"},
+        {"content": "uses Ableton", "type": "skill:software"},
+        {"content": "owns Push 2 controller", "type": "preference:tool"},
+        {"content": "recently acquired Push 2", "type": "personal:background"},
+        {"content": "Push 2 improved workflow", "type": "preference:tool"},
+        {"content": "samples from jazz records", "type": "preference:music"}
+      ],
+      "should_not_extract": [
+        "Push 2 is amazing"
+      ]
+    },
+    {
+      "id": "gardening_001",
+      "category": "gardening",
+      "user_message": "My vegetable garden's doing great this year - tomatoes, peppers, zucchini all thriving. Switched to raised beds with drip irrigation last season and what a difference. Compost everything from kitchen scraps.",
+      "assistant_message": "Raised beds with drip irrigation is such a smart setup! Fresh vegetables are the best.",
+      "ground_truth_notes": [
+        {"content": "grows vegetable garden", "type": "interest:hobby"},
+        {"content": "grows tomatoes", "type": "interest:gardening"},
+        {"content": "grows peppers", "type": "interest:gardening"},
+        {"content": "grows zucchini", "type": "interest:gardening"},
+        {"content": "uses raised beds", "type": "preference:gardening"},
+        {"content": "uses drip irrigation", "type": "preference:gardening"},
+        {"content": "composts kitchen scraps", "type": "preference:sustainability"}
+      ],
+      "should_not_extract": [
+        "Fresh vegetables are the best"
+      ]
+    },
+    {
+      "id": "investing_001",
+      "category": "finance_investing",
+      "user_message": "Started investing 5 years ago with index funds, now I do some stock picking too. Portfolio is 70% VOO, 20% individual tech stocks, 10% crypto. Rebalance quarterly.",
+      "assistant_message": "That's a pretty balanced approach! Index funds are a solid foundation.",
+      "ground_truth_notes": [
+        {"content": "invests in stock market", "type": "interest:finance"},
+        {"content": "started investing 5 years ago", "type": "personal:background"},
+        {"content": "invests in index funds", "type": "preference:finance"},
+        {"content": "picks individual stocks", "type": "skill:finance"},
+        {"content": "70% portfolio in VOO", "type": "preference:finance"},
+        {"content": "20% portfolio in tech stocks", "type": "preference:finance"},
+        {"content": "10% portfolio in cryptocurrency", "type": "preference:finance"},
+        {"content": "rebalances quarterly", "type": "preference:finance"}
+      ],
+      "should_not_extract": [
+        "That's a balanced approach"
+      ]
+    },
+    {
+      "id": "photography_002",
+      "category": "photography_advanced",
+      "user_message": "Shoot film exclusively now - mostly Portra 400 and HP5. Develop my own black and white in the bathroom. There's something about the deliberate process of film that digital can't match.",
+      "assistant_message": "Film photography has such a unique quality! Home developing is rewarding.",
+      "ground_truth_notes": [
+        {"content": "shoots film photography", "type": "preference:photography"},
+        {"content": "uses Kodak Portra 400", "type": "preference:photography"},
+        {"content": "uses Ilford HP5", "type": "preference:photography"},
+        {"content": "develops own black and white film", "type": "skill:photography"},
+        {"content": "values deliberate process of film", "type": "preference:photography"},
+        {"content": "prefers film over digital", "type": "preference:photography"}
+      ],
+      "should_not_extract": [
+        "Film has unique quality"
+      ]
+    },
+    {
+      "id": "running_001",
+      "category": "endurance_sports",
+      "user_message": "Ran my first marathon last month - Boston, finished in 3:42. Training was brutal, peak week was 70 miles. Already signed up for Chicago in October, aiming for sub-3:30.",
+      "assistant_message": "Congratulations on Boston! That's a fantastic time for your first marathon.",
+      "ground_truth_notes": [
+        {"content": "runs marathons", "type": "interest:sports"},
+        {"content": "ran Boston Marathon", "type": "personal:background"},
+        {"content": "marathon time of 3:42", "type": "skill:sports"},
+        {"content": "peak training week of 70 miles", "type": "skill:sports"},
+        {"content": "registered for Chicago Marathon", "type": "goal:sports"},
+        {"content": "goal of sub-3:30 marathon", "type": "goal:sports"}
+      ],
+      "should_not_extract": [
+        "That's a fantastic time"
+      ]
+    },
+    {
+      "id": "volunteering_001",
+      "category": "community_service",
+      "user_message": "Volunteer as an EMT with the local fire department. Been doing it for 7 years alongside my day job. The night shifts are rough but the community impact keeps me going.",
+      "assistant_message": "EMT work is so valuable to communities! Seven years is impressive dedication.",
+      "ground_truth_notes": [
+        {"content": "volunteers as EMT", "type": "interest:service"},
+        {"content": "volunteers at fire department", "type": "personal:background"},
+        {"content": "7 years as EMT", "type": "skill:medical"},
+        {"content": "works EMT shifts in addition to day job", "type": "personal:background"},
+        {"content": "works night shifts", "type": "preference:schedule"},
+        {"content": "finds night shifts challenging", "type": "preference:work"},
+        {"content": "motivated by community impact", "type": "preference:values"}
+      ],
+      "should_not_extract": [
+        "EMT work is valuable"
+      ]
+    },
+    {
+      "id": "languages_001",
+      "category": "language_learning",
+      "user_message": "Learning Mandarin Chinese using Anki flashcards and HelloChinese app. Can read about 800 characters now after 18 months. Speaking is still my weak point - need more conversation practice.",
+      "assistant_message": "800 characters in 18 months is great progress! Conversation practice is key.",
+      "ground_truth_notes": [
+        {"content": "learning Mandarin Chinese", "type": "goal:language"},
+        {"content": "uses Anki", "type": "skill:tool"},
+        {"content": "uses HelloChinese app", "type": "skill:tool"},
+        {"content": "can read 800 Chinese characters", "type": "skill:language"},
+        {"content": "has studied for 18 months", "type": "personal:background"},
+        {"content": "speaking is weakness", "type": "skill:language"},
+        {"content": "needs more conversation practice", "type": "goal:language"}
+      ],
+      "should_not_extract": [
+        "800 characters is great progress"
+      ]
+    },
+    {
+      "id": "diy_001",
+      "category": "home_improvement",
+      "user_message": "Renovating our 1920s bungalow myself - just finished the kitchen remodel. Learned plumbing and electrical through YouTube honestly. Next up is refinishing the original hardwood floors.",
+      "assistant_message": "DIY renovation of a 1920s home is ambitious! YouTube university is powerful.",
+      "ground_truth_notes": [
+        {"content": "renovates own home", "type": "interest:diy"},
+        {"content": "owns 1920s bungalow", "type": "personal:background"},
+        {"content": "completed kitchen remodel", "type": "skill:construction"},
+        {"content": "learned plumbing through YouTube", "type": "skill:construction"},
+        {"content": "learned electrical through YouTube", "type": "skill:construction"},
+        {"content": "planning to refinish hardwood floors", "type": "goal:diy"},
+        {"content": "house has original hardwood floors", "type": "personal:background"}
+      ],
+      "should_not_extract": [
+        "YouTube university is powerful"
+      ]
+    },
+    {
+      "id": "climbing_001",
+      "category": "climbing_sports",
+      "user_message": "Boulder at my local gym 3-4 times a week. Climbing V6 consistently now, sometimes flashing V5s. Finger strength has been my biggest limiting factor - been doing hangboard training to address it.",
+      "assistant_message": "V6 is solid! Hangboard training will definitely help with finger strength.",
+      "ground_truth_notes": [
+        {"content": "rock climbs at gym", "type": "interest:sports"},
+        {"content": "climbs 3-4 times weekly", "type": "interest:sports"},
+        {"content": "climbs V6 grade", "type": "skill:climbing"},
+        {"content": "can flash V5 routes", "type": "skill:climbing"},
+        {"content": "finger strength is limitation", "type": "skill:climbing"},
+        {"content": "trains with hangboard", "type": "preference:training"}
+      ],
+      "should_not_extract": [
+        "V6 is solid"
+      ]
+    }
+  ],
+  "test_search_queries": [
+    {
+      "query_id": "v001",
+      "query": "health and fitness activities",
+      "description": "Test fitness and wellness interests",
+      "relevant_note_ids": [
+        "health_001",
+        "fitness_001",
+        "running_001",
+        "climbing_001"
+      ],
+      "irrelevant_note_ids": [
+        "business_001",
+        "music_prod_001"
+      ],
+      "min_recall": 0.75,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "v002",
+      "query": "creative hobbies and arts",
+      "description": "Test creative and artistic pursuits",
+      "relevant_note_ids": [
+        "arts_001",
+        "writing_001",
+        "music_prod_001",
+        "photography_002"
+      ],
+      "irrelevant_note_ids": [
+        "fitness_001",
+        "investing_001"
+      ],
+      "min_recall": 0.75,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "v003",
+      "query": "food and cooking interests",
+      "description": "Test food-related interests",
+      "relevant_note_ids": [
+        "travel_001",
+        "cooking_001",
+        "gardening_001"
+      ],
+      "irrelevant_note_ids": [
+        "gaming_001",
+        "languages_001"
+      ],
+      "min_recall": 0.8,
+      "max_irrelevant_in_top_10": 1
+    },
+    {
+      "query_id": "v004",
+      "query": "technical tools and software skills",
+      "description": "Test technical proficiency",
+      "relevant_note_ids": [
+        "business_001",
+        "music_prod_001",
+        "languages_001"
+      ],
+      "irrelevant_note_ids": [
+        "health_001",
+        "cooking_001"
+      ],
+      "min_recall": 0.7,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "v005",
+      "query": "outdoor and adventure activities",
+      "description": "Test outdoor interests",
+      "relevant_note_ids": [
+        "travel_001",
+        "running_001",
+        "climbing_001",
+        "gardening_001"
+      ],
+      "irrelevant_note_ids": [
+        "writing_001",
+        "investing_001"
+      ],
+      "min_recall": 0.75,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "v006",
+      "query": "entrepreneurship and business",
+      "description": "Test business and financial topics",
+      "relevant_note_ids": [
+        "business_001",
+        "investing_001"
+      ],
+      "irrelevant_note_ids": [
+        "health_001",
+        "gaming_001"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 0
+    },
+    {
+      "query_id": "v007",
+      "query": "parenting and education",
+      "description": "Test educational and family topics",
+      "relevant_note_ids": [
+        "parenting_001"
+      ],
+      "irrelevant_note_ids": [
+        "gaming_001",
+        "fitness_001"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 1
+    },
+    {
+      "query_id": "v008",
+      "query": "community service and volunteering",
+      "description": "Test service-oriented activities",
+      "relevant_note_ids": [
+        "volunteering_001"
+      ],
+      "irrelevant_note_ids": [
+        "business_001",
+        "arts_001"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 1
+    }
+  ]
+}

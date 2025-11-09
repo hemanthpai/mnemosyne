@@ -468,6 +468,23 @@ class Command(BaseCommand):
             'focuses': ['focuses on', 'mainly', 'primarily'],
             'finds_rewarding': ['finds rewarding', 'rewarding to', 'finds helpful'],
             'cares': ['cares about', 'interested in', 'values', 'passionate about'],
+            'bakes': ['bakes', 'makes'],
+            'maintains': ['maintains', 'has'],
+            'trains': ['trains in', 'training in', 'has been', 'doing'],
+            'learned': ['learned', 'considers', 'found', 'discovered'],
+            'previously': ['previously', 'used to', 'formerly'],
+            'founded': ['founded', 'launched', 'started'],
+            'generates': ['generates', 'has', 'at'],
+            'challenging': ['challenging', 'difficult', 'hardest part', 'hard', 'rough'],
+            'picks': ['picks', 'does', 'performs', 'engages in'],
+            'allocates': ['allocates', 'portfolio in', 'portfolio to'],
+            'shoots': ['shoots', 'exclusively'],
+            'ran': ['ran', 'completed'],
+            'finished': ['finished', 'completed', 'in'],
+            'practices': ['practices', 'does'],
+            'weekly': ['weekly', 'every weekend', 'per week'],
+            'can': ['can', 'able to'],
+            'planning': ['planning', 'plans to', 'going to'],
         }
 
         s1_lower = s1.lower()

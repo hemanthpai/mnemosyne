@@ -1,5 +1,5 @@
 """
-Phase 3 Test Suite
+Mnemosyne Test Suite
 
 Automated tests for A-MEM implementation:
 - Settings model and API

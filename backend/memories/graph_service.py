@@ -1,5 +1,5 @@
 """
-Phase 3: Graph search and traversal service
+Graph search and traversal service
 
 Implements A-MEM style knowledge graph operations:
 - Vector search for atomic notes
@@ -11,14 +11,44 @@ are interconnected through relationships, enabling richer context retrieval.
 """
 
 import logging
+import json
 from typing import List, Dict, Any, Set
 from collections import deque
 
 from .models import AtomicNote, NoteRelationship
 from .vector_service import vector_service
 from .llm_service import llm_service
+from .settings_model import Settings
 
 logger = logging.getLogger(__name__)
+
+QUERY_EXPANSION_PROMPT = """Expand this search query into 3-5 concrete variations that capture different aspects.
+
+Query: "{query}"
+
+Generate variations that:
+- Use specific, concrete language (avoid abstract terms)
+- Cover different facets of the query topic
+- Are suitable for matching against factual statements
+- Include both direct terms and related concepts
+
+Examples:
+Query: "music preferences"
+Variations:
+- "favorite music genres"
+- "artists they listen to"
+- "concert experiences"
+- "music they enjoy"
+
+Query: "programming languages they know"
+Variations:
+- "programming languages they use"
+- "coding skills"
+- "languages they write code in"
+- "technical programming expertise"
+
+Now expand the query above. Return ONLY a JSON array of strings (no other text):
+["variation1", "variation2", "variation3"]"""
 
 
 class GraphService:
@@ -93,6 +123,140 @@ class GraphService:
         except Exception as e:
             logger.error(f"Atomic note search failed: {e}")
             return []
+
+    def expand_query(self, query: str) -> List[str]:
+        """
+        Expand query into multiple semantic variations using LLM
+
+        Uses the generation LLM to expand abstract queries into concrete variations
+        that better match against specific atomic notes.
+
+        Args:
+            query: Original search query
+
+        Returns:
+            List of query variations (includes original query + expansions)
+        """
+        try:
+            # Generate expansion prompt
+            prompt = QUERY_EXPANSION_PROMPT.format(query=query)
+
+            # Call generation LLM
+            response = llm_service.generate_text(
+                prompt=prompt,
+                max_tokens=200,
+                temperature=0.3  # Lower temperature for more focused expansions
+            )
+
+            if not response['success']:
+                logger.warning(f"Query expansion failed: {response.get('error')}. Using original query only.")
+                return [query]
+
+            # Parse JSON response
+            response_text = response['text'].strip()
+
+            # Extract JSON array from response (handle cases where LLM adds extra text)
+            try:
+                # Try to find JSON array in response
+                start_idx = response_text.find('[')
+                end_idx = response_text.rfind(']') + 1
+
+                if start_idx >= 0 and end_idx > start_idx:
+                    json_text = response_text[start_idx:end_idx]
+                    variations = json.loads(json_text)
+                else:
+                    raise ValueError("No JSON array found in response")
+
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Failed to parse query expansion JSON: {e}. Response: {response_text[:100]}")
+                return [query]
+
+            # Validate result
+            if not isinstance(variations, list) or not variations:
+                logger.warning(f"Invalid query expansion result. Using original query only.")
+                return [query]
+
+            # Always include original query + variations
+            all_queries = [query] + [str(v) for v in variations if v and str(v) != query]
+
+            logger.info(f"Expanded query '{query[:50]}...' into {len(all_queries)} variations")
+            return all_queries[:6]  # Cap at 6 total (original + 5 variations)
+
+        except Exception as e:
+            logger.error(f"Query expansion error: {e}. Using original query only.")
+            return [query]
+
+    def search_atomic_notes_with_expansion(
+        self,
+        query: str,
+        user_id: str,
+        limit: int = 10,
+        threshold: float = 0.5,
+        use_expansion: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Search atomic notes with optional query expansion
+
+        When expansion is enabled, expands the query into multiple variations
+        and fuses results using maximum score across all variations.
+
+        Args:
+            query: Search query text
+            user_id: UUID of the user
+            limit: Maximum number of results
+            threshold: Minimum similarity score
+            use_expansion: Whether to use query expansion
+
+        Returns:
+            List of atomic notes with scores
+        """
+        # Check settings
+        settings = Settings.get_settings()
+        if not use_expansion or not settings.enable_query_expansion:
+            # No expansion: use original search
+            return self.search_atomic_notes(query, user_id, limit, threshold)
+
+        try:
+            # Expand query
+            query_variations = self.expand_query(query)
+
+            # Search with each variation and collect results
+            all_results: Dict[str, Dict[str, Any]] = {}  # note_id → best result
+
+            for variant in query_variations:
+                # Search with larger limit to cast wider net
+                variant_results = self.search_atomic_notes(
+                    query=variant,
+                    user_id=user_id,
+                    limit=limit * 3,  # Get more candidates
+                    threshold=max(0.0, threshold - 0.2)  # Lower threshold for recall
+                )
+
+                # Merge results, keeping best score for each note
+                for result in variant_results:
+                    note_id = result['id']
+                    score = result['score']
+
+                    if note_id not in all_results or score > all_results[note_id]['score']:
+                        all_results[note_id] = result
+
+            # Sort by score and return top-k
+            final_results = sorted(
+                all_results.values(),
+                key=lambda x: x['score'],
+                reverse=True
+            )[:limit]
+
+            logger.info(
+                f"Query expansion search: {len(query_variations)} variations → "
+                f"{len(all_results)} unique results → top {len(final_results)} returned"
+            )
+
+            return final_results
+
+        except Exception as e:
+            logger.error(f"Search with expansion failed: {e}. Falling back to basic search.")
+            return self.search_atomic_notes(query, user_id, limit, threshold)
 
     def traverse_graph(
         self,

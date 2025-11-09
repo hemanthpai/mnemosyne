@@ -1,5 +1,5 @@
 """
-Django management command to set up scheduled tasks for Phase 3
+Django management command to set up scheduled tasks
 
 Usage:
     python manage.py setup_schedules
@@ -10,7 +10,7 @@ from django_q.models import Schedule
 
 
 class Command(BaseCommand):
-    help = 'Set up scheduled tasks for Mnemosyne (Phase 3)'
+    help = 'Set up scheduled tasks for Mnemosyne'
 
     def handle(self, *args, **options):
         """Create scheduled tasks for background processing"""

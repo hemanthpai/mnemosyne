@@ -109,21 +109,21 @@ export const importOpenWebUIHistory = async (
     formData.append('user_id', userId);
     formData.append('dry_run', dryRun.toString());
 
-    const response = await axios.post(`${API_BASE_URL}/api/memories/import/start/`, formData, {
+    const response = await axios.post(`${API_BASE_URL}/api/import/start/`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     });
     return response.data;
 };
 
 export const getImportProgress = async (taskId: string): Promise<ImportProgressResponse> => {
-    const response = await axios.get(`${API_BASE_URL}/api/memories/import/progress/`, {
+    const response = await axios.get(`${API_BASE_URL}/api/import/progress/`, {
         params: { task_id: taskId }
     });
     return response.data;
 };
 
 export const cancelImport = async (taskId: string): Promise<{ success: boolean }> => {
-    const response = await axios.post(`${API_BASE_URL}/api/memories/import/cancel/`, {
+    const response = await axios.post(`${API_BASE_URL}/api/import/cancel/`, {
         task_id: taskId
     });
     return response.data;
@@ -131,3 +131,30 @@ export const cancelImport = async (taskId: string): Promise<{ success: boolean }
 
 // Alias for importOpenWebUIHistory
 export const startOpenWebUIImport = importOpenWebUIHistory;
+
+// Settings Validation & Model Fetching
+export const validateEndpoint = async (
+    endpointUrl: string,
+    provider: string,
+    apiKey?: string
+): Promise<{ success: boolean; message?: string; error?: string; provider?: string }> => {
+    const response = await axios.post(`${API_BASE_URL}/api/settings/validate-endpoint/`, {
+        endpoint_url: endpointUrl,
+        provider: provider,
+        api_key: apiKey || ''
+    });
+    return response.data;
+};
+
+export const fetchModels = async (
+    endpointUrl: string,
+    provider: string,
+    apiKey?: string
+): Promise<{ success: boolean; models?: string[]; count?: number; error?: string }> => {
+    const response = await axios.post(`${API_BASE_URL}/api/settings/fetch-models/`, {
+        endpoint_url: endpointUrl,
+        provider: provider,
+        api_key: apiKey || ''
+    });
+    return response.data;
+};

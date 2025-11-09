@@ -4,7 +4,9 @@ from .views import (
     SearchConversationsView,
     ListConversationsView,
     GetSettingsView,
-    UpdateSettingsView
+    UpdateSettingsView,
+    ValidateEndpointView,
+    FetchModelsView
 )
 from .import_views import (
     StartImportView,
@@ -16,7 +18,9 @@ from .views_notes import (
     GetAtomicNoteView,
     DeleteAtomicNoteView,
     GetNoteTypesView,
-    TriggerExtractionView
+    GetAvailableUsersView,
+    TriggerExtractionView,
+    KnowledgeGraphView
 )
 
 urlpatterns = [
@@ -33,11 +37,15 @@ urlpatterns = [
     # Settings endpoints
     path('settings/', GetSettingsView.as_view(), name='get_settings'),
     path('settings/update/', UpdateSettingsView.as_view(), name='update_settings'),
+    path('settings/validate-endpoint/', ValidateEndpointView.as_view(), name='validate_endpoint'),
+    path('settings/fetch-models/', FetchModelsView.as_view(), name='fetch_models'),
 
-    # Atomic notes endpoints (Phase 3)
+    # Atomic notes endpoints
     path('notes/list/', ListAtomicNotesView.as_view(), name='list_atomic_notes'),
     path('notes/get/', GetAtomicNoteView.as_view(), name='get_atomic_note'),
     path('notes/delete/', DeleteAtomicNoteView.as_view(), name='delete_atomic_note'),
     path('notes/types/', GetNoteTypesView.as_view(), name='get_note_types'),
+    path('notes/users/', GetAvailableUsersView.as_view(), name='get_available_users'),
     path('notes/extract/', TriggerExtractionView.as_view(), name='trigger_extraction'),
+    path('notes/graph/', KnowledgeGraphView.as_view(), name='knowledge_graph'),
 ]

@@ -1,5 +1,5 @@
 # Multi-stage build for production-ready local AI server deployment
-FROM node:18 AS frontend-builder
+FROM node:20 AS frontend-builder
 
 WORKDIR /app/frontend
 

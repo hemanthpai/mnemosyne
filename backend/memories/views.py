@@ -68,7 +68,7 @@ class StoreConversationTurnView(APIView):
 
 
 class SearchConversationsView(APIView):
-    """Search conversations - supports fast and deep modes (Phase 3)"""
+    """Search conversations - supports fast and deep modes"""
 
     def post(self, request):
         start_time = time.time()
@@ -78,7 +78,7 @@ class SearchConversationsView(APIView):
         user_id = request.data.get('user_id')
         limit = request.data.get('limit', 10)
         threshold = request.data.get('threshold', 0.5)
-        mode = request.data.get('mode', 'fast')  # Phase 3: Search mode
+        mode = request.data.get('mode', 'fast')
 
         if not all([query, user_id]):
             return Response(
@@ -113,7 +113,7 @@ class SearchConversationsView(APIView):
             )
 
         try:
-            # Phase 3: Call appropriate search method based on mode
+            # Call appropriate search method based on mode
             if mode == 'deep':
                 results = conversation_service.search_deep(
                     query=query,
@@ -136,7 +136,7 @@ class SearchConversationsView(APIView):
                 'success': True,
                 'count': len(results),
                 'results': results,
-                'mode': mode,  # Phase 3: Include mode in response
+                'mode': mode,
                 'latency_ms': round(latency, 2)
             })
 
@@ -361,6 +361,163 @@ class UpdateSettingsView(APIView):
 
         except Exception as e:
             logger.error(f"Failed to update settings: {e}", exc_info=True)
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ValidateEndpointView(APIView):
+    """Validate an LLM endpoint URL"""
+
+    def post(self, request):
+        """Test connection to an LLM endpoint"""
+        import requests
+
+        endpoint_url = request.data.get('endpoint_url')
+        provider = request.data.get('provider', 'ollama')
+        api_key = request.data.get('api_key', '')
+
+        if not endpoint_url:
+            return Response(
+                {'success': False, 'error': 'endpoint_url is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Different validation based on provider
+            if provider == 'ollama':
+                # For Ollama, try to fetch the version or tags endpoint
+                test_url = f"{endpoint_url.rstrip('/')}/api/tags"
+                response = requests.get(test_url, timeout=5)
+                response.raise_for_status()
+
+                return Response({
+                    'success': True,
+                    'message': 'Successfully connected to Ollama endpoint',
+                    'provider': 'ollama'
+                })
+
+            elif provider in ['openai', 'openai_compatible']:
+                # For OpenAI-compatible endpoints, try to list models
+                test_url = f"{endpoint_url.rstrip('/')}/v1/models"
+                headers = {}
+                if api_key:
+                    headers['Authorization'] = f'Bearer {api_key}'
+
+                response = requests.get(test_url, headers=headers, timeout=5)
+                response.raise_for_status()
+
+                return Response({
+                    'success': True,
+                    'message': 'Successfully connected to OpenAI-compatible endpoint',
+                    'provider': provider
+                })
+
+            else:
+                return Response(
+                    {'success': False, 'error': f'Unknown provider: {provider}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        except requests.exceptions.Timeout:
+            return Response(
+                {'success': False, 'error': 'Connection timeout - endpoint did not respond within 5 seconds'},
+                status=status.HTTP_408_REQUEST_TIMEOUT
+            )
+        except requests.exceptions.ConnectionError:
+            return Response(
+                {'success': False, 'error': 'Connection failed - could not reach endpoint'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except requests.exceptions.HTTPError as e:
+            return Response(
+                {'success': False, 'error': f'HTTP error: {e.response.status_code} - {e.response.reason}'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        except Exception as e:
+            logger.error(f"Failed to validate endpoint: {e}", exc_info=True)
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class FetchModelsView(APIView):
+    """Fetch available models from an LLM endpoint"""
+
+    def post(self, request):
+        """Get list of available models from endpoint"""
+        import requests
+
+        endpoint_url = request.data.get('endpoint_url')
+        provider = request.data.get('provider', 'ollama')
+        api_key = request.data.get('api_key', '')
+
+        if not endpoint_url:
+            return Response(
+                {'success': False, 'error': 'endpoint_url is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            models = []
+
+            if provider == 'ollama':
+                # Ollama API endpoint
+                url = f"{endpoint_url.rstrip('/')}/api/tags"
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                # Extract model names
+                if 'models' in data:
+                    models = [model['name'] for model in data['models']]
+
+            elif provider in ['openai', 'openai_compatible']:
+                # OpenAI-compatible API endpoint
+                url = f"{endpoint_url.rstrip('/')}/v1/models"
+                headers = {}
+                if api_key:
+                    headers['Authorization'] = f'Bearer {api_key}'
+
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                # Extract model IDs
+                if 'data' in data:
+                    models = [model['id'] for model in data['data']]
+
+            else:
+                return Response(
+                    {'success': False, 'error': f'Unknown provider: {provider}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            return Response({
+                'success': True,
+                'models': sorted(models),
+                'count': len(models)
+            })
+
+        except requests.exceptions.Timeout:
+            return Response(
+                {'success': False, 'error': 'Connection timeout - endpoint did not respond within 10 seconds'},
+                status=status.HTTP_408_REQUEST_TIMEOUT
+            )
+        except requests.exceptions.ConnectionError:
+            return Response(
+                {'success': False, 'error': 'Connection failed - could not reach endpoint'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except requests.exceptions.HTTPError as e:
+            return Response(
+                {'success': False, 'error': f'HTTP error: {e.response.status_code} - {e.response.reason}'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch models: {e}", exc_info=True)
             return Response(
                 {'success': False, 'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

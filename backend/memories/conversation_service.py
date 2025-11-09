@@ -8,13 +8,13 @@ from .cache_service import cache_service
 
 logger = logging.getLogger(__name__)
 
-# Phase 3: Lazy import graph service to avoid circular dependency
+# Lazy import graph service to avoid circular dependency
 def _get_graph_service():
     """Lazy import graph service"""
     from .graph_service import graph_service
     return graph_service
 
-# Phase 3: Import tasks for background extraction
+# Import tasks for background extraction
 # Lazy import to avoid circular dependency
 def _schedule_extraction(turn_id: str):
     """Lazy import and schedule extraction task"""
@@ -91,7 +91,7 @@ class ConversationService:
             turn.vector_id = vector_id
             turn.save(update_fields=['vector_id'])
 
-            # Phase 2: Cache in working memory
+            # Cache in working memory
             cache_service.cache_recent_conversation(user_id, {
                 'id': str(turn.id),
                 'user_message': user_message,
@@ -101,7 +101,7 @@ class ConversationService:
                 'turn_number': turn_number
             })
 
-            # Phase 3: Schedule background extraction (15min delay)
+            # Schedule background extraction (15min delay)
             _schedule_extraction(str(turn.id))
 
             logger.info(f"Stored turn {turn.id} for user {user_id}")
@@ -136,7 +136,7 @@ class ConversationService:
         Raises:
             ValueError: If embedding generation fails
         """
-        # Phase 2: Check cache first
+        # Check cache first
         cached_results = cache_service.get_cached_search(user_id, query)
         if cached_results is not None:
             logger.info(f"Cache hit for search query: {query[:30]}...")
@@ -155,14 +155,20 @@ class ConversationService:
             score_threshold=threshold
         )
 
+        # Filter to only conversation turns (exclude atomic notes)
+        conversation_results = [
+            r for r in search_results
+            if r['metadata'].get('type') == 'conversation_turn'
+        ]
+
         # Get conversation turns from DB
-        turn_ids = [r['metadata']['turn_id'] for r in search_results]
+        turn_ids = [r['metadata']['turn_id'] for r in conversation_results]
         turns = ConversationTurn.objects.filter(id__in=turn_ids)
         turns_by_id = {str(t.id): t for t in turns}
 
         # Combine results
         results = []
-        for result in search_results:
+        for result in conversation_results:
             turn_id = result['metadata']['turn_id']
             if turn_id in turns_by_id:
                 turn = turns_by_id[turn_id]
@@ -176,7 +182,7 @@ class ConversationService:
                     'turn_number': turn.turn_number
                 })
 
-        # Phase 2: Cache search results
+        # Cache search results
         cache_service.cache_search_result(user_id, query, results)
 
         logger.info(f"Search for user {user_id} returned {len(results)} results")

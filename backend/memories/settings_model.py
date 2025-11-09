@@ -113,6 +113,12 @@ class Settings(models.Model):
         help_text="Enable multi-pass extraction for higher recall (Pass 1: explicit facts, Pass 2: implied/contextual facts)"
     )
 
+    # Search Configuration
+    enable_query_expansion = models.BooleanField(
+        default=True,
+        help_text="Enable query expansion for better search recall (expands abstract queries into concrete variations)"
+    )
+
     # Metadata
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.CharField(max_length=200, blank=True, default='system')

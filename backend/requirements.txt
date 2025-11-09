@@ -14,4 +14,5 @@ requests>=2.31.0
 gunicorn==23.0.0
 redis>=5.0.0
 mcp>=1.0.0
+fastmcp>=2.0.0
 django-q2>=1.7.0

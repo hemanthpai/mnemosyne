@@ -18,7 +18,7 @@ class ConversationTurn(models.Model):
     # Vector storage
     vector_id = models.CharField(max_length=255, unique=True)
 
-    # For Phase 3: Track extraction status
+    # Track extraction status
     extracted = models.BooleanField(default=False)
 
     class Meta:
@@ -33,25 +33,25 @@ class ConversationTurn(models.Model):
         return f"Turn {self.turn_number} in session {self.session_id[:8]}"
 
     def get_full_text(self):
-        """Get text for embedding - user message only for Phase 1
+        """Get text for embedding - user message only
 
         Rationale: Memory search is about finding what the USER said/did/prefers.
         Assistant responses are often acknowledgments that add semantic noise.
 
-        Both messages are still stored for context. Phase 3 atomic extraction
+        Both messages are still stored for context. Atomic extraction
         will pull structured facts from both user and assistant messages.
         """
         return self.user_message
 
 
 # =============================================================================
-# Phase 3: A-Mem Atomic Notes & Knowledge Graph
+# A-Mem Atomic Notes & Knowledge Graph
 # =============================================================================
 
 
 class AtomicNote(models.Model):
     """
-    Phase 3: Atomic memory notes (A-Mem architecture)
+    Atomic memory notes (A-Mem architecture)
 
     Stores individual atomic facts extracted from conversations.
     Each note represents a single, granular piece of knowledge with
@@ -116,7 +116,7 @@ class AtomicNote(models.Model):
 
 class NoteRelationship(models.Model):
     """
-    Phase 3: Relationships between atomic notes
+    Relationships between atomic notes
 
     Creates a knowledge graph by linking related notes together.
     Enables graph traversal to find related context.

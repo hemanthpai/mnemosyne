@@ -32,8 +32,15 @@ class StartImportView(APIView):
 
         Expected parameters:
         - file: webui.db SQLite database file
-        - user_id: Mnemosyne user ID (UUID)
+        - user_id: (Optional) Force all conversations to this Mnemosyne user ID
+        - preserve_users: (Optional) Preserve original Open WebUI user IDs (default: true)
         - dry_run: Boolean (optional, default: false)
+
+        If preserve_users=true (default), each Open WebUI user's conversations
+        will be imported to a corresponding Mnemosyne user ID.
+
+        If user_id is provided, it overrides preserve_users and forces all
+        conversations to that single user (for single-user imports).
         """
         # Validate file upload
         if 'file' not in request.FILES:
@@ -43,23 +50,19 @@ class StartImportView(APIView):
             )
 
         uploaded_file = request.FILES['file']
-        user_id = request.data.get('user_id')
+        user_id = request.data.get('user_id')  # Optional now
+        preserve_users = request.data.get('preserve_users', 'true').lower() == 'true'
         dry_run = request.data.get('dry_run', 'false').lower() == 'true'
 
-        # Validate user_id
-        if not user_id:
-            return Response(
-                {'success': False, 'error': 'Missing user_id parameter'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            uuid.UUID(user_id)
-        except ValueError:
-            return Response(
-                {'success': False, 'error': 'Invalid user_id format (must be UUID)'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Validate user_id if provided
+        if user_id:
+            try:
+                uuid.UUID(user_id)
+            except ValueError:
+                return Response(
+                    {'success': False, 'error': 'Invalid user_id format (must be UUID)'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Save uploaded file temporarily
         import tempfile
@@ -71,7 +74,21 @@ class StartImportView(APIView):
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
 
-            logger.info(f"Starting import from {temp_file} for user {user_id} (dry_run={dry_run})")
+            # Determine import mode
+            if user_id:
+                import_mode = f"single-user mode (user_id={user_id})"
+                target_user_id = user_id
+            elif preserve_users:
+                import_mode = "multi-user mode (preserving original user IDs)"
+                target_user_id = None
+            else:
+                # Neither user_id nor preserve_users - invalid
+                return Response(
+                    {'success': False, 'error': 'Must provide user_id or set preserve_users=true'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            logger.info(f"Starting import from {temp_file} in {import_mode} (dry_run={dry_run})")
 
             # Start import in background thread
             task_id = str(uuid.uuid4())
@@ -90,7 +107,7 @@ class StartImportView(APIView):
 
                         # Run import
                         result = importer.import_conversations(
-                            target_user_id=user_id,
+                            target_user_id=target_user_id,  # None to preserve users
                             dry_run=dry_run,
                             batch_size=10,
                             limit=None

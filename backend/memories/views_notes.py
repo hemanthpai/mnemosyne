@@ -1,5 +1,5 @@
 """
-API views for atomic notes management (Phase 3)
+API views for atomic notes management
 """
 
 import logging
@@ -296,6 +296,33 @@ class GetNoteTypesView(APIView):
         })
 
 
+class GetAvailableUsersView(APIView):
+    """Get list of user_ids that have atomic notes"""
+
+    def get(self, request):
+        """
+        GET /api/notes/users/
+
+        Returns list of user_ids that have at least one atomic note,
+        along with their note counts.
+        """
+        # Get distinct user_ids with note counts
+        users = AtomicNote.objects.values('user_id').annotate(
+            note_count=Count('id')
+        ).order_by('-note_count')
+
+        return Response({
+            'success': True,
+            'users': [
+                {
+                    'user_id': str(user['user_id']),
+                    'note_count': user['note_count']
+                }
+                for user in users
+            ]
+        })
+
+
 class TriggerExtractionView(APIView):
     """Manually trigger atomic note extraction for a conversation turn"""
 
@@ -364,4 +391,146 @@ class TriggerExtractionView(APIView):
             return Response(
                 {'success': False, 'error': 'Turn not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class KnowledgeGraphView(APIView):
+    """Get knowledge graph data for visualization"""
+
+    def get(self, request):
+        """
+        GET /api/notes/graph/
+
+        Query params:
+            - user_id (required): Filter by user UUID
+            - note_type (optional): Filter by note type (e.g., "skill:programming")
+            - limit (optional): Limit number of nodes (default: 100)
+            - min_strength (optional): Minimum relationship strength (default: 0.5)
+
+        Returns nodes and edges for graph visualization:
+        {
+            "success": true,
+            "nodes": [
+                {
+                    "id": "note-uuid",
+                    "content": "note content",
+                    "note_type": "preference:tool",
+                    "confidence": 0.95,
+                    "importance_score": 1.0,
+                    "tags": ["tag1", "tag2"],
+                    "relationship_count": 5
+                },
+                ...
+            ],
+            "edges": [
+                {
+                    "id": "relationship-uuid",
+                    "source": "from-note-uuid",
+                    "target": "to-note-uuid",
+                    "relationship_type": "related_to",
+                    "strength": 0.85
+                },
+                ...
+            ],
+            "stats": {
+                "total_nodes": 100,
+                "total_edges": 250,
+                "note_types": {"skill:programming": 20, ...}
+            }
+        }
+        """
+        user_id = request.GET.get('user_id')
+        note_type = request.GET.get('note_type')
+        limit = int(request.GET.get('limit', 100))
+        min_strength = float(request.GET.get('min_strength', 0.5))
+
+        if not user_id:
+            return Response(
+                {'success': False, 'error': 'Missing required parameter: user_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate UUID
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {'success': False, 'error': 'Invalid user_id format (must be UUID)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Build query for notes
+            notes_query = AtomicNote.objects.filter(user_id=user_id)
+
+            if note_type:
+                notes_query = notes_query.filter(note_type=note_type)
+
+            # Get notes with relationship counts
+            notes = notes_query.annotate(
+                relationship_count=Count('outgoing_relationships') + Count('incoming_relationships')
+            ).order_by('-importance_score', '-confidence')[:limit]
+
+            # Get note IDs for relationship filtering
+            note_ids = [str(note.id) for note in notes]
+            note_ids_set = set(note_ids)
+
+            # Build nodes
+            nodes = []
+            note_type_counts = {}
+
+            for note in notes:
+                nodes.append({
+                    'id': str(note.id),
+                    'content': note.content,
+                    'note_type': note.note_type,
+                    'confidence': note.confidence,
+                    'importance_score': note.importance_score,
+                    'tags': note.tags or [],
+                    'relationship_count': note.relationship_count,
+                    'created_at': note.created_at.isoformat()
+                })
+
+                # Track note type counts for stats
+                note_type_counts[note.note_type] = note_type_counts.get(note.note_type, 0) + 1
+
+            # Get relationships between these notes
+            # Only include edges where both source and target are in our node set
+            relationships = NoteRelationship.objects.filter(
+                from_note_id__in=note_ids,
+                to_note_id__in=note_ids,
+                strength__gte=min_strength
+            ).select_related('from_note', 'to_note')
+
+            # Build edges
+            edges = []
+            for rel in relationships:
+                # Double-check both nodes are in our set
+                if str(rel.from_note_id) in note_ids_set and str(rel.to_note_id) in note_ids_set:
+                    edges.append({
+                        'id': str(rel.id),
+                        'source': str(rel.from_note_id),
+                        'target': str(rel.to_note_id),
+                        'relationship_type': rel.relationship_type,
+                        'strength': rel.strength
+                    })
+
+            logger.info(f"Knowledge graph for user {user_id}: {len(nodes)} nodes, {len(edges)} edges")
+
+            return Response({
+                'success': True,
+                'nodes': nodes,
+                'edges': edges,
+                'stats': {
+                    'total_nodes': len(nodes),
+                    'total_edges': len(edges),
+                    'note_types': note_type_counts
+                }
+            })
+
+        except Exception as e:
+            logger.error(f"Failed to generate knowledge graph: {e}", exc_info=True)
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

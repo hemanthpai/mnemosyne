@@ -75,7 +75,7 @@ class VectorService:
         """
         Store embedding in Qdrant and return vector ID
 
-        Phase 1: Stores conversation turn embeddings
+        Stores conversation turn embeddings
 
         Args:
             embedding: Vector embedding
@@ -118,7 +118,7 @@ class VectorService:
         """
         Search for similar embeddings
 
-        Phase 1: Returns conversation turn metadata
+        Returns conversation turn metadata
 
         Args:
             embedding: Query vector (renamed from query_embedding for consistency)

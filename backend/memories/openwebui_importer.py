@@ -2,9 +2,9 @@
 OpenWebUI History Importer
 
 This module handles importing historical conversations from Open WebUI's SQLite database
-and storing them as conversation turns in Phase 3 architecture.
+and storing them as conversation turns.
 
-Phase 3 Update:
+Features:
 - Parses conversations into individual turns (user + assistant pairs)
 - Stores using conversation_service.store_turn()
 - Automatic atomic note extraction and relationship building via background tasks
@@ -42,7 +42,7 @@ class ImportProgress:
     def __init__(self):
         self.total_conversations = 0
         self.processed_conversations = 0
-        self.stored_turns = 0  # Phase 3: Track conversation turns instead of memories
+        self.stored_turns = 0  # Track conversation turns
         self.failed_conversations = 0
         self.current_conversation_id = None
         self.status = "idle"  # idle, running, completed, failed, cancelled
@@ -61,7 +61,7 @@ class ImportProgress:
         return {
             "total_conversations": self.total_conversations,
             "processed_conversations": self.processed_conversations,
-            "stored_turns": self.stored_turns,  # Phase 3: Report turns instead of memories
+            "stored_turns": self.stored_turns,  # Report turns
             "extracted_memories": self.stored_turns,  # Backward compatibility
             "failed_conversations": self.failed_conversations,
             "current_conversation_id": self.current_conversation_id,
@@ -254,9 +254,9 @@ class OpenWebUIImporter:
         session_id: str, dry_run: bool = False
     ) -> Tuple[int, List[Dict[str, Any]]]:
         """
-        Store conversation turns using Phase 3 architecture
+        Store conversation turns
 
-        Phase 3: Stores turns as ConversationTurn objects, which automatically:
+        Stores turns as ConversationTurn objects, which automatically:
         - Generate embeddings
         - Cache in working memory
         - Schedule background extraction of atomic notes
@@ -297,7 +297,7 @@ class OpenWebUIImporter:
                         "dry_run": True
                     })
                 else:
-                    # Store using conversation_service (Phase 3)
+                    # Store using conversation_service
                     # This will automatically:
                     # 1. Generate embeddings
                     # 2. Cache in working memory
@@ -445,7 +445,7 @@ class OpenWebUIImporter:
                         _import_progress.current_conversation_id = conv["id"]
 
                     try:
-                        # Phase 3: Parse chat into messages
+                        # Parse chat into messages
                         messages = self.parse_chat_messages(conv["chat"])
 
                         if not messages:
@@ -456,7 +456,7 @@ class OpenWebUIImporter:
                                 _import_progress.processed_conversations += 1
                             continue
 
-                        # Phase 3: Create conversation turns (user + assistant pairs)
+                        # Create conversation turns (user + assistant pairs)
                         turns = self.create_conversation_turns(messages)
 
                         if not turns:
@@ -479,7 +479,7 @@ class OpenWebUIImporter:
                         # Use OpenWebUI conversation ID as session ID
                         session_id = f"openwebui-import-{conv['id']}"
 
-                        # Phase 3: Store conversation turns
+                        # Store conversation turns
                         # This will automatically trigger extraction and relationship building
                         turns_count, stored_turns = self.store_conversation_turns(
                             turns, mnemosyne_user_id, session_id, dry_run
@@ -527,7 +527,7 @@ class OpenWebUIImporter:
                 "success": True,
                 "total_conversations": len(conversations),
                 "processed_conversations": _import_progress.processed_conversations,
-                "total_turns_stored": total_memories_extracted,  # Phase 3: Turns instead of memories
+                "total_turns_stored": total_memories_extracted,  # Turns stored
                 "total_memories_extracted": total_memories_extracted,  # Backward compatibility
                 "failed_conversations": failed_conversations,
                 "dry_run": dry_run,

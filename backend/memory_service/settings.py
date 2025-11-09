@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "corsheaders",
-    "django_q",  # Phase 3: Background job processing
+    "django_q",  # Background job processing
     "memories",
 ]
 
@@ -107,6 +107,11 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PARSER_CLASSES": [
         "rest_framework.parsers.JSONParser",
+    ],
+    # Disable authentication and CSRF for all API endpoints (KISS - we're an API service)
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",
     ],
 }
 
@@ -172,10 +177,10 @@ EMBEDDINGS_PROVIDER = os.getenv("EMBEDDINGS_PROVIDER", "ollama")  # ollama, open
 EMBEDDINGS_API_KEY = os.getenv("EMBEDDINGS_API_KEY", None)
 EMBEDDINGS_TIMEOUT = int(os.getenv("EMBEDDINGS_TIMEOUT", "30"))
 
-# Phase 2: Redis Cache Configuration
+# Redis Cache Configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-# Phase 3: Django-Q Background Job Configuration
+# Django-Q Background Job Configuration
 Q_CLUSTER = {
     "name": "mnemosyne",
     "workers": 2,

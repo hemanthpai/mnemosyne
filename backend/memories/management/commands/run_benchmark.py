@@ -318,12 +318,13 @@ class Command(BaseCommand):
                 self.stdout.write(f'\nQuery: {query_id} - "{query}"')
                 self.stdout.write(f'Expected relevant notes: {len(relevant_note_ids)}')
 
-            # Run search
-            search_results = graph_service.search_atomic_notes(
+            # Run search (with query expansion if enabled)
+            search_results = graph_service.search_atomic_notes_with_expansion(
                 query=query,
                 user_id=str(test_user_id),
                 limit=10,
-                threshold=0.0  # Get all results for testing
+                threshold=0.0,  # Get all results for testing
+                use_expansion=True  # Use query expansion for better recall
             )
 
             if verbose:

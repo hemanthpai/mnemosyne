@@ -61,13 +61,13 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS}
-      # Phase 1: Embeddings Configuration
+      # Embeddings Configuration
       - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-ollama}
       - EMBEDDINGS_ENDPOINT_URL=${EMBEDDINGS_ENDPOINT_URL:-http://host.docker.internal:11434}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-mxbai-embed-large}
       - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY:-}
       - EMBEDDINGS_TIMEOUT=${EMBEDDINGS_TIMEOUT:-30}
-      # Legacy (deprecated in Phase 1, kept for backward compatibility)
+      # Legacy (kept for backward compatibility)
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
       - GUNICORN_TIMEOUT=600
@@ -82,6 +82,75 @@ services:
     volumes:
       - ./logs:/app/logs  # Optional: for persistent logs
     container_name: mnemosyne_app
+
+  worker:
+    build: .
+    command: python manage.py qcluster
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-homeserver_postgres_pass}@db:5432/mnemosyne
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-homeserver_postgres_pass}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      # Embeddings Configuration
+      - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-ollama}
+      - EMBEDDINGS_ENDPOINT_URL=${EMBEDDINGS_ENDPOINT_URL:-http://host.docker.internal:11434}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-mxbai-embed-large}
+      - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY:-}
+      - EMBEDDINGS_TIMEOUT=${EMBEDDINGS_TIMEOUT:-30}
+      # Generation Configuration (for extraction)
+      - GENERATION_PROVIDER=${GENERATION_PROVIDER:-ollama}
+      - GENERATION_ENDPOINT_URL=${GENERATION_ENDPOINT_URL:-http://host.docker.internal:11434}
+      - GENERATION_MODEL=${GENERATION_MODEL:-qwen2.5:32b}
+      - GENERATION_API_KEY=${GENERATION_API_KEY:-}
+      - GENERATION_TEMPERATURE=${GENERATION_TEMPERATURE:-0.7}
+      - GENERATION_MAX_TOKENS=${GENERATION_MAX_TOKENS:-2048}
+      - GENERATION_TIMEOUT=${GENERATION_TIMEOUT:-120}
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    container_name: mnemosyne_worker
+
+  mcp_server:
+    build: .
+    command: python mcp_server_fastmcp.py --transport http --host 0.0.0.0 --port 3000
+    ports:
+      - "3000:3000"  # MCP Server HTTP endpoint
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-homeserver_postgres_pass}@db:5432/mnemosyne
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-homeserver_postgres_pass}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+      - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-ollama}
+      - EMBEDDINGS_ENDPOINT_URL=${EMBEDDINGS_ENDPOINT_URL:-http://host.docker.internal:11434}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-mxbai-embed-large}
+      - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY:-}
+      - EMBEDDINGS_TIMEOUT=${EMBEDDINGS_TIMEOUT:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    container_name: mnemosyne_mcp_server
 
 volumes:
   postgres_data:

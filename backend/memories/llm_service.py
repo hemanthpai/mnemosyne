@@ -103,7 +103,7 @@ class LLMService:
         max_tokens: int,
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate text using Ollama"""
+        """Generate text using Ollama with JSON mode for structured output"""
         endpoint = f"{config['endpoint_url']}/api/generate"
         model = config['model']
 
@@ -114,6 +114,7 @@ class LLMService:
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
+                    "format": "json",  # Enable JSON mode for constrained generation
                     "options": {
                         "temperature": temperature,
                         "num_predict": max_tokens
@@ -141,7 +142,7 @@ class LLMService:
         max_tokens: int,
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate text using OpenAI or compatible API"""
+        """Generate text using OpenAI or compatible API with JSON mode"""
         endpoint = f"{config['endpoint_url']}/v1/chat/completions"
         model = config['model']
 
@@ -150,6 +151,8 @@ class LLMService:
             headers["Authorization"] = f"Bearer {config['api_key']}"
 
         try:
+            # Note: response_format removed for compatibility
+            # The prompt already requests JSON format
             response = self.session.post(
                 endpoint,
                 json={
@@ -172,6 +175,14 @@ class LLMService:
                 "model": data.get("model", model)
             }
 
+        except requests.exceptions.HTTPError as e:
+            error_detail = ""
+            try:
+                error_detail = e.response.json() if e.response else {}
+            except:
+                error_detail = e.response.text if e.response else ""
+            logger.error(f"OpenAI text generation failed: {e}. Response: {error_detail}")
+            return {"success": False, "error": f"{str(e)}. Response: {error_detail}"}
         except Exception as e:
             logger.error(f"OpenAI text generation failed: {e}")
             return {"success": False, "error": str(e)}

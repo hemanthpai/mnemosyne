@@ -1,5 +1,5 @@
 """
-Integration tests for Phase 3 pipeline
+Integration tests for atomic notes pipeline
 """
 
 import uuid
@@ -14,7 +14,7 @@ from memories.settings_model import Settings
 
 
 class Phase3PipelineIntegrationTest(TestCase):
-    """Test full Phase 3 pipeline integration"""
+    """Test full atomic notes pipeline integration"""
 
     def setUp(self):
         """Set up test environment"""

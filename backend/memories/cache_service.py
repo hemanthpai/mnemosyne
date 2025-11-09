@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class CacheService:
     """
-    Phase 2: Working Memory Cache with Redis
+    Working Memory Cache with Redis
 
     Provides <10ms retrieval for frequently accessed memories:
     - Recent conversations (last 24h)

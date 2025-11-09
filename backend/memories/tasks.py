@@ -145,6 +145,55 @@ User: "I prefer dark mode and use vim keybindings in VSCode"
 Now extract facts from the conversation above:
 """
 
+# Second pass prompt for contextual and implied facts
+EXTRACTION_PROMPT_PASS2 = """You are doing a second pass extraction to find additional atomic facts that require deeper analysis.
+
+**User Message:**
+{user_message}
+
+**Facts Already Extracted (Pass 1):**
+{pass1_facts}
+
+**Instructions for Pass 2:**
+Find ADDITIONAL atomic facts that were missed in Pass 1. Focus on:
+
+1. **Implied Facts** - Facts not explicitly stated but clearly implied by context
+2. **Causal Relationships** - When user says "X was challenging" or "X was the hardest part", extract "learned importance of Y" or "struggled with X"
+3. **Motivations & Reasons** - "keeps me going" → "motivated by X", "that's why I..." → extract the motivation
+4. **Learning Outcomes** - "X has been a learning curve" → "learned about X", "discovered that Y" → "learned Y"
+5. **Temporal Changes** - "used to X" / "previously X" → extract past state, "now Y" → extract current state
+6. **Complex Multi-Clause Facts** - Facts embedded in complex sentences that require parsing multiple clauses
+7. **Quantities & Durations** - Specific numbers, time periods that weren't captured
+8. **Context-Dependent Facts** - Facts that only make sense with surrounding context
+
+**What NOT to Extract:**
+- Do NOT repeat any facts already found in Pass 1 above
+- Do NOT extract facts from assistant responses
+- Do NOT extract subjective opinions about topics (only facts about the user)
+
+**Format your response as JSON:**
+```json
+{{
+  "notes": [
+    {{
+      "content": "single atomic fact",
+      "type": "category:subcategory",
+      "context": "brief context about when/why mentioned",
+      "confidence": 0.80,
+      "tags": ["tag1", "tag2"]
+    }}
+  ]
+}}
+```
+
+**Confidence Scoring for Pass 2:**
+- Medium-High (0.75-0.9): Strong implications from context
+- Medium (0.6-0.75): Reasonable inferences from stated information
+- Lower (0.5-0.6): Weak implications that might be subjective
+
+Extract additional facts that Pass 1 missed:
+"""
+
 
 # =============================================================================
 # Task 1: Extract Atomic Notes
@@ -272,6 +321,112 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
 
             notes_created += 1
             logger.info(f"Created atomic note: {note.content[:50]}... (type: {note.note_type})")
+
+        # ========================================
+        # PASS 2: Extract contextual & implied facts
+        # ========================================
+        if notes_data and settings.enable_multipass_extraction:  # Only run if Pass 1 found facts
+            logger.info(f"Running Pass 2 extraction for turn {turn_id}")
+
+            # Format Pass 1 facts for Pass 2 prompt
+            pass1_facts_text = "\n".join([
+                f"- {note['content']}"
+                for note in notes_data
+            ])
+
+            # Generate Pass 2 prompt
+            prompt_pass2 = EXTRACTION_PROMPT_PASS2.format(
+                user_message=turn.user_message,
+                pass1_facts=pass1_facts_text
+            )
+
+            # Call LLM for Pass 2 extraction
+            response_pass2 = llm_service.generate_text(
+                prompt=prompt_pass2,
+                max_tokens=1000
+            )
+
+            if response_pass2['success']:
+                # Parse Pass 2 JSON response
+                response_text_pass2 = response_pass2['text'].strip()
+
+                # Extract JSON from markdown code blocks if present
+                if "```json" in response_text_pass2:
+                    json_start = response_text_pass2.find("```json") + 7
+                    json_end = response_text_pass2.find("```", json_start)
+                    response_text_pass2 = response_text_pass2[json_start:json_end].strip()
+                elif "```" in response_text_pass2:
+                    json_start = response_text_pass2.find("```") + 3
+                    json_end = response_text_pass2.find("```", json_start)
+                    response_text_pass2 = response_text_pass2[json_start:json_end].strip()
+
+                try:
+                    extraction_data_pass2 = json.loads(response_text_pass2)
+                    notes_data_pass2 = extraction_data_pass2.get('notes', [])
+
+                    logger.info(f"Pass 2 found {len(notes_data_pass2)} additional facts")
+
+                    # Store Pass 2 notes using same logic as Pass 1
+                    for note_data in notes_data_pass2:
+                        # Validate required fields
+                        if not note_data.get('content') or not note_data.get('type'):
+                            logger.warning(f"Skipping invalid Pass 2 note: {note_data}")
+                            continue
+
+                        # Check for duplicates
+                        existing = AtomicNote.objects.filter(
+                            user_id=turn.user_id,
+                            content__iexact=note_data['content']
+                        ).first()
+
+                        if existing:
+                            logger.info(f"Pass 2 note already exists: {note_data['content'][:50]}...")
+                            continue
+
+                        # Create atomic note
+                        note = AtomicNote.objects.create(
+                            user_id=turn.user_id,
+                            content=note_data['content'],
+                            note_type=note_data['type'],
+                            context=note_data.get('context', ''),
+                            confidence=note_data.get('confidence', 0.7),  # Slightly lower default for Pass 2
+                            tags=note_data.get('tags', []),
+                            source_turn=turn
+                        )
+
+                        # Generate embedding
+                        embedding_result = llm_service.get_embeddings([note.content])
+
+                        if not embedding_result['success']:
+                            logger.error(f"Failed to embed Pass 2 note {note.id}: {embedding_result['error']}")
+                            note.delete()
+                            continue
+
+                        # Store in vector DB
+                        vector_id = vector_service.store_embedding(
+                            embedding=embedding_result['embeddings'][0],
+                            user_id=str(turn.user_id),
+                            metadata={
+                                'type': 'atomic_note',
+                                'note_id': str(note.id),
+                                'note_type': note.note_type,
+                                'confidence': note.confidence,
+                                'timestamp': note.created_at.isoformat()
+                            }
+                        )
+
+                        note.vector_id = vector_id
+                        note.save(update_fields=['vector_id'])
+
+                        notes_created += 1
+                        logger.info(f"Created Pass 2 note: {note.content[:50]}... (type: {note.note_type})")
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse Pass 2 response: {e}")
+                    # Continue anyway - Pass 1 notes are already stored
+            else:
+                logger.warning(f"Pass 2 extraction failed: {response_pass2.get('error')}")
+                # Continue anyway - Pass 1 notes are already stored
 
         # Mark turn as extracted
         turn.extracted = True

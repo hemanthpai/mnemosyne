@@ -55,7 +55,7 @@ class Settings(models.Model):
         help_text="Request timeout in seconds"
     )
 
-    # Phase 3: Generation Configuration (for extraction and relationship building)
+    # Generation Configuration (for extraction and relationship building)
     # Separate from embeddings to allow different providers/endpoints
     generation_provider = models.CharField(
         max_length=50,
@@ -105,6 +105,12 @@ class Settings(models.Model):
         blank=True,
         default='',
         help_text="Custom prompt for relationship building (uses default if empty)"
+    )
+
+    # Extraction Configuration
+    enable_multipass_extraction = models.BooleanField(
+        default=True,
+        help_text="Enable multi-pass extraction for higher recall (Pass 1: explicit facts, Pass 2: implied/contextual facts)"
     )
 
     # Metadata

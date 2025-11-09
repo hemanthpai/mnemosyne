@@ -79,19 +79,27 @@ Be comprehensive - extract every distinct piece of information about the user.
 - Direct statements: "I use Python" → extract "uses Python" as a skill
 - Preferences: "I prefer X for Y" → extract BOTH the preference AND the usage/skill
 - Tool mentions: "I work with X, Y, and Z" → extract SEPARATE facts for EACH tool (X, Y, and Z)
+- "primarily with X" → extract "experienced with X" and "uses X"
+- "mainly X" → extract "focuses on X" and interest/activity in X
 - Experiences: "I've worked with X" → extract experience/skill with X
-- Qualitative statements: "I love jazz" → extract interest in jazz
+- Qualitative statements: "I love jazz" / "I'm a huge X fan" → extract strong interest in X
 - Compound statements: ALWAYS break into multiple atomic facts
 - Skills from usage: If user mentions using/working with a tool/language, extract as skill
 - Ongoing activities: "I volunteer every weekend" → extract both the activity AND frequency
 - List items with "and": "especially X and Y" → extract SEPARATE facts for X and Y
 - Job titles/roles: "working as a developer" → extract "works as developer"
 - Certifications: "got AWS certified" → extract "holds AWS certification"
-- Benefits/effects: "X helps me do Y" → extract both the activity X AND the benefit Y
+- Benefits/effects: "X helps me do Y" → extract BOTH the activity X AND the benefit Y separately
+- "It's rewarding to X" / "I find X rewarding" → extract "finds X rewarding"
 - Tool switching: "switched to X" → extract "uses X" (current tool)
-- Named entities in lists: "Miles Davis and John Coltrane" → extract interest in EACH person
-- Reasons for preferences: "I prefer X for its Y" → extract preference for X AND values Y
+- Named entities in lists: "Miles Davis and John Coltrane" → extract interest in EACH person separately
+- Reasons for preferences: "I prefer X for its Y" → extract preference for X AND "values Y"
 - Implied tools: "using Pinia" (Vue library) → extract both "uses Pinia" AND "uses Vue"
+- Temporal contexts: "before work", "every morning" → extract both activity and timing
+- Repeated actions: "read X three times", "for the third time" → extract "re-reads X" or "revisits X"
+- Frequency patterns: "tries to X" / "try to X" → extract "attempts to X" or "regularly does X" (medium confidence)
+- Proficiency levels: "know some X but not conversational" → extract both knowledge AND proficiency level
+- Value statements: When user explains WHY they prefer something, extract the value ("values X")
 
 **Confidence Scoring:**
 - High (0.9-1.0): Explicit direct statements ("I use X", "I prefer Y", "I love Z")

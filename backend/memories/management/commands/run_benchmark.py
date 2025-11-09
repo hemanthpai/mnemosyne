@@ -455,12 +455,19 @@ class Command(BaseCommand):
         # Define semantic equivalents for common patterns
         synonyms = {
             'dislikes': ['not a fan of', 'not fond of', 'dislikes', 'hates'],
-            'likes': ['enjoys', 'loves', 'likes', 'fond of', 'fan of', 'interest in'],
+            'likes': ['enjoys', 'loves', 'likes', 'fond of', 'fan of', 'interest in', 'strong interest'],
             'uses': ['works with', 'uses', 'utilizes', 'employs'],
+            'experienced': ['experienced with', 'has experience with', 'has worked with', 'worked with', 'has prior experience'],
+            'works_as': ['works as', 'working as', 'has been working as'],
             'prefers': ['prefers', 'favors', 'chooses'],
-            'knows': ['fluent in', 'knows', 'speaks'],
-            'owns': ['has', 'owns', 'bought', 'purchased'],
+            'knows': ['fluent in', 'knows', 'speaks', 'knows some'],
+            'learning': ['learning', 'know some', 'knows some', 'beginner', 'intermediate level'],
+            'owns': ['has', 'owns', 'bought', 'purchased', 'just bought'],
             'interested': ['interested', 'into', 'getting into', 'fascinated'],
+            'attends': ['attends', 'tries to see', 'attempts to see', 'goes to', 'regularly'],
+            'focuses': ['focuses on', 'mainly', 'primarily'],
+            'finds_rewarding': ['finds rewarding', 'rewarding to', 'finds helpful'],
+            'cares': ['cares about', 'interested in', 'values', 'passionate about'],
         }
 
         s1_lower = s1.lower()

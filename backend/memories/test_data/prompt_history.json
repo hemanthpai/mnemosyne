@@ -144,6 +144,63 @@
           "observations": "With improved semantic matching logic (synonym detection + entity matching). Massive recall improvement from 29% to 60% purely from better evaluation, not prompt changes."
         }
       ]
+    },
+    {
+      "version": "1.2-specific-extraction-patterns",
+      "date": "2025-01-08",
+      "description": "Added highly specific extraction patterns based on missed facts analysis",
+      "changes": [
+        "Added explicit 'List items with and' instruction for separating entities",
+        "Added 'Job titles/roles' extraction pattern",
+        "Added 'Certifications' extraction pattern",
+        "Added 'Benefits/effects' pattern for causal relationships",
+        "Added 'Tool switching' pattern to extract current tool usage",
+        "Added 'Named entities in lists' for person names, tools, etc.",
+        "Added 'Reasons for preferences' to capture values",
+        "Added 'Implied tools' pattern for library\u2192framework inference"
+      ],
+      "prompt_text": "Extract atomic facts from this user message.\n\n**User Message:**\n{user_message}\n\n**Instructions:**\nExtract ALL individual, atomic facts about the user from their message. Each fact should be:\n1. A single, granular piece of information\n2. Self-contained and understandable on its own\n3. About the user's preferences, skills, interests, or personal information\n4. Stated by the USER (not assistant responses)\n\nBe comprehensive - extract every distinct piece of information about the user.\n\n**What to Extract:**\n- Direct statements: \"I use Python\" \u2192 extract \"uses Python\" as a skill\n- Preferences: \"I prefer X for Y\" \u2192 extract BOTH the preference AND the usage/skill\n- Tool mentions: \"I work with X, Y, and Z\" \u2192 extract SEPARATE facts for EACH tool (X, Y, and Z)\n- Experiences: \"I've worked with X\" \u2192 extract experience/skill with X\n- Qualitative statements: \"I love jazz\" \u2192 extract interest in jazz\n- Compound statements: ALWAYS break into multiple atomic facts\n- Skills from usage: If user mentions using/working with a tool/language, extract as skill\n- Ongoing activities: \"I volunteer every weekend\" \u2192 extract both the activity AND frequency\n- List items with \"and\": \"especially X and Y\" \u2192 extract SEPARATE facts for X and Y\n- Job titles/roles: \"working as a developer\" \u2192 extract \"works as developer\"\n- Certifications: \"got AWS certified\" \u2192 extract \"holds AWS certification\"\n- Benefits/effects: \"X helps me do Y\" \u2192 extract both the activity X AND the benefit Y\n- Tool switching: \"switched to X\" \u2192 extract \"uses X\" (current tool)\n- Named entities in lists: \"Miles Davis and John Coltrane\" \u2192 extract interest in EACH person\n- Reasons for preferences: \"I prefer X for its Y\" \u2192 extract preference for X AND values Y\n- Implied tools: \"using Pinia\" (Vue library) \u2192 extract both \"uses Pinia\" AND \"uses Vue\"\n\n**Confidence Scoring:**\n- High (0.9-1.0): Explicit direct statements (\"I use X\", \"I prefer Y\", \"I love Z\")\n- Medium (0.7-0.9): Clear implications (\"I work with X\" implies skill in X)\n- Lower (0.6-0.7): Tentative or uncertain statements (\"I might try X\")\n\n**What NOT to Extract:**\n- Subjective opinions about topics/things (not about the user themselves)\n- Facts from assistant responses\n- Pure questions without assertions",
+      "benchmark_runs": [
+        {
+          "run_date": "2025-11-09T07:43:33.122873",
+          "extraction": {
+            "precision": 1.0,
+            "recall": 0.6764705882352942,
+            "f1_score": 0.8070175438596492,
+            "false_positive_rate": 0.0,
+            "total_ground_truth": 68,
+            "total_extracted": 77,
+            "by_category": {
+              "technical_preferences": {
+                "precision": 1.0,
+                "recall": 0.9130434782608695,
+                "f1": 0.9545454545454545
+              },
+              "personal_interests": {
+                "precision": 1.0,
+                "recall": 0.6086956521739131,
+                "f1": 0.7567567567567568
+              },
+              "professional_skills": {
+                "precision": 1.0,
+                "recall": 0.5,
+                "f1": 0.6666666666666666
+              },
+              "edge_cases": {
+                "precision": 1.0,
+                "recall": 0.5,
+                "f1": 0.6666666666666666
+              }
+            }
+          },
+          "search": {
+            "precision_at_10": 0.625,
+            "recall_at_10": 0.14022435897435898,
+            "mrr": 0.625
+          },
+          "observations": "Major improvement from specific patterns: lists with and, job titles, certifications, implied tools. Technical preferences reached 91% recall\\!"
+        }
+      ]
     }
   ]
 }

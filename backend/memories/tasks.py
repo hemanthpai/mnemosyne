@@ -77,14 +77,21 @@ Be comprehensive - extract every distinct piece of information about the user.
 
 **What to Extract:**
 - Direct statements: "I use Python" → extract "uses Python" as a skill
-- Preferences: "I prefer X for Y" → extract both the preference AND the usage/skill
-- Tool mentions: "I work with X, Y, and Z" → extract separate facts for each tool
+- Preferences: "I prefer X for Y" → extract BOTH the preference AND the usage/skill
+- Tool mentions: "I work with X, Y, and Z" → extract SEPARATE facts for EACH tool (X, Y, and Z)
 - Experiences: "I've worked with X" → extract experience/skill with X
 - Qualitative statements: "I love jazz" → extract interest in jazz
 - Compound statements: ALWAYS break into multiple atomic facts
 - Skills from usage: If user mentions using/working with a tool/language, extract as skill
-- Ongoing activities: "I volunteer every weekend" → extract both the activity and frequency
-- List items: Extract each item mentioned as a separate fact
+- Ongoing activities: "I volunteer every weekend" → extract both the activity AND frequency
+- List items with "and": "especially X and Y" → extract SEPARATE facts for X and Y
+- Job titles/roles: "working as a developer" → extract "works as developer"
+- Certifications: "got AWS certified" → extract "holds AWS certification"
+- Benefits/effects: "X helps me do Y" → extract both the activity X AND the benefit Y
+- Tool switching: "switched to X" → extract "uses X" (current tool)
+- Named entities in lists: "Miles Davis and John Coltrane" → extract interest in EACH person
+- Reasons for preferences: "I prefer X for its Y" → extract preference for X AND values Y
+- Implied tools: "using Pinia" (Vue library) → extract both "uses Pinia" AND "uses Vue"
 
 **Confidence Scoring:**
 - High (0.9-1.0): Explicit direct statements ("I use X", "I prefer Y", "I love Z")

@@ -1,0 +1,886 @@
+{
+  "dataset_version": "1.0",
+  "created": "2025-01-08",
+  "description": "Benchmark dataset for testing atomic note extraction and search relevance",
+  "test_conversations": [
+    {
+      "id": "tech_001",
+      "category": "technical_preferences",
+      "user_message": "I prefer using Python for data analysis and TypeScript for web development. I find Python's pandas library incredibly useful.",
+      "assistant_message": "That's a great combination! Python is excellent for data analysis, and TypeScript adds type safety to JavaScript.",
+      "ground_truth_notes": [
+        {
+          "content": "prefers Python for data analysis",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["python", "data-analysis"],
+          "reasoning": "Explicit statement about preference"
+        },
+        {
+          "content": "prefers TypeScript for web development",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["typescript", "web-development"],
+          "reasoning": "Explicit statement about preference"
+        },
+        {
+          "content": "finds pandas library useful",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["pandas", "python", "library"],
+          "reasoning": "Explicit positive opinion about pandas"
+        }
+      ],
+      "should_not_extract": [
+        "Python is excellent for data analysis",
+        "TypeScript adds type safety",
+        "has a great combination"
+      ]
+    },
+    {
+      "id": "tech_002",
+      "category": "technical_preferences",
+      "user_message": "I always use dark mode in my IDE. Can't stand bright screens when coding late at night.",
+      "assistant_message": "Dark mode is definitely easier on the eyes during late-night coding sessions. Many developers prefer it.",
+      "ground_truth_notes": [
+        {
+          "content": "always uses dark mode in IDE",
+          "type": "preference:ui",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["dark-mode", "ide", "ui-preference"],
+          "reasoning": "Explicit statement with 'always'"
+        },
+        {
+          "content": "codes late at night",
+          "type": "personal:habits",
+          "confidence_range": [0.8, 0.9],
+          "tags": ["work-hours", "habits"],
+          "reasoning": "Implied by context of coding late at night"
+        },
+        {
+          "content": "dislikes bright screens",
+          "type": "preference:ui",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["screen-brightness", "ui-preference"],
+          "reasoning": "Explicit negative preference"
+        }
+      ],
+      "should_not_extract": [
+        "Dark mode is easier on the eyes",
+        "Many developers prefer dark mode"
+      ]
+    },
+    {
+      "id": "tech_003",
+      "category": "technical_preferences",
+      "user_message": "I've been using VSCode with vim keybindings for the past 3 years. Best decision I ever made.",
+      "assistant_message": "Vim keybindings in VSCode is a popular combination! It gives you the power of vim with VSCode's features.",
+      "ground_truth_notes": [
+        {
+          "content": "uses VSCode as primary editor",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vscode", "editor"],
+          "reasoning": "Explicit mention of using VSCode for 3 years"
+        },
+        {
+          "content": "uses vim keybindings",
+          "type": "preference:editor",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vim", "keybindings"],
+          "reasoning": "Explicit statement"
+        },
+        {
+          "content": "has 3 years experience with VSCode and vim keybindings",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vscode", "vim", "experience-duration"],
+          "reasoning": "Explicit time frame mentioned"
+        }
+      ],
+      "should_not_extract": [
+        "Vim keybindings in VSCode is popular",
+        "gives you power of vim",
+        "made best decision"
+      ]
+    },
+    {
+      "id": "tech_004",
+      "category": "technical_preferences",
+      "user_message": "I'm not a fan of React. I prefer Vue for its simplicity and better documentation.",
+      "assistant_message": "Vue does have excellent documentation! Many developers appreciate its gentle learning curve compared to React.",
+      "ground_truth_notes": [
+        {
+          "content": "dislikes React",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["react", "negative-preference", "frameworks"],
+          "reasoning": "Explicit negative preference"
+        },
+        {
+          "content": "prefers Vue over React",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vue", "frameworks", "positive-preference"],
+          "reasoning": "Explicit preference statement"
+        },
+        {
+          "content": "values simplicity in frameworks",
+          "type": "preference:approach",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["simplicity", "design-values"],
+          "reasoning": "Stated reason for preferring Vue"
+        },
+        {
+          "content": "values good documentation",
+          "type": "preference:approach",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["documentation", "learning"],
+          "reasoning": "Stated reason for preferring Vue"
+        }
+      ],
+      "should_not_extract": [
+        "Vue has excellent documentation",
+        "Many developers appreciate Vue",
+        "Vue has gentle learning curve"
+      ]
+    },
+    {
+      "id": "tech_005",
+      "category": "technical_preferences",
+      "user_message": "I'm learning Rust right now. Coming from Go, the memory management concepts are challenging but fascinating.",
+      "assistant_message": "Rust's ownership model is indeed quite different from Go's garbage collection. It's a steep but rewarding learning curve!",
+      "ground_truth_notes": [
+        {
+          "content": "currently learning Rust",
+          "type": "goal:learning",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["rust", "learning", "current"],
+          "reasoning": "Explicit statement about current learning"
+        },
+        {
+          "content": "has experience with Go",
+          "type": "skill:programming",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["go", "golang", "background"],
+          "reasoning": "Implied by 'coming from Go'"
+        },
+        {
+          "content": "finds Rust memory management challenging",
+          "type": "goal:learning",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["rust", "memory-management", "challenge"],
+          "reasoning": "Explicit statement about challenge"
+        },
+        {
+          "content": "finds Rust memory management fascinating",
+          "type": "interest:topic",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["rust", "memory-management", "interest"],
+          "reasoning": "Explicit positive interest"
+        }
+      ],
+      "should_not_extract": [
+        "Rust's ownership model is different from Go",
+        "steep but rewarding learning curve"
+      ]
+    },
+    {
+      "id": "interest_001",
+      "category": "personal_interests",
+      "user_message": "I love jazz music, especially Miles Davis and John Coltrane. I try to see live jazz shows whenever I can.",
+      "assistant_message": "Great taste! Miles Davis and John Coltrane are legends. There's nothing quite like experiencing jazz live.",
+      "ground_truth_notes": [
+        {
+          "content": "loves jazz music",
+          "type": "interest:music",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["jazz", "music"],
+          "reasoning": "Explicit statement with 'love'"
+        },
+        {
+          "content": "enjoys Miles Davis",
+          "type": "interest:music",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["miles-davis", "jazz", "artist-preference"],
+          "reasoning": "Explicit mention as favorite"
+        },
+        {
+          "content": "enjoys John Coltrane",
+          "type": "interest:music",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["john-coltrane", "jazz", "artist-preference"],
+          "reasoning": "Explicit mention as favorite"
+        },
+        {
+          "content": "attends live jazz shows regularly",
+          "type": "interest:activity",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["live-music", "jazz", "concerts", "habits"],
+          "reasoning": "Stated habit with 'whenever I can'"
+        }
+      ],
+      "should_not_extract": [
+        "Miles Davis and John Coltrane are legends",
+        "has great taste",
+        "experiencing jazz live is special"
+      ]
+    },
+    {
+      "id": "interest_002",
+      "category": "personal_interests",
+      "user_message": "I've been getting into photography lately, mainly landscape and street photography. Just bought my first mirrorless camera.",
+      "assistant_message": "That's exciting! Mirrorless cameras are excellent for both landscape and street photography. What camera did you get?",
+      "ground_truth_notes": [
+        {
+          "content": "interested in photography",
+          "type": "interest:hobby",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["photography", "hobby", "new-interest"],
+          "reasoning": "Explicit statement about getting into it"
+        },
+        {
+          "content": "focuses on landscape photography",
+          "type": "interest:hobby",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["landscape-photography", "photography"],
+          "reasoning": "Explicit mention of focus area"
+        },
+        {
+          "content": "focuses on street photography",
+          "type": "interest:hobby",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["street-photography", "photography"],
+          "reasoning": "Explicit mention of focus area"
+        },
+        {
+          "content": "owns a mirrorless camera",
+          "type": "personal:possessions",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["camera", "mirrorless", "photography-gear"],
+          "reasoning": "Explicit statement about purchase"
+        }
+      ],
+      "should_not_extract": [
+        "Mirrorless cameras are excellent",
+        "That's exciting"
+      ]
+    },
+    {
+      "id": "interest_003",
+      "category": "personal_interests",
+      "user_message": "I run a 5K every morning before work. It helps me stay focused throughout the day.",
+      "assistant_message": "Morning runs are a great way to start the day! That's an impressive routine to maintain.",
+      "ground_truth_notes": [
+        {
+          "content": "runs 5K every morning",
+          "type": "interest:activity",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["running", "exercise", "daily-routine", "5k"],
+          "reasoning": "Explicit daily habit"
+        },
+        {
+          "content": "exercises before work",
+          "type": "personal:habits",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["morning-routine", "exercise", "work-habits"],
+          "reasoning": "Explicit timing mentioned"
+        },
+        {
+          "content": "running helps maintain focus",
+          "type": "personal:habits",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["focus", "productivity", "exercise-benefits"],
+          "reasoning": "Explicit statement about benefit"
+        }
+      ],
+      "should_not_extract": [
+        "Morning runs are great",
+        "impressive routine"
+      ]
+    },
+    {
+      "id": "interest_004",
+      "category": "personal_interests",
+      "user_message": "I'm a huge sci-fi fan. Just finished reading the Foundation series by Asimov for the third time.",
+      "assistant_message": "Foundation is a masterpiece! Asimov's world-building is incredible. Have you watched the Apple TV adaptation?",
+      "ground_truth_notes": [
+        {
+          "content": "huge fan of science fiction",
+          "type": "interest:topic",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["sci-fi", "science-fiction", "genre-preference"],
+          "reasoning": "Explicit statement with 'huge fan'"
+        },
+        {
+          "content": "enjoys Foundation series by Asimov",
+          "type": "interest:topic",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["foundation", "asimov", "books", "reading"],
+          "reasoning": "Read it three times - strong preference"
+        },
+        {
+          "content": "re-reads favorite books",
+          "type": "personal:habits",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["reading-habits", "books"],
+          "reasoning": "Third read implies habit of re-reading"
+        }
+      ],
+      "should_not_extract": [
+        "Foundation is a masterpiece",
+        "Asimov's world-building is incredible"
+      ]
+    },
+    {
+      "id": "skill_001",
+      "category": "professional_skills",
+      "user_message": "I've been working as a full-stack developer for 5 years, primarily with React and Node.js. I also have experience leading small teams.",
+      "assistant_message": "Five years is solid experience! The combination of full-stack skills and team leadership is valuable in the industry.",
+      "ground_truth_notes": [
+        {
+          "content": "works as full-stack developer",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["full-stack", "developer", "career"],
+          "reasoning": "Explicit current role"
+        },
+        {
+          "content": "has 5 years experience as full-stack developer",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["experience-duration", "full-stack"],
+          "reasoning": "Explicit time frame"
+        },
+        {
+          "content": "experienced with React",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["react", "frontend", "javascript"],
+          "reasoning": "Primary technology mentioned"
+        },
+        {
+          "content": "experienced with Node.js",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["nodejs", "backend", "javascript"],
+          "reasoning": "Primary technology mentioned"
+        },
+        {
+          "content": "has experience leading small teams",
+          "type": "skill:leadership",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["team-leadership", "management", "soft-skills"],
+          "reasoning": "Explicit leadership experience"
+        }
+      ],
+      "should_not_extract": [
+        "Five years is solid experience",
+        "combination is valuable"
+      ]
+    },
+    {
+      "id": "skill_002",
+      "category": "professional_skills",
+      "user_message": "I'm fluent in English and Spanish. I also know some French but I'm not conversational yet.",
+      "assistant_message": "Being bilingual is a great asset! And learning French will give you a third language to work with.",
+      "ground_truth_notes": [
+        {
+          "content": "fluent in English",
+          "type": "skill:language",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["english", "language", "fluent"],
+          "reasoning": "Explicit fluency statement"
+        },
+        {
+          "content": "fluent in Spanish",
+          "type": "skill:language",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["spanish", "language", "fluent"],
+          "reasoning": "Explicit fluency statement"
+        },
+        {
+          "content": "learning French at beginner/intermediate level",
+          "type": "goal:learning",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["french", "language", "learning"],
+          "reasoning": "Knows some but not conversational"
+        }
+      ],
+      "should_not_extract": [
+        "Being bilingual is a great asset"
+      ]
+    },
+    {
+      "id": "skill_003",
+      "category": "professional_skills",
+      "user_message": "I specialize in database optimization. I've worked with PostgreSQL, MySQL, and MongoDB across various projects.",
+      "assistant_message": "Database optimization is a crucial skill! Experience across both SQL and NoSQL databases gives you great versatility.",
+      "ground_truth_notes": [
+        {
+          "content": "specializes in database optimization",
+          "type": "skill:technical",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["database", "optimization", "specialization"],
+          "reasoning": "Explicit specialization"
+        },
+        {
+          "content": "experienced with PostgreSQL",
+          "type": "skill:technical",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["postgresql", "database", "sql"],
+          "reasoning": "Worked with across projects"
+        },
+        {
+          "content": "experienced with MySQL",
+          "type": "skill:technical",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["mysql", "database", "sql"],
+          "reasoning": "Worked with across projects"
+        },
+        {
+          "content": "experienced with MongoDB",
+          "type": "skill:technical",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["mongodb", "database", "nosql"],
+          "reasoning": "Worked with across projects"
+        }
+      ],
+      "should_not_extract": [
+        "Database optimization is crucial",
+        "gives you great versatility"
+      ]
+    },
+    {
+      "id": "edge_001",
+      "category": "edge_cases",
+      "description": "Very short message",
+      "user_message": "I use Linux.",
+      "assistant_message": "Linux is a solid choice for development!",
+      "ground_truth_notes": [
+        {
+          "content": "uses Linux",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["linux", "operating-system"],
+          "reasoning": "Simple explicit statement"
+        }
+      ],
+      "should_not_extract": [
+        "Linux is solid choice"
+      ]
+    },
+    {
+      "id": "edge_002",
+      "category": "edge_cases",
+      "description": "Contradictory preference over time",
+      "user_message": "I've switched to using spaces instead of tabs now. Used to be a tabs person but spaces make more sense for collaboration.",
+      "assistant_message": "That's a practical reason to switch! Consistency across teams is important.",
+      "ground_truth_notes": [
+        {
+          "content": "currently uses spaces instead of tabs",
+          "type": "preference:editor",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["spaces", "indentation", "current"],
+          "reasoning": "Current preference explicitly stated"
+        },
+        {
+          "content": "previously preferred tabs over spaces",
+          "type": "preference:editor",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["tabs", "indentation", "past"],
+          "reasoning": "Past preference mentioned"
+        },
+        {
+          "content": "values team collaboration in tooling decisions",
+          "type": "preference:approach",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["collaboration", "teamwork"],
+          "reasoning": "Reason for switch implies value"
+        }
+      ],
+      "should_not_extract": [
+        "That's practical",
+        "Consistency is important"
+      ]
+    },
+    {
+      "id": "edge_003",
+      "category": "edge_cases",
+      "description": "Assistant-heavy conversation",
+      "user_message": "Tell me about Docker.",
+      "assistant_message": "Docker is a platform for developing, shipping, and running applications in containers. Containers package software with all its dependencies, making it portable and consistent across different environments. Key features include: isolation, resource efficiency, scalability, and version control. Many developers use Docker for microservices, CI/CD pipelines, and local development environments.",
+      "ground_truth_notes": [],
+      "should_not_extract": [
+        "Docker is a platform",
+        "uses Docker",
+        "interested in Docker",
+        "Containers package software"
+      ]
+    },
+    {
+      "id": "edge_004",
+      "category": "edge_cases",
+      "description": "Ambiguous statement requiring context",
+      "user_message": "I might try Svelte for my next project, but I'm not sure yet.",
+      "assistant_message": "Svelte is worth trying! It has a unique approach to reactivity that many developers find refreshing.",
+      "ground_truth_notes": [
+        {
+          "content": "considering Svelte for future project",
+          "type": "goal:learning",
+          "confidence_range": [0.6, 0.75],
+          "tags": ["svelte", "framework", "consideration"],
+          "reasoning": "Uncertain intention, lower confidence"
+        }
+      ],
+      "should_not_extract": [
+        "Svelte is worth trying",
+        "will use Svelte",
+        "decided to use Svelte"
+      ]
+    },
+    {
+      "id": "edge_005",
+      "category": "edge_cases",
+      "description": "Question that reveals preference",
+      "user_message": "What's the best way to handle state management in Vue? I've been using Pinia and it works well for me.",
+      "assistant_message": "Pinia is the official state management solution for Vue 3, and it's a great choice! It's simpler and more intuitive than Vuex.",
+      "ground_truth_notes": [
+        {
+          "content": "uses Pinia for Vue state management",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["pinia", "vue", "state-management"],
+          "reasoning": "Stated current usage"
+        },
+        {
+          "content": "finds Pinia works well",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["pinia", "positive-experience"],
+          "reasoning": "Explicit positive assessment"
+        },
+        {
+          "content": "uses Vue framework",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vue", "frontend", "framework"],
+          "reasoning": "Implied by discussing Vue-specific tooling"
+        }
+      ],
+      "should_not_extract": [
+        "Pinia is official solution",
+        "Pinia is great choice"
+      ]
+    },
+    {
+      "id": "tech_006",
+      "category": "technical_preferences",
+      "user_message": "I prefer writing tests before implementation. Test-driven development has really improved my code quality.",
+      "assistant_message": "TDD is a great practice! Writing tests first helps clarify requirements and leads to better design.",
+      "ground_truth_notes": [
+        {
+          "content": "practices test-driven development",
+          "type": "preference:approach",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["tdd", "testing", "methodology"],
+          "reasoning": "Explicit statement about TDD practice"
+        },
+        {
+          "content": "writes tests before implementation",
+          "type": "preference:approach",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["tdd", "testing", "workflow"],
+          "reasoning": "Explicit workflow preference"
+        },
+        {
+          "content": "values code quality",
+          "type": "preference:approach",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["code-quality", "values"],
+          "reasoning": "Stated benefit of TDD approach"
+        }
+      ],
+      "should_not_extract": [
+        "TDD is great practice",
+        "helps clarify requirements"
+      ]
+    },
+    {
+      "id": "tech_007",
+      "category": "technical_preferences",
+      "user_message": "I hate debugging CSS issues. That's why I switched to Tailwind CSS - utility classes make everything so much easier.",
+      "assistant_message": "Many developers share that sentiment! Tailwind's utility-first approach does eliminate a lot of CSS debugging headaches.",
+      "ground_truth_notes": [
+        {
+          "content": "dislikes debugging CSS",
+          "type": "preference:approach",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["css", "debugging", "frustration"],
+          "reasoning": "Explicit negative statement"
+        },
+        {
+          "content": "uses Tailwind CSS",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["tailwind", "css", "framework"],
+          "reasoning": "Switched to it and uses it"
+        },
+        {
+          "content": "prefers utility-first CSS approach",
+          "type": "preference:approach",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["utility-first", "css", "methodology"],
+          "reasoning": "Implied by Tailwind preference"
+        }
+      ],
+      "should_not_extract": [
+        "Many developers share that sentiment",
+        "eliminates debugging headaches"
+      ]
+    },
+    {
+      "id": "interest_005",
+      "category": "personal_interests",
+      "user_message": "I collect vinyl records. Started during the pandemic and now have over 200 albums, mostly classic rock and blues.",
+      "assistant_message": "Vinyl collecting is a wonderful hobby! Classic rock and blues sound amazing on vinyl.",
+      "ground_truth_notes": [
+        {
+          "content": "collects vinyl records",
+          "type": "interest:hobby",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vinyl", "records", "collecting"],
+          "reasoning": "Explicit hobby statement"
+        },
+        {
+          "content": "started vinyl collecting during pandemic",
+          "type": "personal:background",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["pandemic", "timeline", "vinyl"],
+          "reasoning": "Explicit timeline given"
+        },
+        {
+          "content": "owns over 200 vinyl albums",
+          "type": "personal:possessions",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vinyl", "collection-size"],
+          "reasoning": "Specific quantity mentioned"
+        },
+        {
+          "content": "collects classic rock vinyl",
+          "type": "interest:music",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["classic-rock", "vinyl", "music"],
+          "reasoning": "Explicit genre preference"
+        },
+        {
+          "content": "collects blues vinyl",
+          "type": "interest:music",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["blues", "vinyl", "music"],
+          "reasoning": "Explicit genre preference"
+        }
+      ],
+      "should_not_extract": [
+        "Vinyl collecting is wonderful",
+        "sounds amazing on vinyl"
+      ]
+    },
+    {
+      "id": "skill_004",
+      "category": "professional_skills",
+      "user_message": "I recently got AWS certified. The Solutions Architect exam was tough but I passed on my first try.",
+      "assistant_message": "Congratulations! The AWS Solutions Architect certification is well-regarded in the industry. Passing on the first try is impressive!",
+      "ground_truth_notes": [
+        {
+          "content": "holds AWS Solutions Architect certification",
+          "type": "skill:certification",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["aws", "certification", "cloud"],
+          "reasoning": "Explicit certification achievement"
+        },
+        {
+          "content": "passed AWS exam on first attempt",
+          "type": "skill:certification",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["aws", "achievement"],
+          "reasoning": "Specific accomplishment detail"
+        }
+      ],
+      "should_not_extract": [
+        "certification is well-regarded",
+        "Passing on first try is impressive"
+      ]
+    },
+    {
+      "id": "interest_006",
+      "category": "personal_interests",
+      "user_message": "I volunteer at a local animal shelter every weekend. It's rewarding to help dogs find their forever homes.",
+      "assistant_message": "That's wonderful! Volunteering at animal shelters is such meaningful work. Dogs especially need that kind of care and attention.",
+      "ground_truth_notes": [
+        {
+          "content": "volunteers at animal shelter",
+          "type": "interest:activity",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["volunteering", "animal-shelter", "community-service"],
+          "reasoning": "Explicit volunteer activity"
+        },
+        {
+          "content": "volunteers every weekend",
+          "type": "personal:habits",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["weekend-routine", "volunteering", "regular-activity"],
+          "reasoning": "Specific frequency mentioned"
+        },
+        {
+          "content": "cares about animal welfare",
+          "type": "interest:cause",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["animals", "welfare", "values"],
+          "reasoning": "Strongly implied by volunteering"
+        },
+        {
+          "content": "finds animal shelter work rewarding",
+          "type": "personal:values",
+          "confidence_range": [0.9, 0.95],
+          "tags": ["volunteering", "fulfillment"],
+          "reasoning": "Explicit positive feeling"
+        }
+      ],
+      "should_not_extract": [
+        "That's wonderful",
+        "meaningful work",
+        "dogs need care"
+      ]
+    }
+  ],
+  "test_queries": [
+    {
+      "query_id": "q001",
+      "query": "music preferences",
+      "description": "Test semantic search for music-related interests",
+      "relevant_note_ids": [
+        "interest_001",
+        "interest_005"
+      ],
+      "irrelevant_note_ids": [
+        "tech_001",
+        "tech_002",
+        "skill_001"
+      ],
+      "min_recall": 0.8,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "q002",
+      "query": "programming languages they know",
+      "description": "Test search for technical skills",
+      "relevant_note_ids": [
+        "tech_001",
+        "tech_005",
+        "skill_001"
+      ],
+      "irrelevant_note_ids": [
+        "interest_001",
+        "interest_002",
+        "interest_006"
+      ],
+      "min_recall": 0.8,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "q003",
+      "query": "dark mode preferences",
+      "description": "Test exact concept matching",
+      "relevant_note_ids": [
+        "tech_002"
+      ],
+      "irrelevant_note_ids": [
+        "interest_001",
+        "skill_002"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 0
+    },
+    {
+      "query_id": "q004",
+      "query": "hobbies and interests outside of work",
+      "description": "Test broad interest-based search",
+      "relevant_note_ids": [
+        "interest_001",
+        "interest_002",
+        "interest_003",
+        "interest_004",
+        "interest_005",
+        "interest_006"
+      ],
+      "irrelevant_note_ids": [
+        "tech_001",
+        "skill_001"
+      ],
+      "min_recall": 0.75,
+      "max_irrelevant_in_top_10": 3
+    },
+    {
+      "query_id": "q005",
+      "query": "frontend development tools",
+      "description": "Test technical category filtering",
+      "relevant_note_ids": [
+        "tech_001",
+        "tech_003",
+        "tech_004",
+        "tech_007",
+        "skill_001",
+        "edge_005"
+      ],
+      "irrelevant_note_ids": [
+        "interest_003",
+        "skill_002"
+      ],
+      "min_recall": 0.7,
+      "max_irrelevant_in_top_10": 2
+    },
+    {
+      "query_id": "q006",
+      "query": "what certifications do they have",
+      "description": "Test specific credential search",
+      "relevant_note_ids": [
+        "skill_004"
+      ],
+      "irrelevant_note_ids": [
+        "tech_001",
+        "interest_001"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 0
+    },
+    {
+      "query_id": "q007",
+      "query": "leadership experience",
+      "description": "Test soft skills search",
+      "relevant_note_ids": [
+        "skill_001"
+      ],
+      "irrelevant_note_ids": [
+        "tech_002",
+        "interest_002"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 1
+    },
+    {
+      "query_id": "q008",
+      "query": "testing and code quality practices",
+      "description": "Test methodology/approach search",
+      "relevant_note_ids": [
+        "tech_006"
+      ],
+      "irrelevant_note_ids": [
+        "interest_003",
+        "skill_003"
+      ],
+      "min_recall": 1.0,
+      "max_irrelevant_in_top_10": 1
+    }
+  ]
+}

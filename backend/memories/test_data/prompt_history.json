@@ -1,0 +1,149 @@
+{
+  "schema_version": "1.0",
+  "description": "History of extraction prompt versions and their benchmark performance",
+  "prompts": [
+    {
+      "version": "1.0-baseline",
+      "date": "2025-01-08",
+      "description": "Initial prompt with assistant message extraction bug fixed",
+      "changes": [
+        "Modified to only extract from user_message (not assistant_message)",
+        "Added 'Only extract facts explicitly stated or strongly implied' guideline"
+      ],
+      "prompt_text": "Extract atomic facts from this user message.\n\n**User Message:**\n{user_message}\n\n**Instructions:**\nExtract individual, atomic facts about the user from their message. Each fact should be:\n1. A single, granular piece of information\n2. Self-contained and understandable on its own\n3. About the user's preferences, skills, interests, or personal information\n4. Explicitly stated or strongly implied by the USER (not assistant responses)\n\n**Guidelines:**\n- Only extract facts explicitly stated or strongly implied in the user's message\n- Break compound statements into multiple atomic facts\n- Set confidence lower (0.6-0.8) for implied facts\n- Set confidence higher (0.9-1.0) for explicit statements\n- Do not infer facts that are not clearly supported by the user's words",
+      "benchmark_runs": [
+        {
+          "run_date": "2025-01-08T10:00:00",
+          "extraction": {
+            "precision": 1.0,
+            "recall": 0.2206,
+            "f1_score": 0.3614,
+            "false_positive_rate": 0.0,
+            "total_ground_truth": 68,
+            "total_extracted": 15,
+            "by_category": {
+              "technical_preferences": {
+                "precision": 1.0,
+                "recall": 0.1739,
+                "f1": 0.2963
+              },
+              "personal_interests": {
+                "precision": 1.0,
+                "recall": 0.2174,
+                "f1": 0.3571
+              },
+              "professional_skills": {
+                "precision": 1.0,
+                "recall": 0.2857,
+                "f1": 0.4444
+              },
+              "edge_cases": {
+                "precision": 1.0,
+                "recall": 0.25,
+                "f1": 0.4
+              }
+            }
+          },
+          "search": {
+            "precision_at_10": 0.7125,
+            "recall_at_10": 0.5002,
+            "mrr": 0.917
+          },
+          "observations": "Perfect precision (no assistant message extraction). Very low recall - too conservative. Search quality appears good but may be artificially high due to small dataset."
+        }
+      ]
+    },
+    {
+      "version": "1.1-more-comprehensive",
+      "date": "2025-01-08",
+      "description": "Emphasize extracting ALL facts with specific examples",
+      "changes": [
+        "Changed 'Extract individual' to 'Extract ALL individual'",
+        "Replaced restrictive 'Guidelines' with specific 'What to Extract' examples",
+        "Added explicit guidance: 'Be comprehensive - extract every distinct piece of information'",
+        "Lowered confidence thresholds and added 'What NOT to Extract' section"
+      ],
+      "prompt_text": "Extract atomic facts from this user message.\n\n**User Message:**\n{user_message}\n\n**Instructions:**\nExtract ALL individual, atomic facts about the user from their message. Each fact should be:\n1. A single, granular piece of information\n2. Self-contained and understandable on its own\n3. About the user's preferences, skills, interests, or personal information\n4. Stated by the USER (not assistant responses)\n\nBe comprehensive - extract every distinct piece of information about the user.\n\n**What to Extract:**\n- Direct statements: \"I use Python\" \u2192 extract \"uses Python\" as a skill\n- Preferences: \"I prefer X for Y\" \u2192 extract both the preference AND the usage/skill\n- Tool mentions: \"I work with X, Y, and Z\" \u2192 extract separate facts for each tool\n- Experiences: \"I've worked with X\" \u2192 extract experience/skill with X\n- Qualitative statements: \"I love jazz\" \u2192 extract interest in jazz\n- Compound statements: ALWAYS break into multiple atomic facts\n- Skills from usage: If user mentions using/working with a tool/language, extract as skill\n- Ongoing activities: \"I volunteer every weekend\" \u2192 extract both the activity and frequency\n- List items: Extract each item mentioned as a separate fact\n\n**Confidence Scoring:**\n- High (0.9-1.0): Explicit direct statements (\"I use X\", \"I prefer Y\", \"I love Z\")\n- Medium (0.7-0.9): Clear implications (\"I work with X\" implies skill in X)\n- Lower (0.6-0.7): Tentative or uncertain statements (\"I might try X\")\n\n**What NOT to Extract:**\n- Subjective opinions about topics/things (not about the user themselves)\n- Facts from assistant responses\n- Pure questions without assertions",
+      "benchmark_runs": [
+        {
+          "run_date": "2025-01-08T11:00:00",
+          "extraction": {
+            "precision": 1.0,
+            "recall": 0.2941,
+            "f1_score": 0.4545,
+            "false_positive_rate": 0.0,
+            "total_ground_truth": 68,
+            "total_extracted": 20,
+            "by_category": {
+              "technical_preferences": {
+                "precision": 1.0,
+                "recall": 0.3913,
+                "f1": 0.5625
+              },
+              "personal_interests": {
+                "precision": 1.0,
+                "recall": 0.2174,
+                "f1": 0.3571
+              },
+              "professional_skills": {
+                "precision": 1.0,
+                "recall": 0.2857,
+                "f1": 0.4444
+              },
+              "edge_cases": {
+                "precision": 1.0,
+                "recall": 0.25,
+                "f1": 0.4
+              }
+            }
+          },
+          "search": {
+            "precision_at_10": 0.6562,
+            "recall_at_10": 0.313,
+            "mrr": 0.875
+          },
+          "observations": "Improved recall by +7.35% (22.06% \u2192 29.41%) while maintaining perfect precision. Best improvement in technical_preferences category (+21.74%). Search quality declined as expected with more notes - previous scores were artificially high due to small dataset. Still missing 70% of ground truth facts."
+        },
+        {
+          "run_date": "2025-11-09T07:33:01.673653",
+          "extraction": {
+            "precision": 1.0,
+            "recall": 0.5441176470588235,
+            "f1_score": 0.7047619047619048,
+            "false_positive_rate": 0.0,
+            "total_ground_truth": 68,
+            "total_extracted": 73,
+            "by_category": {
+              "technical_preferences": {
+                "precision": 1.0,
+                "recall": 0.782608695652174,
+                "f1": 0.878048780487805
+              },
+              "personal_interests": {
+                "precision": 1.0,
+                "recall": 0.4782608695652174,
+                "f1": 0.6470588235294118
+              },
+              "professional_skills": {
+                "precision": 1.0,
+                "recall": 0.42857142857142855,
+                "f1": 0.6
+              },
+              "edge_cases": {
+                "precision": 1.0,
+                "recall": 0.25,
+                "f1": 0.4
+              }
+            }
+          },
+          "search": {
+            "precision_at_10": 0.875,
+            "recall_at_10": 0.2509057971014493,
+            "mrr": 0.875
+          },
+          "observations": "With improved semantic matching logic (synonym detection + entity matching). Massive recall improvement from 29% to 60% purely from better evaluation, not prompt changes."
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 """
-Phase 3: Background tasks for atomic note extraction and relationship building
+Background tasks for atomic note extraction and relationship building
 
 These tasks run asynchronously via Django-Q to extract structured knowledge
 from conversation turns without blocking user interactions.
@@ -33,17 +33,19 @@ logger = logging.getLogger(__name__)
 # Extraction Prompt
 # =============================================================================
 
-EXTRACTION_PROMPT = """Extract atomic facts from this conversation turn.
+EXTRACTION_PROMPT = """Extract atomic facts from this user message.
 
-**Conversation:**
-User: {user_message}
-Assistant: {assistant_message}
+**User Message:**
+{user_message}
 
 **Instructions:**
-Extract individual, atomic facts about the user. Each fact should be:
+Extract ALL individual, atomic facts about the user from their message. Each fact should be:
 1. A single, granular piece of information
 2. Self-contained and understandable on its own
 3. About the user's preferences, skills, interests, or personal information
+4. Stated by the USER (not assistant responses)
+
+Be comprehensive - extract every distinct piece of information about the user.
 
 **Format your response as JSON:**
 ```json
@@ -73,12 +75,26 @@ Extract individual, atomic facts about the user. Each fact should be:
 - goal:career - Career goals
 - goal:learning - Learning goals
 
-**Guidelines:**
-- Only extract facts explicitly stated or strongly implied
-- Do NOT extract assistant responses unless they reveal user information
-- Break compound statements into multiple atomic facts
-- Set confidence lower (0.6-0.8) for implied facts
-- Set confidence higher (0.9-1.0) for explicit statements
+**What to Extract:**
+- Direct statements: "I use Python" → extract "uses Python" as a skill
+- Preferences: "I prefer X for Y" → extract both the preference AND the usage/skill
+- Tool mentions: "I work with X, Y, and Z" → extract separate facts for each tool
+- Experiences: "I've worked with X" → extract experience/skill with X
+- Qualitative statements: "I love jazz" → extract interest in jazz
+- Compound statements: ALWAYS break into multiple atomic facts
+- Skills from usage: If user mentions using/working with a tool/language, extract as skill
+- Ongoing activities: "I volunteer every weekend" → extract both the activity and frequency
+- List items: Extract each item mentioned as a separate fact
+
+**Confidence Scoring:**
+- High (0.9-1.0): Explicit direct statements ("I use X", "I prefer Y", "I love Z")
+- Medium (0.7-0.9): Clear implications ("I work with X" implies skill in X)
+- Lower (0.6-0.7): Tentative or uncertain statements ("I might try X")
+
+**What NOT to Extract:**
+- Subjective opinions about topics/things (not about the user themselves)
+- Facts from assistant responses
+- Pure questions without assertions
 
 **Examples:**
 
@@ -149,19 +165,14 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
         settings = Settings.get_settings()
         extraction_template = settings.extraction_prompt or EXTRACTION_PROMPT
 
-        # Generate extraction prompt
+        # Generate extraction prompt (only from user message)
         prompt = extraction_template.format(
-            user_message=turn.user_message,
-            assistant_message=turn.assistant_message
+            user_message=turn.user_message
         )
 
-        # Call LLM for extraction
-        # Adjust temperature based on retry count (higher = more creative)
-        temperature = 0.3 + (retry_count * 0.2)  # 0.3, 0.5, 0.7
-
+        # Call LLM for extraction using configured temperature
         response = llm_service.generate_text(
             prompt=prompt,
-            temperature=temperature,
             max_tokens=1000
         )
 
@@ -445,11 +456,9 @@ def build_note_relationships_for_note(note_id: str, retry_count: int = 0) -> Dic
             existing_notes=existing_notes_text
         )
 
-        # Call LLM for relationship analysis
-        temperature = 0.2 + (retry_count * 0.1)  # Lower temperature for more focused analysis
+        # Call LLM for relationship analysis using configured temperature
         response = llm_service.generate_text(
             prompt=prompt,
-            temperature=temperature,
             max_tokens=800
         )
 
@@ -659,7 +668,7 @@ def extraction_hook(task):
     if task.success:
         logger.info(f"Extraction task {task.name} completed successfully")
 
-        # Phase 3: Schedule relationship building for newly created notes
+        # Schedule relationship building for newly created notes
         try:
             result = task.result
             if isinstance(result, dict) and result.get('status') == 'completed':

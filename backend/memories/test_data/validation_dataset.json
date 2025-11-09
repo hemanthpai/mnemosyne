@@ -317,7 +317,7 @@
       ]
     }
   ],
-  "test_search_queries": [
+  "test_queries": [
     {
       "query_id": "v001",
       "query": "health and fitness activities",

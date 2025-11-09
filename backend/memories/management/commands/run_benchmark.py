@@ -361,7 +361,7 @@ class Command(BaseCommand):
                     for i, result in enumerate(top_10[:5], 1):
                         is_relevant = '✓' if result['id'] in relevant_note_ids else '✗'
                         self.stdout.write(
-                            f'    {i}. {is_relevant} [{result["similarity"]:.3f}] {result["content"][:60]}...'
+                            f'    {i}. {is_relevant} [{result["score"]:.3f}] {result["content"][:60]}...'
                         )
 
             total_precision_at_10 += precision_at_10

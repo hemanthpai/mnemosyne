@@ -161,6 +161,10 @@ class Settings(models.Model):
         default=True,
         help_text="Enable context-aware query rewriting for more targeted search results"
     )
+    enable_hybrid_search = models.BooleanField(
+        default=True,
+        help_text="Enable hybrid search (BM25 + Vector) using Reciprocal Rank Fusion for improved recall"
+    )
 
     # Reranking Configuration
     enable_reranking = models.BooleanField(
@@ -340,6 +344,7 @@ class Settings(models.Model):
             'enable_multipass_extraction': self.enable_multipass_extraction,
             'enable_query_expansion': self.enable_query_expansion,
             'enable_query_rewriting': self.enable_query_rewriting,
+            'enable_hybrid_search': self.enable_hybrid_search,
 
             # Reranking configuration
             'enable_reranking': self.enable_reranking,

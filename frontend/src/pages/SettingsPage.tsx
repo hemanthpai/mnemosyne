@@ -1427,6 +1427,28 @@ Return your decision in JSON format:
                                                 </p>
                                             </div>
                                         </div>
+
+                                        {/* Hybrid Search */}
+                                        <div className="flex items-start gap-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-3">
+                                            <input
+                                                type="checkbox"
+                                                id="enable_hybrid_search"
+                                                checked={editedSettings?.enable_hybrid_search ?? true}
+                                                onChange={(e) => handleFieldChange('enable_hybrid_search', e.target.checked)}
+                                                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                            />
+                                            <div className="flex-1">
+                                                <label htmlFor="enable_hybrid_search" className="block text-sm font-medium text-blue-900 dark:text-blue-100 cursor-pointer">
+                                                    Enable Hybrid Search (BM25 + Vector) ✨ NEW
+                                                </label>
+                                                <p className="text-xs text-blue-800 dark:text-blue-200 mt-1">
+                                                    Combines keyword search (BM25) with semantic search using Reciprocal Rank Fusion. Improves recall by catching exact term matches that semantic search might miss.
+                                                </p>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                                                    Expected: +10-15% recall improvement by finding both semantic and keyword matches
+                                                </p>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

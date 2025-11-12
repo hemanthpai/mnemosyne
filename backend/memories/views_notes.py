@@ -244,8 +244,17 @@ class DeleteAtomicNoteView(APIView):
             # Log for audit
             logger.info(f"Deleting atomic note {note_id}: {note.content[:50]}...")
 
+            # Capture user_id before deleting
+            user_id = str(note.user_id)
+
             # Delete note (relationships will be cascade deleted)
             note.delete()
+
+            # Invalidate BM25 cache
+            from .bm25_service import get_bm25_service
+            bm25_service = get_bm25_service()
+            bm25_service.invalidate_cache(user_id)
+            logger.debug(f"Invalidated BM25 cache for user {user_id}")
 
             return Response({
                 'success': True,

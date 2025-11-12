@@ -579,6 +579,13 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
         from django.core.cache import cache
         cache.delete(f'extraction_progress_{turn_id}')
 
+        # Invalidate BM25 cache since new notes were added
+        if notes_created > 0:
+            from .bm25_service import get_bm25_service
+            bm25_service = get_bm25_service()
+            bm25_service.invalidate_cache(str(turn.user_id))
+            logger.debug(f"Invalidated BM25 cache for user {turn.user_id}")
+
         return {
             "status": "completed",
             "notes_created": notes_created,

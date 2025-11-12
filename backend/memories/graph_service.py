@@ -173,6 +173,78 @@ class GraphService:
             logger.error(f"Query expansion error: {e}. Using original query only.")
             return [query]
 
+    def rewrite_query_with_context(
+        self,
+        query: str,
+        recent_context: List[str] = None
+    ) -> str:
+        """
+        Rewrite query using conversation context for better relevance
+
+        Uses recent conversation turns to disambiguate and refine the search query.
+        Example:
+        - Context: ["User: What does Sarah like?"]
+        - Query: "frontend development tools"
+        - Rewritten: "Sarah's preferred frontend frameworks and libraries"
+
+        Args:
+            query: Original search query
+            recent_context: List of recent conversation messages (last 3-5 turns)
+
+        Returns:
+            Rewritten query (or original if rewriting fails or no context)
+        """
+        # If no context provided, return original query
+        if not recent_context or len(recent_context) == 0:
+            return query
+
+        try:
+            # Build context string
+            context_str = "\n".join(recent_context[-3:])  # Last 3 turns
+
+            # Prompt for context-aware rewriting
+            prompt = f"""Given this conversation context and search query, rewrite the query to be more specific and targeted.
+
+Recent conversation:
+{context_str}
+
+Original query: {query}
+
+Rewrite the query to capture exactly what information would be most relevant to continue this conversation. Consider:
+- What aspect of the topic matters (preferences, skills, experiences, opinions, facts)
+- Who or what is being asked about (specific person, concept, etc.)
+- Any implied filters from context (time period, category, etc.)
+
+Respond with ONLY the rewritten query, nothing else.
+
+Rewritten query:"""
+
+            # Call generation LLM
+            response = llm_service.generate_text(
+                prompt=prompt,
+                max_tokens=50,
+                temperature=0.3  # Lower temperature for focused rewriting
+            )
+
+            if not response['success']:
+                logger.warning(f"Query rewriting failed: {response.get('error')}. Using original query.")
+                return query
+
+            # Get rewritten query
+            rewritten = response['text'].strip()
+
+            # Basic validation
+            if len(rewritten) < 3 or len(rewritten) > 200:
+                logger.warning(f"Invalid rewritten query length: {len(rewritten)}. Using original.")
+                return query
+
+            logger.info(f"Rewrote query: '{query}' → '{rewritten}'")
+            return rewritten
+
+        except Exception as e:
+            logger.error(f"Query rewriting error: {e}. Using original query.")
+            return query
+
     def search_atomic_notes_with_expansion(
         self,
         query: str,

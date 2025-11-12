@@ -157,6 +157,10 @@ class Settings(models.Model):
         default=False,
         help_text="Enable query expansion (may be redundant with A-MEM multi-attribute embeddings - test both)"
     )
+    enable_query_rewriting = models.BooleanField(
+        default=True,
+        help_text="Enable context-aware query rewriting for more targeted search results"
+    )
 
     # Reranking Configuration
     enable_reranking = models.BooleanField(
@@ -335,6 +339,7 @@ class Settings(models.Model):
             # Search configuration
             'enable_multipass_extraction': self.enable_multipass_extraction,
             'enable_query_expansion': self.enable_query_expansion,
+            'enable_query_rewriting': self.enable_query_rewriting,
 
             # Reranking configuration
             'enable_reranking': self.enable_reranking,

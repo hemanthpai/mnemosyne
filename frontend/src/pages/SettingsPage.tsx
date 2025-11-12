@@ -1361,6 +1361,74 @@ Return your decision in JSON format:
                                         </div>
                                     </div>
                                 </div>
+
+                                {/* Search Configuration */}
+                                <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                                    <h4 className="text-md font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                                        Search Configuration
+                                    </h4>
+                                    <div className="space-y-4">
+                                        {/* Multi-pass Extraction */}
+                                        <div className="flex items-start gap-3">
+                                            <input
+                                                type="checkbox"
+                                                id="enable_multipass_extraction"
+                                                checked={editedSettings?.enable_multipass_extraction ?? true}
+                                                onChange={(e) => handleFieldChange('enable_multipass_extraction', e.target.checked)}
+                                                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                            />
+                                            <div className="flex-1">
+                                                <label htmlFor="enable_multipass_extraction" className="block text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                                                    Enable Multi-pass Extraction
+                                                </label>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                                    Pass 1: Extract explicit facts, Pass 2: Extract implied/contextual facts for higher recall
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Query Expansion */}
+                                        <div className="flex items-start gap-3">
+                                            <input
+                                                type="checkbox"
+                                                id="enable_query_expansion"
+                                                checked={editedSettings?.enable_query_expansion ?? false}
+                                                onChange={(e) => handleFieldChange('enable_query_expansion', e.target.checked)}
+                                                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                            />
+                                            <div className="flex-1">
+                                                <label htmlFor="enable_query_expansion" className="block text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                                                    Enable Query Expansion
+                                                </label>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                                    Expand queries into multiple semantic variations (may be redundant with A-MEM multi-attribute embeddings)
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Query Rewriting */}
+                                        <div className="flex items-start gap-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-3">
+                                            <input
+                                                type="checkbox"
+                                                id="enable_query_rewriting"
+                                                checked={editedSettings?.enable_query_rewriting ?? true}
+                                                onChange={(e) => handleFieldChange('enable_query_rewriting', e.target.checked)}
+                                                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                            />
+                                            <div className="flex-1">
+                                                <label htmlFor="enable_query_rewriting" className="block text-sm font-medium text-blue-900 dark:text-blue-100 cursor-pointer">
+                                                    Enable Context-Aware Query Rewriting ✨ NEW
+                                                </label>
+                                                <p className="text-xs text-blue-800 dark:text-blue-200 mt-1">
+                                                    Rewrite queries using conversation context for more targeted results. Example: "frontend tools" → "Sarah's preferred frontend frameworks"
+                                                </p>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                                                    Expected: +8-12% recall improvement on context-dependent queries
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </div>

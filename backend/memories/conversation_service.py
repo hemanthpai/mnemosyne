@@ -232,7 +232,30 @@ class ConversationService:
             logger.info(f"Deep search tier 1: working memory cache")
             working_memory = cache_service.get_working_memory(user_id, limit=20)
 
-            # Simple keyword matching on cached conversations
+            # Context-aware query rewriting
+            settings = Settings.get_settings()
+            rewritten_query = query
+
+            if settings.enable_query_rewriting and working_memory:
+                # Extract recent conversation context
+                recent_context = []
+                for conv in working_memory[:5]:  # Last 5 conversations
+                    if 'user_message' in conv:
+                        recent_context.append(f"User: {conv['user_message']}")
+                    if 'assistant_message' in conv:
+                        recent_context.append(f"Assistant: {conv['assistant_message']}")
+
+                if recent_context:
+                    graph_service = _get_graph_service()
+                    rewritten_query = graph_service.rewrite_query_with_context(
+                        query=query,
+                        recent_context=recent_context
+                    )
+
+                    if rewritten_query != query:
+                        logger.info(f"Query rewritten: '{query}' → '{rewritten_query}'")
+
+            # Simple keyword matching on cached conversations (use original query)
             for conv in working_memory:
                 # Check if query terms appear in user message
                 if any(term.lower() in conv['user_message'].lower()
@@ -242,10 +265,10 @@ class ConversationService:
                     all_results.append(conv)
                     seen_ids.add(conv['id'])
 
-            # Tier 2: Raw conversation search
+            # Tier 2: Raw conversation search (use rewritten query)
             logger.info(f"Deep search tier 2: raw conversations")
             raw_results = self.search_fast(
-                query=query,
+                query=rewritten_query,
                 user_id=user_id,
                 limit=limit,
                 threshold=threshold
@@ -257,11 +280,11 @@ class ConversationService:
                     all_results.append(result)
                     seen_ids.add(result['id'])
 
-            # Tier 3: Atomic notes with graph traversal
+            # Tier 3: Atomic notes with graph traversal (use rewritten query)
             logger.info(f"Deep search tier 3: atomic notes + graph")
             graph_service = _get_graph_service()
             atomic_results = graph_service.search_with_graph(
-                query=query,
+                query=rewritten_query,
                 user_id=user_id,
                 limit=limit,
                 threshold=threshold,

@@ -5,6 +5,7 @@ import LatencyBadge from "../components/LatencyBadge";
 import ConversationTurnCard from "../components/ConversationTurnCard";
 import PageHeader from "../components/PageHeader";
 import Dropdown from "../components/Dropdown";
+import { useSidebar } from "../contexts/SidebarContext";
 
 // Auto-detect API base URL
 const getApiBaseUrl = (): string => {
@@ -19,6 +20,7 @@ const API_BASE_URL = getApiBaseUrl();
 type TabType = 'store' | 'search';
 
 const DevToolsPage: React.FC = () => {
+    const { isSidebarOpen } = useSidebar();
     // Tab state
     const [activeTab, setActiveTab] = useState<TabType>('store');
 
@@ -160,15 +162,13 @@ const DevToolsPage: React.FC = () => {
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
             <PageHeader
                 title="Dev Tools"
+                subtitle="Test conversation storage and search with latency visualization"
                 badge={{ text: "Development", color: "gray" }}
             />
 
+            <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'}`}>
             {/* Main Content */}
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                <p className="text-gray-600 dark:text-gray-400 mb-6 text-left">
-                    Test conversation storage and search with latency visualization
-                </p>
-
                 {/* Tabs */}
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md mb-6">
                     {/* Tab Navigation */}
@@ -597,6 +597,7 @@ const DevToolsPage: React.FC = () => {
                     </div>
                 )}
             </main>
+            </div>
         </div>
     );
 };

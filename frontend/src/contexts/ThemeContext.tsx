@@ -34,6 +34,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Save to localStorage
     localStorage.setItem('theme', theme);
+
+    console.log('Theme applied:', theme, 'Classes:', root.classList.toString());
   }, [theme]);
 
   // Listen for system theme changes
@@ -61,7 +63,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const toggleTheme = () => {
-    setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
+    setTheme(prevTheme => {
+      const newTheme = prevTheme === 'light' ? 'dark' : 'light';
+      console.log('Toggling theme from', prevTheme, 'to', newTheme);
+      return newTheme;
+    });
   };
 
   return (

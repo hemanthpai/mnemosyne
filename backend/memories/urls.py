@@ -1,4 +1,5 @@
 from django.urls import path
+from django.views.decorators.csrf import csrf_exempt
 from .views import (
     StoreConversationTurnView,
     SearchConversationsView,
@@ -6,7 +7,17 @@ from .views import (
     GetSettingsView,
     UpdateSettingsView,
     ValidateEndpointView,
-    FetchModelsView
+    FetchModelsView,
+    QueueStatusView,
+    ClearStuckTasksView,
+    QueueHealthDiagnosticsView,
+    RunBenchmarkView,
+    BenchmarkStatusView,
+    BenchmarkResultsView,
+    ListDatasetsView,
+    UploadDatasetView,
+    ActiveTasksView,
+    RecentTasksView
 )
 from .import_views import (
     StartImportView,
@@ -48,4 +59,20 @@ urlpatterns = [
     path('notes/users/', GetAvailableUsersView.as_view(), name='get_available_users'),
     path('notes/extract/', TriggerExtractionView.as_view(), name='trigger_extraction'),
     path('notes/graph/', KnowledgeGraphView.as_view(), name='knowledge_graph'),
+
+    # Queue monitoring endpoints
+    path('queue/status/', QueueStatusView.as_view(), name='queue_status'),
+    path('queue/clear-stuck/', ClearStuckTasksView.as_view(), name='clear_stuck_tasks'),
+    path('queue/health/', QueueHealthDiagnosticsView.as_view(), name='queue_health'),
+
+    # Benchmark endpoints
+    path('benchmarks/run/', RunBenchmarkView.as_view(), name='run_benchmark'),
+    path('benchmarks/status/<str:task_id>/', BenchmarkStatusView.as_view(), name='benchmark_status'),
+    path('benchmarks/results/<str:task_id>/', BenchmarkResultsView.as_view(), name='benchmark_results'),
+    path('benchmarks/datasets/', ListDatasetsView.as_view(), name='list_datasets'),
+    path('benchmarks/datasets/upload/', csrf_exempt(UploadDatasetView.as_view()), name='upload_dataset'),
+
+    # Activity Monitor endpoints
+    path('tasks/active/', ActiveTasksView.as_view(), name='active_tasks'),
+    path('tasks/recent/', RecentTasksView.as_view(), name='recent_tasks'),
 ]

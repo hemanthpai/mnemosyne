@@ -29,25 +29,11 @@ Query: "{query}"
 Generate variations that:
 - Use specific, concrete language (avoid abstract terms)
 - Cover different facets of the query topic
-- Are suitable for matching against factual statements
+- Are suitable for matching against factual statements about a person
 - Include both direct terms and related concepts
+- Consider different ways people might express the same information
 
-Examples:
-Query: "music preferences"
-Variations:
-- "favorite music genres"
-- "artists they listen to"
-- "concert experiences"
-- "music they enjoy"
-
-Query: "programming languages they know"
-Variations:
-- "programming languages they use"
-- "coding skills"
-- "languages they write code in"
-- "technical programming expertise"
-
-Now expand the query above. Return ONLY a JSON array of strings (no other text):
+Return ONLY a JSON array of strings (no other text or explanation):
 ["variation1", "variation2", "variation3"]"""
 
 

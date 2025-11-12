@@ -1,0 +1,416 @@
+{
+  "dataset_version": "1.0",
+  "created": "2025-01-09",
+  "description": "Test dataset for contradiction handling and preference conflict resolution - how the system detects and links contradictory or evolving information",
+  "test_conversations": [
+    {
+      "id": "contradiction_001",
+      "category": "preference_conflict",
+      "user_message": "I love working with JavaScript. It's such a flexible language.",
+      "assistant_message": "JavaScript's flexibility is definitely one of its strengths!",
+      "ground_truth_notes": [
+        {
+          "content": "loves working with JavaScript",
+          "type": "preference:language",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["javascript", "positive-sentiment", "programming"],
+          "reasoning": "Strong positive statement"
+        },
+        {
+          "content": "values JavaScript's flexibility",
+          "type": "preference:feature",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["javascript", "flexibility", "language-feature"],
+          "reasoning": "Stated value"
+        }
+      ]
+    },
+    {
+      "id": "contradiction_002",
+      "category": "preference_conflict",
+      "user_message": "Actually, JavaScript's flexibility can be frustrating. I keep running into weird type coercion bugs.",
+      "assistant_message": "That's a common pain point. JavaScript's type coercion can definitely lead to unexpected behavior.",
+      "ground_truth_notes": [
+        {
+          "content": "finds JavaScript's flexibility frustrating",
+          "type": "preference:feature",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["javascript", "frustration", "negative-aspect"],
+          "reasoning": "Contradicts previous positive view"
+        },
+        {
+          "content": "encounters type coercion bugs in JavaScript",
+          "type": "problem:technical",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["javascript", "type-coercion", "bugs"],
+          "reasoning": "Specific technical problem"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_001"],
+        "relationship_type": "contradicts",
+        "should_update_tags": ["contradiction_001"],
+        "tag_evolution_rationale": "Original note should gain nuance tags like 'mixed-feelings', 'context-dependent'. Both notes should be linked with 'contradicts' relationship"
+      }
+    },
+    {
+      "id": "contradiction_003",
+      "category": "preference_conflict",
+      "user_message": "That's why I started using TypeScript. Catches those type errors at compile time.",
+      "assistant_message": "TypeScript is a great solution for that! It adds the type safety many developers want.",
+      "ground_truth_notes": [
+        {
+          "content": "started using TypeScript",
+          "type": "preference:language",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["typescript", "type-safety", "solution"],
+          "reasoning": "New preference adoption"
+        },
+        {
+          "content": "prefers TypeScript for type safety",
+          "type": "preference:feature",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["typescript", "type-safety", "compile-time-checks"],
+          "reasoning": "Reason for preference"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_001", "contradiction_002"],
+        "relationship_type": "resolves",
+        "tag_evolution_rationale": "JavaScript notes should gain context about 'superseded-by-typescript' or 'evolved-preference', forming a narrative of preference evolution"
+      }
+    },
+    {
+      "id": "contradiction_004",
+      "category": "temporal_contradiction",
+      "user_message": "I prefer working from home. Office environments are too distracting.",
+      "assistant_message": "Working from home can definitely provide more focus and fewer interruptions.",
+      "ground_truth_notes": [
+        {
+          "content": "prefers working from home",
+          "type": "preference:workplace",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["remote-work", "work-from-home", "preference"],
+          "reasoning": "Explicit preference"
+        },
+        {
+          "content": "finds office environments distracting",
+          "type": "preference:workplace",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["office", "distracting", "negative-opinion"],
+          "reasoning": "Stated negative aspect"
+        }
+      ]
+    },
+    {
+      "id": "contradiction_005",
+      "category": "temporal_contradiction",
+      "user_message": "I've been going to the office more lately. I miss the in-person collaboration.",
+      "assistant_message": "In-person collaboration does have unique benefits that can be hard to replicate remotely.",
+      "ground_truth_notes": [
+        {
+          "content": "has been going to office more recently",
+          "type": "personal:habits",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["office", "recent-change", "hybrid-work"],
+          "reasoning": "Recent behavioral change"
+        },
+        {
+          "content": "values in-person collaboration",
+          "type": "preference:workplace",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["collaboration", "in-person", "office"],
+          "reasoning": "Stated value"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_004"],
+        "relationship_type": "updates",
+        "should_update_tags": ["contradiction_004"],
+        "tag_evolution_rationale": "Previous work-from-home preference should be updated with temporal context, tags like 'previous-preference', 'evolved', while new notes show 'current-preference', 'hybrid-approach'"
+      }
+    },
+    {
+      "id": "contradiction_006",
+      "category": "complexity_preference",
+      "user_message": "I like keeping my code simple and straightforward. YAGNI principle all the way.",
+      "assistant_message": "YAGNI (You Aren't Gonna Need It) is a great principle for avoiding over-engineering!",
+      "ground_truth_notes": [
+        {
+          "content": "prefers simple and straightforward code",
+          "type": "preference:approach",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["simplicity", "code-style", "yagni"],
+          "reasoning": "Explicit preference"
+        },
+        {
+          "content": "follows YAGNI principle",
+          "type": "preference:principle",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["yagni", "principle", "avoid-over-engineering"],
+          "reasoning": "Explicit principle adherence"
+        }
+      ]
+    },
+    {
+      "id": "contradiction_007",
+      "category": "complexity_preference",
+      "user_message": "For this project, I'm building a complex plugin architecture with dependency injection. Need to make it extensible.",
+      "assistant_message": "A plugin architecture with DI makes sense when you need that level of extensibility!",
+      "ground_truth_notes": [
+        {
+          "content": "building complex plugin architecture",
+          "type": "skill:architecture",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["plugin-architecture", "complex", "current-project"],
+          "reasoning": "Current activity"
+        },
+        {
+          "content": "uses dependency injection",
+          "type": "skill:pattern",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["dependency-injection", "design-pattern"],
+          "reasoning": "Specific pattern usage"
+        },
+        {
+          "content": "values extensibility",
+          "type": "preference:architecture",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["extensibility", "architecture-goal"],
+          "reasoning": "Stated architectural goal"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_006"],
+        "relationship_type": "contextual_exception",
+        "should_update_tags": ["contradiction_006"],
+        "tag_evolution_rationale": "YAGNI note should gain context tags like 'context-dependent', 'general-preference', while complex architecture note shows 'specific-requirements-driven'. Both can coexist with proper context"
+      }
+    },
+    {
+      "id": "contradiction_008",
+      "category": "tool_migration",
+      "user_message": "I've been using MySQL for years. Know it inside and out.",
+      "assistant_message": "Deep MySQL knowledge is valuable! It's a reliable database system.",
+      "ground_truth_notes": [
+        {
+          "content": "has years of MySQL experience",
+          "type": "skill:database",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["mysql", "years-experience", "expert"],
+          "reasoning": "Long-term experience claim"
+        },
+        {
+          "content": "knows MySQL thoroughly",
+          "type": "skill:database",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["mysql", "expert-knowledge"],
+          "reasoning": "Claim of deep knowledge"
+        }
+      ]
+    },
+    {
+      "id": "contradiction_009",
+      "category": "tool_migration",
+      "user_message": "We're migrating to PostgreSQL. MySQL's JSON support is too limited for our needs.",
+      "assistant_message": "PostgreSQL does have superior JSON handling compared to MySQL!",
+      "ground_truth_notes": [
+        {
+          "content": "migrating from MySQL to PostgreSQL",
+          "type": "personal:project",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["postgresql", "mysql", "migration", "current-activity"],
+          "reasoning": "Current migration activity"
+        },
+        {
+          "content": "finds MySQL's JSON support limited",
+          "type": "opinion:technical",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["mysql", "json", "limitation"],
+          "reasoning": "Technical limitation identified"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_008"],
+        "relationship_type": "evolves_from",
+        "should_update_tags": ["contradiction_008"],
+        "tag_evolution_rationale": "MySQL expertise notes should gain tags like 'historical', 'migrating-away', while maintaining value of expertise. PostgreSQL becomes 'future-stack'"
+      }
+    },
+    {
+      "id": "contradiction_010",
+      "category": "tool_migration",
+      "user_message": "Learning PostgreSQL has been interesting. The query planner is more sophisticated than MySQL's.",
+      "assistant_message": "PostgreSQL's query planner is definitely one of its strengths!",
+      "ground_truth_notes": [
+        {
+          "content": "learning PostgreSQL",
+          "type": "skill:database",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["postgresql", "learning", "current"],
+          "reasoning": "Current learning activity"
+        },
+        {
+          "content": "appreciates PostgreSQL's query planner",
+          "type": "opinion:technical",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["postgresql", "query-planner", "positive-opinion"],
+          "reasoning": "Positive comparative assessment"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_008", "contradiction_009"],
+        "tag_evolution_rationale": "Complete migration narrative should emerge: MySQL (expert, historical) → migration (current) → PostgreSQL (learning, future)"
+      }
+    },
+    {
+      "id": "contradiction_011",
+      "category": "methodology_conflict",
+      "user_message": "I'm a big fan of TDD. Write tests first, always.",
+      "assistant_message": "Test-Driven Development is a great discipline for ensuring code quality!",
+      "ground_truth_notes": [
+        {
+          "content": "is a big fan of TDD",
+          "type": "preference:methodology",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["tdd", "testing", "methodology"],
+          "reasoning": "Strong preference statement"
+        },
+        {
+          "content": "writes tests first",
+          "type": "preference:practice",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["tdd", "test-first", "practice"],
+          "reasoning": "Explicit practice with 'always'"
+        }
+      ]
+    },
+    {
+      "id": "contradiction_012",
+      "category": "methodology_conflict",
+      "user_message": "For this prototype, I'm skipping tests to move faster. Can add them later.",
+      "assistant_message": "That's a pragmatic approach for rapid prototyping!",
+      "ground_truth_notes": [
+        {
+          "content": "skipping tests for current prototype",
+          "type": "personal:practice",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["prototype", "no-tests", "speed-priority"],
+          "reasoning": "Current deviation from usual practice"
+        },
+        {
+          "content": "prioritizes speed for prototypes",
+          "type": "preference:approach",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["prototype", "speed", "pragmatic"],
+          "reasoning": "Contextual priority"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_011"],
+        "relationship_type": "contextual_exception",
+        "should_update_tags": ["contradiction_011"],
+        "tag_evolution_rationale": "TDD preference should gain nuance: 'general-practice', 'context-dependent'. Prototype note shows 'exception', 'pragmatic-adjustment'"
+      }
+    },
+    {
+      "id": "contradiction_013",
+      "category": "opinion_reversal",
+      "user_message": "NoSQL databases are overhyped. Give me a good relational database any day.",
+      "assistant_message": "Relational databases do have proven reliability and ACID guarantees!",
+      "ground_truth_notes": [
+        {
+          "content": "thinks NoSQL is overhyped",
+          "type": "opinion:technical",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["nosql", "skeptical", "overhyped"],
+          "reasoning": "Negative opinion statement"
+        },
+        {
+          "content": "prefers relational databases",
+          "type": "preference:database",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["relational", "sql", "preference"],
+          "reasoning": "Explicit preference"
+        }
+      ]
+    },
+    {
+      "id": "contradiction_014",
+      "category": "opinion_reversal",
+      "user_message": "I'm working with MongoDB now. For document storage, it's actually really good.",
+      "assistant_message": "MongoDB is well-suited for document-oriented data models!",
+      "ground_truth_notes": [
+        {
+          "content": "working with MongoDB",
+          "type": "skill:database",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["mongodb", "nosql", "current-work"],
+          "reasoning": "Current activity"
+        },
+        {
+          "content": "finds MongoDB good for document storage",
+          "type": "opinion:technical",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["mongodb", "document-storage", "positive-opinion"],
+          "reasoning": "Positive assessment, contradicts NoSQL skepticism"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_013"],
+        "relationship_type": "updates",
+        "should_update_tags": ["contradiction_013"],
+        "tag_evolution_rationale": "NoSQL skepticism should be updated with nuance: 'use-case-dependent', 'evolved-opinion'. Both preferences can coexist with proper context"
+      }
+    },
+    {
+      "id": "contradiction_015",
+      "category": "opinion_reversal",
+      "user_message": "MongoDB's flexibility for our analytics events is perfect. NoSQL definitely has its place.",
+      "assistant_message": "That's a mature perspective - choosing the right tool for the right job!",
+      "ground_truth_notes": [
+        {
+          "content": "uses MongoDB for analytics events",
+          "type": "skill:database",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["mongodb", "analytics", "use-case"],
+          "reasoning": "Specific use case"
+        },
+        {
+          "content": "believes NoSQL has its place",
+          "type": "opinion:technical",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["nosql", "use-case-dependent", "nuanced-opinion"],
+          "reasoning": "Evolved opinion showing nuance"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["contradiction_013", "contradiction_014"],
+        "tag_evolution_rationale": "Complete opinion evolution: skeptical → hands-on-experience → nuanced-understanding. Original skepticism gains 'evolved', 'pre-experience' tags"
+      }
+    }
+  ],
+  "test_queries": [
+    {
+      "query": "How does the user feel about JavaScript?",
+      "expected_contradiction_handling": "Should show both positive (flexibility) and negative (type coercion) aspects, linked with 'contradicts' relationship, leading to TypeScript preference",
+      "relevant_notes": ["contradiction_001", "contradiction_002", "contradiction_003"]
+    },
+    {
+      "query": "Does the user prefer working from home or office?",
+      "expected_contradiction_handling": "Should show temporal evolution from strong WFH preference to hybrid approach valuing in-person collaboration",
+      "relevant_notes": ["contradiction_004", "contradiction_005"]
+    },
+    {
+      "query": "What database does the user prefer?",
+      "expected_contradiction_handling": "Should show migration from MySQL expertise to PostgreSQL, and evolution from NoSQL skepticism to nuanced view",
+      "relevant_notes": ["contradiction_008", "contradiction_009", "contradiction_010", "contradiction_013", "contradiction_014", "contradiction_015"]
+    }
+  ],
+  "evolution_metrics": {
+    "contradiction_detection": "System should identify conflicting notes and link them with appropriate relationship types",
+    "contextual_resolution": "Contradictions should be resolved with contextual tags: temporal, use-case-dependent, evolved-opinion",
+    "narrative_coherence": "Related contradictions should form coherent narratives of preference/opinion evolution",
+    "nuance_preservation": "Both sides of contradictions should be preserved with proper context rather than simple replacement"
+  }
+}

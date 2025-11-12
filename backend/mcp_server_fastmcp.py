@@ -41,9 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP(
-    name="mnemosyne",
-    version="3.1.0",
-    description="Give AI assistants long-term memory - remember conversations, extract knowledge, recall context"
+    name="mnemosyne"
 )
 
 # ==============================================================================

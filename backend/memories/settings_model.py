@@ -93,18 +93,57 @@ class Settings(models.Model):
         default=60,
         help_text="Request timeout in seconds for generation"
     )
+    generation_top_p = models.FloatField(
+        default=0.8,
+        help_text="Top-p (nucleus) sampling for generation (0.0-1.0)"
+    )
+    generation_top_k = models.IntegerField(
+        default=20,
+        help_text="Top-k sampling for generation (0 = disabled)"
+    )
+    generation_min_p = models.FloatField(
+        default=0.0,
+        help_text="Min-p sampling for generation (0.0-1.0)"
+    )
 
     # Prompt Customization
-    # Allow users to customize the prompts used for extraction and relationship building
+    # Allow users to customize the prompt used for atomic note extraction
+    # (A-MEM prompts for enrichment, link generation, and evolution are hardcoded from paper)
     extraction_prompt = models.TextField(
         blank=True,
         default='',
         help_text="Custom prompt for atomic note extraction (uses default if empty)"
     )
-    relationship_prompt = models.TextField(
-        blank=True,
-        default='',
-        help_text="Custom prompt for relationship building (uses default if empty)"
+
+    # A-MEM Configuration (Advanced)
+    # Fine-tune A-MEM's note enrichment, link generation, and memory evolution
+    amem_enrichment_temperature = models.FloatField(
+        default=0.3,
+        help_text="Temperature for note enrichment LLM calls (lower = more focused)"
+    )
+    amem_enrichment_max_tokens = models.IntegerField(
+        default=300,
+        help_text="Max tokens for note enrichment responses"
+    )
+    amem_link_generation_temperature = models.FloatField(
+        default=0.3,
+        help_text="Temperature for link generation LLM calls"
+    )
+    amem_link_generation_max_tokens = models.IntegerField(
+        default=500,
+        help_text="Max tokens for link generation responses"
+    )
+    amem_link_generation_k = models.IntegerField(
+        default=10,
+        help_text="Number of nearest neighbors to consider for link generation (k)"
+    )
+    amem_evolution_temperature = models.FloatField(
+        default=0.3,
+        help_text="Temperature for memory evolution LLM calls"
+    )
+    amem_evolution_max_tokens = models.IntegerField(
+        default=800,
+        help_text="Max tokens for memory evolution responses"
     )
 
     # Extraction Configuration
@@ -115,8 +154,8 @@ class Settings(models.Model):
 
     # Search Configuration
     enable_query_expansion = models.BooleanField(
-        default=True,
-        help_text="Enable query expansion for better search recall (expands abstract queries into concrete variations)"
+        default=False,
+        help_text="Enable query expansion (may be redundant with A-MEM multi-attribute embeddings - test both)"
     )
 
     # Metadata
@@ -223,10 +262,21 @@ class Settings(models.Model):
             'generation_temperature': self.generation_temperature,
             'generation_max_tokens': self.generation_max_tokens,
             'generation_timeout': self.generation_timeout,
+            'generation_top_p': self.generation_top_p,
+            'generation_top_k': self.generation_top_k,
+            'generation_min_p': self.generation_min_p,
 
             # Prompt customization
             'extraction_prompt': self.extraction_prompt,
-            'relationship_prompt': self.relationship_prompt,
+
+            # A-MEM configuration
+            'amem_enrichment_temperature': self.amem_enrichment_temperature,
+            'amem_enrichment_max_tokens': self.amem_enrichment_max_tokens,
+            'amem_link_generation_temperature': self.amem_link_generation_temperature,
+            'amem_link_generation_max_tokens': self.amem_link_generation_max_tokens,
+            'amem_link_generation_k': self.amem_link_generation_k,
+            'amem_evolution_temperature': self.amem_evolution_temperature,
+            'amem_evolution_max_tokens': self.amem_evolution_max_tokens,
 
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

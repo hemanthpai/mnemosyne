@@ -1,0 +1,286 @@
+{
+  "dataset_version": "1.0",
+  "created": "2025-01-09",
+  "description": "Test dataset for temporal memory evolution - how memories evolve as preferences and skills change over time",
+  "test_conversations": [
+    {
+      "id": "temporal_001",
+      "category": "skill_evolution",
+      "user_message": "I'm learning React. Just started a few weeks ago.",
+      "assistant_message": "That's great! React is a powerful library for building user interfaces. How are you finding it so far?",
+      "ground_truth_notes": [
+        {
+          "content": "is learning React",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["react", "learning", "beginner"],
+          "reasoning": "Explicit statement about learning React recently"
+        },
+        {
+          "content": "started learning React a few weeks ago",
+          "type": "personal:timeline",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["react", "timeline", "recent"],
+          "reasoning": "Temporal context about when learning started"
+        }
+      ]
+    },
+    {
+      "id": "temporal_002",
+      "category": "skill_evolution",
+      "user_message": "I've been practicing React hooks a lot. useState and useEffect are starting to make sense now.",
+      "assistant_message": "Excellent! Understanding hooks is crucial for modern React development.",
+      "ground_truth_notes": [
+        {
+          "content": "is learning React hooks",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["react", "hooks", "learning"],
+          "reasoning": "Explicit statement about practicing hooks"
+        },
+        {
+          "content": "understands useState and useEffect",
+          "type": "skill:programming",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["react", "hooks", "useState", "useEffect"],
+          "reasoning": "Shows progression in React knowledge"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_001"],
+        "should_update_tags": ["temporal_001"],
+        "tag_evolution_rationale": "Original 'learning React' note should gain more specific tags like 'hooks', 'useState', 'useEffect' as user's knowledge deepens"
+      }
+    },
+    {
+      "id": "temporal_003",
+      "category": "skill_evolution",
+      "user_message": "I just built my first React app with custom hooks and context API. Really proud of it!",
+      "assistant_message": "That's a significant milestone! Custom hooks and Context API show you're moving beyond the basics.",
+      "ground_truth_notes": [
+        {
+          "content": "built first React app with custom hooks and context",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["react", "custom-hooks", "context-api", "completed-project"],
+          "reasoning": "Achievement milestone in React learning"
+        },
+        {
+          "content": "can create custom hooks",
+          "type": "skill:programming",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["react", "custom-hooks", "advanced"],
+          "reasoning": "Demonstrates intermediate React skills"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_001", "temporal_002"],
+        "should_update_tags": ["temporal_001", "temporal_002"],
+        "tag_evolution_rationale": "Early learning notes should evolve from 'beginner' to 'intermediate', gaining tags like 'custom-hooks', 'context-api'"
+      }
+    },
+    {
+      "id": "temporal_004",
+      "category": "skill_evolution",
+      "user_message": "I'm now teaching React to junior developers at work. Been using it professionally for 6 months.",
+      "assistant_message": "Wonderful progression! Teaching others is a great way to solidify your own understanding.",
+      "ground_truth_notes": [
+        {
+          "content": "teaches React to junior developers",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["react", "teaching", "mentoring", "professional"],
+          "reasoning": "Shows expert-level proficiency"
+        },
+        {
+          "content": "has 6 months professional React experience",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["react", "professional", "experience-duration"],
+          "reasoning": "Explicit timeline of professional use"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_001", "temporal_002", "temporal_003"],
+        "should_update_tags": ["temporal_001", "temporal_002", "temporal_003"],
+        "tag_evolution_rationale": "All previous React notes should evolve to reflect professional proficiency, tags shifting from 'learning' to 'professional', 'expert', 'teaching'"
+      }
+    },
+    {
+      "id": "temporal_005",
+      "category": "preference_evolution",
+      "user_message": "I'm trying out different code editors. Currently using Sublime Text.",
+      "assistant_message": "Sublime Text is a solid choice - fast and lightweight.",
+      "ground_truth_notes": [
+        {
+          "content": "currently uses Sublime Text",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["sublime-text", "editor", "currently-trying"],
+          "reasoning": "Stated current editor preference"
+        },
+        {
+          "content": "is exploring different code editors",
+          "type": "personal:exploration",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["editor", "exploring", "decision-process"],
+          "reasoning": "Shows active exploration phase"
+        }
+      ]
+    },
+    {
+      "id": "temporal_006",
+      "category": "preference_evolution",
+      "user_message": "Switched to VSCode last week. The extensions ecosystem is amazing.",
+      "assistant_message": "VSCode's extension marketplace is definitely one of its strongest features!",
+      "ground_truth_notes": [
+        {
+          "content": "switched to VSCode",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vscode", "editor", "switched-from-sublime"],
+          "reasoning": "Explicit preference change"
+        },
+        {
+          "content": "likes VSCode extensions",
+          "type": "preference:feature",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["vscode", "extensions", "positive-opinion"],
+          "reasoning": "Positive statement about feature"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_005"],
+        "should_update_tags": ["temporal_005"],
+        "relationship_type": "supersedes",
+        "tag_evolution_rationale": "Sublime Text note should be tagged as 'previous-preference' or 'superseded', while VSCode becomes 'current-preference'"
+      }
+    },
+    {
+      "id": "temporal_007",
+      "category": "preference_evolution",
+      "user_message": "I've been using VSCode exclusively for 3 months now. Can't imagine going back.",
+      "assistant_message": "Sounds like you've found your editor! VSCode has become the standard for many developers.",
+      "ground_truth_notes": [
+        {
+          "content": "uses VSCode exclusively",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vscode", "editor", "exclusive", "committed"],
+          "reasoning": "Strong commitment statement"
+        },
+        {
+          "content": "has 3 months VSCode experience",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vscode", "experience-duration"],
+          "reasoning": "Temporal tracking"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_005", "temporal_006"],
+        "should_update_tags": ["temporal_006"],
+        "tag_evolution_rationale": "VSCode preference should strengthen from 'current' to 'committed', 'exclusive'"
+      }
+    },
+    {
+      "id": "temporal_008",
+      "category": "interest_evolution",
+      "user_message": "I've started reading about machine learning. Seems interesting but very math-heavy.",
+      "assistant_message": "ML does require solid math foundations, especially linear algebra and statistics.",
+      "ground_truth_notes": [
+        {
+          "content": "interested in machine learning",
+          "type": "interest:topic",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["machine-learning", "exploring", "beginner"],
+          "reasoning": "Expressed interest with beginner perspective"
+        },
+        {
+          "content": "finds machine learning math-heavy",
+          "type": "opinion:topic",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["machine-learning", "mathematics", "challenging"],
+          "reasoning": "Perception of ML's difficulty"
+        }
+      ]
+    },
+    {
+      "id": "temporal_009",
+      "category": "interest_evolution",
+      "user_message": "Been working through Andrew Ng's ML course. The math is making more sense now.",
+      "assistant_message": "Andrew Ng's course is excellent! It strikes a good balance between theory and practice.",
+      "ground_truth_notes": [
+        {
+          "content": "taking Andrew Ng's ML course",
+          "type": "skill:learning",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["machine-learning", "course", "andrew-ng", "active-learning"],
+          "reasoning": "Specific learning activity"
+        },
+        {
+          "content": "understanding ML mathematics better",
+          "type": "skill:knowledge",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["machine-learning", "mathematics", "improving"],
+          "reasoning": "Shows progression in understanding"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_008"],
+        "should_update_tags": ["temporal_008"],
+        "tag_evolution_rationale": "Initial interest should evolve from 'exploring' to 'active-learning', 'improving'. Math challenge perception should update to show progress"
+      }
+    },
+    {
+      "id": "temporal_010",
+      "category": "interest_evolution",
+      "user_message": "Just implemented my first neural network from scratch! ML is definitely my focus area now.",
+      "assistant_message": "Congratulations! Implementing networks from scratch really deepens your understanding.",
+      "ground_truth_notes": [
+        {
+          "content": "implemented neural network from scratch",
+          "type": "skill:programming",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["machine-learning", "neural-networks", "hands-on", "achievement"],
+          "reasoning": "Concrete achievement"
+        },
+        {
+          "content": "focusing on machine learning",
+          "type": "interest:topic",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["machine-learning", "focus-area", "committed"],
+          "reasoning": "Strong commitment to ML"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["temporal_008", "temporal_009"],
+        "should_update_tags": ["temporal_008", "temporal_009"],
+        "tag_evolution_rationale": "Interest should evolve from 'exploring' to 'focus-area', 'committed'. Challenge perception should shift to capability demonstration"
+      }
+    }
+  ],
+  "test_queries": [
+    {
+      "query": "What is the user's experience level with React?",
+      "expected_evolution": "Should show progression from beginner to teaching/professional level",
+      "relevant_notes": ["temporal_001", "temporal_002", "temporal_003", "temporal_004"]
+    },
+    {
+      "query": "What code editor does the user prefer?",
+      "expected_evolution": "Should show preference evolution from Sublime to committed VSCode user",
+      "relevant_notes": ["temporal_005", "temporal_006", "temporal_007"]
+    },
+    {
+      "query": "How interested is the user in machine learning?",
+      "expected_evolution": "Should show progression from curiosity to committed focus area",
+      "relevant_notes": ["temporal_008", "temporal_009", "temporal_010"]
+    }
+  ],
+  "evolution_metrics": {
+    "tag_updates_expected": "Previous notes should gain new tags reflecting progression",
+    "context_refinement_expected": "Note contexts should be updated to reflect temporal progression",
+    "relationship_strength_expected": "Links between temporal sequence should strengthen over time",
+    "importance_score_evolution": "More recent and advanced notes should have higher importance scores"
+  }
+}

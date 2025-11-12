@@ -1,0 +1,34 @@
+{
+  "dataset_version": "1.0",
+  "created": "2025-01-11",
+  "description": "Quick test dataset with 1 conversation for rapid benchmark testing",
+  "test_conversations": [
+    {
+      "id": "quick_001",
+      "category": "preference:tool",
+      "user_message": "I prefer using pytest for all my Python testing needs. It's really flexible with fixtures.",
+      "assistant_message": "pytest is an excellent choice! The fixture system and plugin ecosystem make it very powerful for Python testing.",
+      "ground_truth_notes": [
+        {
+          "content": "uses pytest for testing",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["pytest", "testing", "python"],
+          "reasoning": "Direct statement of tool preference"
+        }
+      ]
+    }
+  ],
+  "search_queries": [
+    {
+      "query": "What testing framework does the user prefer?",
+      "relevant_conversation_ids": ["quick_001"],
+      "expected_keywords": ["pytest", "testing", "python"]
+    },
+    {
+      "query": "Python testing tools",
+      "relevant_conversation_ids": ["quick_001"],
+      "expected_keywords": ["pytest"]
+    }
+  ]
+}

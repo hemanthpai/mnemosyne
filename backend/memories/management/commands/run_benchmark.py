@@ -14,21 +14,40 @@ from collections import defaultdict
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
+from django.core.cache import cache
 
 from memories.models import ConversationTurn, AtomicNote
-from memories.tasks import extract_atomic_notes
 from memories.graph_service import graph_service
+from memories.conversation_service import conversation_service
+import time
 
 
 class Command(BaseCommand):
     help = "Run benchmark tests for extraction and search quality"
+
+    def __init__(self):
+        super().__init__()
+        self.task_id = None
+
+    def update_progress(self, current, total, phase=''):
+        """Update progress in cache for UI polling"""
+        if not self.task_id:
+            return
+
+        progress_data = {
+            'current': current,
+            'total': total,
+            'phase': phase,
+            'percentage': int((current / total * 100)) if total > 0 else 0
+        }
+        cache.set(f'benchmark_progress_{self.task_id}', progress_data, timeout=3600)  # 1 hour
 
     def add_arguments(self, parser):
         parser.add_argument(
             '--test-type',
             type=str,
             default='all',
-            choices=['extraction', 'search', 'all'],
+            choices=['extraction', 'search', 'evolution', 'all'],
             help='Type of test to run'
         )
         parser.add_argument(
@@ -58,13 +77,23 @@ class Command(BaseCommand):
             default='',
             help='Observations about this benchmark run'
         )
+        parser.add_argument(
+            '--task-id',
+            type=str,
+            default='',
+            help='Task ID for progress tracking (internal use)'
+        )
 
     def handle(self, *args, **options):
         test_type = options['test_type']
         verbose = options['verbose']
         dataset_file = options['dataset']
+        self.task_id = options.get('task_id', '')
 
         # Load benchmark dataset
+        # Add .json extension if not present
+        if not dataset_file.endswith('.json'):
+            dataset_file = f'{dataset_file}.json'
         dataset_path = Path(__file__).parent.parent.parent / 'test_data' / dataset_file
 
         if not dataset_path.exists():
@@ -74,6 +103,18 @@ class Command(BaseCommand):
         with open(dataset_path, 'r') as f:
             dataset = json.load(f)
 
+        # Calculate total items for progress tracking
+        total_items = 0
+        if test_type in ['extraction', 'all']:
+            total_items += len(dataset.get('test_conversations', []))
+        if test_type in ['search', 'all']:
+            total_items += len(dataset.get('test_queries', []))
+        if test_type in ['evolution', 'all']:
+            total_items += len(dataset.get('test_conversations', []))
+
+        # Initialize progress
+        self.update_progress(0, total_items, phase='Starting benchmark')
+
         self.stdout.write(self.style.SUCCESS(f'\n=== Benchmark Testing ==='))
         self.stdout.write(f'Dataset: {dataset.get("description", "Unknown")}')
         self.stdout.write(f'Version: {dataset.get("dataset_version", "Unknown")}')
@@ -81,14 +122,18 @@ class Command(BaseCommand):
         self.stdout.write(f'Test queries: {len(dataset.get("test_queries", []))}\n')
 
         results = {}
+        completed_items = 0  # Track cumulative progress across all test phases
 
         # Run extraction tests
         if test_type in ['extraction', 'all']:
             self.stdout.write(self.style.SUCCESS('\n--- Extraction Quality Tests ---\n'))
             results['extraction'] = self.run_extraction_tests(
                 dataset.get('test_conversations', []),
-                verbose
+                verbose,
+                completed_items,
+                total_items
             )
+            completed_items += len(dataset.get('test_conversations', []))
 
         # Run search tests
         if test_type in ['search', 'all']:
@@ -96,7 +141,20 @@ class Command(BaseCommand):
             results['search'] = self.run_search_tests(
                 dataset.get('test_queries', []),
                 dataset.get('test_conversations', []),
-                verbose
+                verbose,
+                completed_items,
+                total_items
+            )
+            completed_items += len(dataset.get('test_queries', []))
+
+        # Run evolution tests
+        if test_type in ['evolution', 'all']:
+            self.stdout.write(self.style.SUCCESS('\n--- Memory Evolution Tests ---\n'))
+            results['evolution'] = self.run_evolution_tests(
+                dataset.get('test_conversations', []),
+                verbose,
+                completed_items,
+                total_items
             )
 
         # Print summary
@@ -106,7 +164,7 @@ class Command(BaseCommand):
         if options.get('save_results'):
             self.save_results(results, options)
 
-    def run_extraction_tests(self, test_conversations: List[Dict], verbose: bool) -> Dict[str, Any]:
+    def run_extraction_tests(self, test_conversations: List[Dict], verbose: bool, completed_so_far: int, total_items: int) -> Dict[str, Any]:
         """Run extraction quality tests"""
 
         # Use a test user ID
@@ -127,6 +185,8 @@ class Command(BaseCommand):
             'ground_truth': 0, 'extracted': 0
         })
 
+        completed_tests = 0
+
         for test_case in test_conversations:
             test_id = test_case['id']
             category = test_case.get('category', 'unknown')
@@ -139,25 +199,44 @@ class Command(BaseCommand):
                 self.stdout.write(f'\nTest: {test_id} ({category})')
                 self.stdout.write(f'User: {user_message[:80]}...')
 
-            # Create conversation turn
-            turn_id = uuid.uuid4()
-            turn = ConversationTurn.objects.create(
-                id=turn_id,
-                user_id=test_user_id,
+            # Create conversation turn using proper service
+            # This ensures proper embedding generation, vector storage, and caching
+            turn = conversation_service.store_turn(
+                user_id=str(test_user_id),
                 session_id=f'benchmark_session_{test_id}',
-                turn_number=1,
                 user_message=user_message,
-                assistant_message=assistant_message,
-                timestamp=timezone.now(),
-                vector_id=f'benchmark_turn_{turn_id}'  # Unique vector ID
+                assistant_message=assistant_message
             )
 
-            # Run extraction synchronously
-            extraction_result = extract_atomic_notes(str(turn.id))
+            # Poll for extraction completion (max 120 seconds)
+            max_wait = 120
+            poll_interval = 2
+            waited = 0
 
-            if extraction_result.get('status') != 'completed':
+            while waited < max_wait:
+                try:
+                    turn.refresh_from_db()
+                    if turn.extracted:
+                        break
+                except ConversationTurn.DoesNotExist:
+                    # Turn was deleted due to embedding failure
+                    self.stdout.write(self.style.ERROR(
+                        f'  ✗ Turn deleted for {test_id} (likely embedding generation failure)'
+                    ))
+                    break
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+            # Check if turn still exists
+            try:
+                turn.refresh_from_db()
+            except ConversationTurn.DoesNotExist:
+                # Turn was deleted, skip this test case
+                continue
+
+            if not turn.extracted:
                 self.stdout.write(self.style.WARNING(
-                    f'  ⚠ Extraction failed for {test_id}: {extraction_result}'
+                    f'  ⚠ Extraction timed out for {test_id} after {max_wait}s'
                 ))
                 continue
 
@@ -248,6 +327,10 @@ class Command(BaseCommand):
                 f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
                 self.stdout.write(f'  Metrics: P={precision:.2f} R={recall:.2f} F1={f1:.2f}\n')
 
+            # Update progress after completing this test
+            completed_tests += 1
+            self.update_progress(completed_so_far + completed_tests, total_items, phase='Extraction tests')
+
         # Calculate overall metrics
         precision = total_true_positives / (total_true_positives + total_false_positives) \
             if (total_true_positives + total_false_positives) > 0 else 0
@@ -272,7 +355,7 @@ class Command(BaseCommand):
             'category_results': dict(category_results)
         }
 
-    def run_search_tests(self, test_queries: List[Dict], test_conversations: List[Dict], verbose: bool) -> Dict[str, Any]:
+    def run_search_tests(self, test_queries: List[Dict], test_conversations: List[Dict], verbose: bool, completed_so_far: int, total_items: int) -> Dict[str, Any]:
         """Run search relevance tests"""
 
         # Use test user ID
@@ -298,6 +381,7 @@ class Command(BaseCommand):
         total_precision_at_10 = 0
         total_recall_at_10 = 0
         total_mrr = 0
+        completed_queries = 0
 
         for query_test in test_queries:
             query_id = query_test['query_id']
@@ -369,6 +453,10 @@ class Command(BaseCommand):
             total_recall_at_10 += recall_at_10
             total_mrr += mrr
 
+            # Update progress after completing this query
+            completed_queries += 1
+            self.update_progress(completed_so_far + completed_queries, total_items, phase='Search tests')
+
         # Calculate averages
         avg_precision_at_10 = total_precision_at_10 / total_queries if total_queries > 0 else 0
         avg_recall_at_10 = total_recall_at_10 / total_queries if total_queries > 0 else 0
@@ -379,6 +467,122 @@ class Command(BaseCommand):
             'average_recall_at_10': avg_recall_at_10,
             'mean_reciprocal_rank': avg_mrr,
             'total_queries': total_queries
+        }
+
+    def run_evolution_tests(self, test_conversations: List[Dict], verbose: bool, completed_so_far: int, total_items: int) -> Dict[str, Any]:
+        """Run memory evolution tests"""
+        from memories.amem_service import amem_service
+
+        # Use test user ID
+        test_user_id = uuid.UUID('00000000-0000-0000-0000-000000000001')
+
+        # Get all notes for test user (should exist from extraction tests)
+        all_notes = list(AtomicNote.objects.filter(user_id=test_user_id, is_amem_enriched=True))
+
+        if len(all_notes) < 2:
+            self.stdout.write(self.style.WARNING(
+                f'Not enough enriched notes for evolution testing (found {len(all_notes)}, need at least 2). '
+                f'Run extraction tests first.'
+            ))
+            return {
+                'notes_tested': 0,
+                'evolutions_triggered': 0,
+                'neighbors_updated': 0,
+                'avg_neighbors_per_evolution': 0
+            }
+
+        self.stdout.write(f'Testing evolution with {len(all_notes)} enriched notes\n')
+
+        total_evolutions_triggered = 0
+        total_neighbors_updated = 0
+        total_evolution_attempts = 0
+        evolution_details = []
+        completed_evolutions = 0
+        num_conversations = len(test_conversations)
+
+        # Test evolution for each note
+        for note in all_notes[:10]:  # Limit to 10 notes to avoid timeout
+            if verbose:
+                self.stdout.write(f'\nTesting evolution for note {note.id}')
+                self.stdout.write(f'  Content: {note.content[:80]}...')
+
+            # Find similar notes as neighbors (excluding self)
+            similar_notes = list(
+                AtomicNote.objects.filter(
+                    user_id=test_user_id,
+                    is_amem_enriched=True
+                ).exclude(id=note.id)[:5]  # Get up to 5 neighbors
+            )
+
+            if not similar_notes:
+                if verbose:
+                    self.stdout.write('  No neighbors found, skipping')
+                continue
+
+            # Store original state of neighbors
+            original_states = {}
+            for neighbor in similar_notes:
+                original_states[neighbor.id] = {
+                    'tags': list(neighbor.llm_tags) if neighbor.llm_tags else [],
+                    'context': neighbor.contextual_description
+                }
+
+            # Call evolve_memories
+            evolution_result = amem_service.evolve_memories(note, similar_notes)
+
+            total_evolution_attempts += 1
+
+            # Check if evolution was triggered
+            if evolution_result['evolved']:
+                total_evolutions_triggered += 1
+                num_updated = len(evolution_result['evolved'])
+                total_neighbors_updated += num_updated
+
+                if verbose:
+                    self.stdout.write(f'  ✓ Evolution triggered: {num_updated} neighbors updated')
+                    self.stdout.write(f'    Actions: {evolution_result["actions"]}')
+
+                # Check what changed
+                for evolved_id in evolution_result['evolved']:
+                    evolved_note = AtomicNote.objects.get(id=evolved_id)
+                    original = original_states[evolved_note.id]
+
+                    tags_changed = (evolved_note.llm_tags or []) != original['tags']
+                    context_changed = evolved_note.contextual_description != original['context']
+
+                    if verbose and (tags_changed or context_changed):
+                        self.stdout.write(f'    Note {evolved_id}:')
+                        if tags_changed:
+                            self.stdout.write(f'      Tags: {original["tags"]} → {evolved_note.llm_tags}')
+                        if context_changed:
+                            self.stdout.write(f'      Context updated')
+
+                evolution_details.append({
+                    'note_id': str(note.id),
+                    'neighbors_updated': num_updated,
+                    'actions': evolution_result['actions']
+                })
+            else:
+                if verbose:
+                    self.stdout.write('  No evolution needed')
+
+            # Update progress after processing this note
+            # Scale the progress based on conversations (total expected) vs notes processed
+            completed_evolutions += 1
+            progress_in_phase = min(completed_evolutions / max(1, len(all_notes[:10])) * num_conversations, num_conversations)
+            self.update_progress(completed_so_far + int(progress_in_phase), total_items, phase='Evolution tests')
+
+        # Calculate metrics
+        evolution_rate = total_evolutions_triggered / total_evolution_attempts if total_evolution_attempts > 0 else 0
+        avg_neighbors_per_evolution = total_neighbors_updated / total_evolutions_triggered if total_evolutions_triggered > 0 else 0
+
+        return {
+            'notes_tested': total_evolution_attempts,
+            'evolutions_triggered': total_evolutions_triggered,
+            'neighbors_updated': total_neighbors_updated,
+            'evolution_rate': evolution_rate,
+            'avg_neighbors_per_evolution': avg_neighbors_per_evolution,
+            'evolution_details': evolution_details
         }
 
     def print_summary(self, results: Dict, test_type: str):
@@ -432,6 +636,25 @@ class Command(BaseCommand):
                 quality = self.style.WARNING('FAIR ✓')
             else:
                 quality = self.style.ERROR('NEEDS IMPROVEMENT ✗')
+
+            self.stdout.write(f'\n  Overall Quality: {quality}')
+
+        if 'evolution' in results:
+            evo = results['evolution']
+            self.stdout.write(self.style.SUCCESS('\nMemory Evolution Quality:'))
+            self.stdout.write(f'  Notes Tested:       {evo["notes_tested"]}')
+            self.stdout.write(f'  Evolutions Triggered: {evo["evolutions_triggered"]} ({evo.get("evolution_rate", 0):.1%})')
+            self.stdout.write(f'  Neighbors Updated:  {evo["neighbors_updated"]}')
+            self.stdout.write(f'  Avg Neighbors/Evolution: {evo.get("avg_neighbors_per_evolution", 0):.1f}')
+
+            # Quality assessment
+            evolution_rate = evo.get('evolution_rate', 0)
+            if evolution_rate >= 0.3 and evo.get('avg_neighbors_per_evolution', 0) >= 1:
+                quality = self.style.SUCCESS('GOOD ✓✓')
+            elif evolution_rate >= 0.1:
+                quality = self.style.WARNING('FAIR ✓')
+            else:
+                quality = self.style.ERROR('LOW ACTIVITY ✗')
 
             self.stdout.write(f'\n  Overall Quality: {quality}')
 

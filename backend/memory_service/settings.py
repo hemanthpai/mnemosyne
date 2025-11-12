@@ -30,7 +30,6 @@ STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 STATICFILES_DIRS = [
-    (BASE_DIR / "../frontend/build/static").resolve(),
     (BASE_DIR / "../frontend/build/assets").resolve(),  # Vite builds assets here
 ]
 
@@ -107,6 +106,8 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PARSER_CLASSES": [
         "rest_framework.parsers.JSONParser",
+        "rest_framework.parsers.MultiPartParser",
+        "rest_framework.parsers.FormParser",
     ],
     # Disable authentication and CSRF for all API endpoints (KISS - we're an API service)
     "DEFAULT_AUTHENTICATION_CLASSES": [],
@@ -180,12 +181,22 @@ EMBEDDINGS_TIMEOUT = int(os.getenv("EMBEDDINGS_TIMEOUT", "30"))
 # Redis Cache Configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
+# Django Cache Configuration (use Redis for shared cache between app and worker)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+        "KEY_PREFIX": "mnemosyne",
+        "TIMEOUT": 3600,  # 1 hour default timeout
+    }
+}
+
 # Django-Q Background Job Configuration
 Q_CLUSTER = {
     "name": "mnemosyne",
     "workers": 2,
-    "timeout": 600,  # 10 minutes max per task
-    "retry": 900,  # Retry failed tasks after 15 minutes
+    "timeout": 7200,  # 2 hours max per task (benchmarks can take a long time)
+    "retry": 10800,  # Retry failed tasks after 3 hours (must be > timeout)
     "queue_limit": 50,
     "bulk": 10,
     "orm": "default",  # Use Django ORM (PostgreSQL) for task queue

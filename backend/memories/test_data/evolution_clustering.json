@@ -1,0 +1,375 @@
+{
+  "dataset_version": "1.0",
+  "created": "2025-01-09",
+  "description": "Test dataset for domain clustering and tag refinement - how related notes cluster together and evolve their categorization",
+  "test_conversations": [
+    {
+      "id": "cluster_001",
+      "category": "python_ecosystem",
+      "user_message": "I use pytest for all my testing needs.",
+      "assistant_message": "pytest is an excellent testing framework! Its fixtures and plugins make testing very flexible.",
+      "ground_truth_notes": [
+        {
+          "content": "uses pytest for testing",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["pytest", "testing", "python"],
+          "reasoning": "Explicit tool preference"
+        }
+      ]
+    },
+    {
+      "id": "cluster_002",
+      "category": "python_ecosystem",
+      "user_message": "I also use black for code formatting. Keeps everything consistent.",
+      "assistant_message": "Black is great for maintaining code style consistency across projects.",
+      "ground_truth_notes": [
+        {
+          "content": "uses black for code formatting",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["black", "code-formatting", "python"],
+          "reasoning": "Explicit tool preference"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_001"],
+        "tag_evolution_rationale": "Both notes should gain 'python-toolchain' or 'development-workflow' tags as the ecosystem pattern emerges"
+      }
+    },
+    {
+      "id": "cluster_003",
+      "category": "python_ecosystem",
+      "user_message": "And mypy for type checking. Love having static typing in Python.",
+      "assistant_message": "mypy is excellent for catching type errors early. Static typing definitely helps with larger Python codebases.",
+      "ground_truth_notes": [
+        {
+          "content": "uses mypy for type checking",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["mypy", "type-checking", "python"],
+          "reasoning": "Explicit tool preference"
+        },
+        {
+          "content": "prefers static typing in Python",
+          "type": "preference:approach",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["static-typing", "python", "code-quality"],
+          "reasoning": "Stated preference for static typing"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_001", "cluster_002"],
+        "tag_evolution_rationale": "All three notes should cluster as 'python-toolchain', 'quality-focused', 'modern-python-practices'"
+      }
+    },
+    {
+      "id": "cluster_004",
+      "category": "python_ecosystem",
+      "user_message": "I use poetry for dependency management. Makes packaging much easier.",
+      "assistant_message": "Poetry has really modernized Python packaging and dependency management!",
+      "ground_truth_notes": [
+        {
+          "content": "uses poetry for dependency management",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["poetry", "dependency-management", "python"],
+          "reasoning": "Explicit tool preference"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_001", "cluster_002", "cluster_003"],
+        "tag_evolution_rationale": "All four notes should gain comprehensive tags like 'modern-python-toolchain', 'best-practices', 'professional-setup'"
+      }
+    },
+    {
+      "id": "cluster_005",
+      "category": "python_ecosystem",
+      "user_message": "My standard Python setup is: poetry, pytest, black, mypy, and ruff for linting.",
+      "assistant_message": "That's a solid modern Python development stack! You've got all the bases covered.",
+      "ground_truth_notes": [
+        {
+          "content": "has standard Python toolchain setup",
+          "type": "preference:workflow",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["python", "toolchain", "workflow", "standardized"],
+          "reasoning": "Describes complete workflow"
+        },
+        {
+          "content": "uses ruff for linting",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["ruff", "linting", "python"],
+          "reasoning": "Explicit tool mention"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_001", "cluster_002", "cluster_003", "cluster_004"],
+        "tag_evolution_rationale": "This note synthesizes all previous tools, should trigger evolution of all related notes to gain 'integrated-workflow', 'complete-toolchain' tags"
+      }
+    },
+    {
+      "id": "cluster_006",
+      "category": "frontend_ecosystem",
+      "user_message": "For frontend, I use Vite as my build tool. It's so much faster than webpack.",
+      "assistant_message": "Vite's speed is definitely a game-changer, especially with hot module replacement!",
+      "ground_truth_notes": [
+        {
+          "content": "uses Vite for frontend builds",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vite", "build-tool", "frontend"],
+          "reasoning": "Explicit tool preference"
+        },
+        {
+          "content": "prefers Vite over webpack",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["vite", "webpack", "build-tool", "performance"],
+          "reasoning": "Comparative preference stated"
+        }
+      ]
+    },
+    {
+      "id": "cluster_007",
+      "category": "frontend_ecosystem",
+      "user_message": "I pair Vite with Tailwind CSS. Great developer experience.",
+      "assistant_message": "Vite and Tailwind is a popular combination. The fast rebuilds make Tailwind's utility-first approach very productive.",
+      "ground_truth_notes": [
+        {
+          "content": "uses Tailwind CSS",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["tailwind", "css", "frontend"],
+          "reasoning": "Explicit tool preference"
+        },
+        {
+          "content": "values good developer experience",
+          "type": "preference:value",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["developer-experience", "productivity"],
+          "reasoning": "Stated value preference"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_006"],
+        "tag_evolution_rationale": "Notes should cluster as 'frontend-toolchain', 'modern-frontend', 'performance-focused'"
+      }
+    },
+    {
+      "id": "cluster_008",
+      "category": "frontend_ecosystem",
+      "user_message": "And Vitest for testing frontend code. Keeps everything in the Vite ecosystem.",
+      "assistant_message": "Vitest's integration with Vite makes testing very seamless!",
+      "ground_truth_notes": [
+        {
+          "content": "uses Vitest for frontend testing",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["vitest", "testing", "frontend"],
+          "reasoning": "Explicit tool preference"
+        },
+        {
+          "content": "prefers keeping tools in same ecosystem",
+          "type": "preference:approach",
+          "confidence_range": [0.85, 0.95],
+          "tags": ["ecosystem-consistency", "integration"],
+          "reasoning": "Stated preference for ecosystem coherence"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_006", "cluster_007"],
+        "tag_evolution_rationale": "All Vite-related notes should gain 'vite-ecosystem', 'integrated-toolchain' tags"
+      }
+    },
+    {
+      "id": "cluster_009",
+      "category": "data_science_stack",
+      "user_message": "For data work, I use pandas and numpy extensively.",
+      "assistant_message": "Those are the foundational libraries for data science in Python!",
+      "ground_truth_notes": [
+        {
+          "content": "uses pandas extensively",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["pandas", "data-science", "python"],
+          "reasoning": "Explicit extensive usage"
+        },
+        {
+          "content": "uses numpy extensively",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["numpy", "data-science", "python"],
+          "reasoning": "Explicit extensive usage"
+        }
+      ]
+    },
+    {
+      "id": "cluster_010",
+      "category": "data_science_stack",
+      "user_message": "I also use scikit-learn for machine learning and matplotlib for visualization.",
+      "assistant_message": "That's the classic Python data science stack! Very comprehensive.",
+      "ground_truth_notes": [
+        {
+          "content": "uses scikit-learn for machine learning",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["scikit-learn", "machine-learning", "python"],
+          "reasoning": "Explicit tool usage"
+        },
+        {
+          "content": "uses matplotlib for visualization",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["matplotlib", "visualization", "python"],
+          "reasoning": "Explicit tool usage"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_009"],
+        "tag_evolution_rationale": "All notes should cluster as 'data-science-stack', 'python-scientific-computing'"
+      }
+    },
+    {
+      "id": "cluster_011",
+      "category": "data_science_stack",
+      "user_message": "Recently started using plotly for interactive visualizations. Much better than matplotlib for dashboards.",
+      "assistant_message": "Plotly is excellent for interactive visualizations! Great for creating dashboards.",
+      "ground_truth_notes": [
+        {
+          "content": "uses plotly for interactive visualizations",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["plotly", "visualization", "interactive", "python"],
+          "reasoning": "Explicit recent adoption"
+        },
+        {
+          "content": "prefers plotly over matplotlib for dashboards",
+          "type": "preference:tool",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["plotly", "matplotlib", "dashboards", "comparison"],
+          "reasoning": "Comparative preference for specific use case"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_009", "cluster_010"],
+        "should_update_tags": ["cluster_010"],
+        "tag_evolution_rationale": "Matplotlib note should gain context about 'use-case-specific', while cluster gains 'modern-data-viz' tags"
+      }
+    },
+    {
+      "id": "cluster_012",
+      "category": "architecture_preferences",
+      "user_message": "I prefer microservices architecture for complex applications.",
+      "assistant_message": "Microservices can offer great flexibility and scalability for complex systems.",
+      "ground_truth_notes": [
+        {
+          "content": "prefers microservices architecture",
+          "type": "preference:architecture",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["microservices", "architecture", "complex-applications"],
+          "reasoning": "Explicit architecture preference"
+        }
+      ]
+    },
+    {
+      "id": "cluster_013",
+      "category": "architecture_preferences",
+      "user_message": "I use Docker for containerization and Kubernetes for orchestration.",
+      "assistant_message": "Docker and Kubernetes are the industry standard for container orchestration!",
+      "ground_truth_notes": [
+        {
+          "content": "uses Docker for containerization",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["docker", "containerization", "devops"],
+          "reasoning": "Explicit tool usage"
+        },
+        {
+          "content": "uses Kubernetes for orchestration",
+          "type": "skill:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["kubernetes", "orchestration", "devops"],
+          "reasoning": "Explicit tool usage"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_012"],
+        "tag_evolution_rationale": "All notes should cluster as 'microservices-stack', 'cloud-native', 'devops-practices'"
+      }
+    },
+    {
+      "id": "cluster_014",
+      "category": "architecture_preferences",
+      "user_message": "For service communication, I use gRPC with protocol buffers. REST is too verbose for internal services.",
+      "assistant_message": "gRPC is definitely more efficient for service-to-service communication in microservices!",
+      "ground_truth_notes": [
+        {
+          "content": "uses gRPC with protocol buffers",
+          "type": "preference:tool",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["grpc", "protocol-buffers", "service-communication"],
+          "reasoning": "Explicit tool preference"
+        },
+        {
+          "content": "prefers gRPC over REST for internal services",
+          "type": "preference:architecture",
+          "confidence_range": [0.9, 1.0],
+          "tags": ["grpc", "rest", "microservices", "performance"],
+          "reasoning": "Comparative preference with rationale"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_012", "cluster_013"],
+        "tag_evolution_rationale": "All microservices-related notes should gain 'microservices-architecture-pattern', 'performance-optimized' tags"
+      }
+    },
+    {
+      "id": "cluster_015",
+      "category": "architecture_preferences",
+      "user_message": "I implement event-driven patterns with Kafka for async communication between services.",
+      "assistant_message": "Kafka is excellent for event-driven microservices architectures!",
+      "ground_truth_notes": [
+        {
+          "content": "implements event-driven patterns with Kafka",
+          "type": "skill:architecture",
+          "confidence_range": [0.95, 1.0],
+          "tags": ["kafka", "event-driven", "async", "microservices"],
+          "reasoning": "Explicit pattern implementation"
+        }
+      ],
+      "evolution_expectations": {
+        "should_link_to": ["cluster_012", "cluster_013", "cluster_014"],
+        "tag_evolution_rationale": "Complete microservices cluster should emerge with tags like 'comprehensive-microservices-stack', 'modern-distributed-systems'"
+      }
+    }
+  ],
+  "test_queries": [
+    {
+      "query": "What is the user's Python development setup?",
+      "expected_clustering": "Should return clustered notes showing poetry, pytest, black, mypy, ruff as integrated toolchain",
+      "relevant_notes": ["cluster_001", "cluster_002", "cluster_003", "cluster_004", "cluster_005"]
+    },
+    {
+      "query": "What frontend tools does the user prefer?",
+      "expected_clustering": "Should show Vite ecosystem cluster with Tailwind and Vitest",
+      "relevant_notes": ["cluster_006", "cluster_007", "cluster_008"]
+    },
+    {
+      "query": "What data science tools does the user work with?",
+      "expected_clustering": "Should show pandas/numpy/scikit-learn/matplotlib cluster with plotly as modern addition",
+      "relevant_notes": ["cluster_009", "cluster_010", "cluster_011"]
+    },
+    {
+      "query": "How does the user approach microservices?",
+      "expected_clustering": "Should show comprehensive microservices stack: Docker, K8s, gRPC, Kafka",
+      "relevant_notes": ["cluster_012", "cluster_013", "cluster_014", "cluster_015"]
+    }
+  ],
+  "evolution_metrics": {
+    "clustering_expected": "Related notes should form tight clusters with shared evolved tags",
+    "tag_convergence": "Notes in same domain should converge on common categorization tags",
+    "context_enrichment": "Note contexts should be enriched with domain-specific information",
+    "relationship_density": "High density of links within clusters, lower between clusters"
+  }
+}

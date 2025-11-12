@@ -1,41 +1,70 @@
 import React from "react";
 import { Link } from "react-router-dom";
+import QueueStatus from "../components/QueueStatus";
+import ThemeToggle from "../components/ThemeToggle";
+import { useSidebar } from "../contexts/SidebarContext";
 
 const HomePage: React.FC = () => {
+    const { toggleSidebar, isSidebarOpen } = useSidebar();
+
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-            {/* Header */}
-            <header className="bg-white dark:bg-gray-800 shadow-sm">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center py-6">
-                        <div className="flex items-center">
-                            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-                                Mnemosyne
-                            </h1>
-                            <span className="ml-3 text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded-full">
-                                Memory Service
-                            </span>
+        <div className="min-h-screen bg-gray-100 dark:bg-gray-900">
+            {/* Header - stays in place */}
+            <header className="mx-2 mt-2 bg-gray-50 dark:bg-gray-800 shadow-sm rounded-lg relative">
+                <div className="py-6 relative">
+                    {/* Hamburger Menu Button - absolutely positioned, doesn't affect layout flow */}
+                    <button
+                        onClick={toggleSidebar}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors z-10"
+                        aria-label="Toggle sidebar"
+                        title="Toggle sidebar"
+                    >
+                        <svg className="w-6 h-6 text-gray-700 dark:text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+
+                    {/* Shifting wrapper - matches main content shift */}
+                    <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'}`}>
+                        {/* Center content area */}
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                                <div className="flex justify-between items-center">
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex items-center gap-4">
+                                            {/* Title */}
+                                            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+                                                Mnemosyne
+                                            </h1>
+                                            <span className="text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded-full">
+                                                Memory Service
+                                            </span>
+                                        </div>
+                                        {/* Subtitle */}
+                                        <p className="text-gray-600 dark:text-gray-400">
+                                            Persist and retrieve memories to help AI models remember important items from past interactions with users.
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <ThemeToggle />
+                                    </div>
+                                </div>
                         </div>
                     </div>
                 </div>
             </header>
 
-            {/* Main Content */}
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                <div className="text-center mb-12">
-                    <h2 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
-                        AI Memory Management
-                    </h2>
-                    <p className="text-xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto">
-                        Persist and retrieve memories to help AI models remember
-                        important items from past interactions with users.
-                    </p>
+            {/* Main Content - shifts when sidebar opens */}
+            <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'}`}>
+                <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+                {/* Queue Status */}
+                <div className="mb-8">
+                    <QueueStatus />
                 </div>
 
                 {/* Feature Cards */}
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12 max-w-6xl mx-auto">
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
                     {/* Import Card */}
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
                         <div className="p-8 h-full flex flex-col gap-4">
                             <div className="flex items-center gap-3">
                                 <div className="bg-orange-100 dark:bg-orange-900 p-3 rounded-lg">
@@ -83,7 +112,7 @@ const HomePage: React.FC = () => {
                     </div>
 
                     {/* Notes Card */}
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
                         <div className="p-8 h-full flex flex-col gap-4">
                             <div className="flex items-center gap-3">
                                 <div className="bg-indigo-100 dark:bg-indigo-900 p-3 rounded-lg">
@@ -97,7 +126,7 @@ const HomePage: React.FC = () => {
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
                                             strokeWidth={2}
-                                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
                                         />
                                     </svg>
                                 </div>
@@ -131,7 +160,7 @@ const HomePage: React.FC = () => {
                     </div>
 
                     {/* Knowledge Graph Card */}
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
                         <div className="p-8 h-full flex flex-col gap-4">
                             <div className="flex items-center gap-3">
                                 <div className="bg-cyan-100 dark:bg-cyan-900 p-3 rounded-lg">
@@ -145,7 +174,7 @@ const HomePage: React.FC = () => {
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
                                             strokeWidth={2}
-                                            d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"
+                                            d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
                                         />
                                     </svg>
                                 </div>
@@ -179,7 +208,7 @@ const HomePage: React.FC = () => {
                     </div>
 
                     {/* Settings Card */}
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
                         <div className="p-8 h-full flex flex-col gap-4">
                             <div className="flex items-center gap-3">
                                 <div className="bg-green-100 dark:bg-green-900 p-3 rounded-lg">
@@ -233,7 +262,7 @@ const HomePage: React.FC = () => {
                     </div>
 
                     {/* DevTools Card */}
-                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
                         <div className="p-8 h-full flex flex-col gap-4">
                             <div className="flex items-center gap-3">
                                 <div className="bg-purple-100 dark:bg-purple-900 p-3 rounded-lg">
@@ -279,10 +308,106 @@ const HomePage: React.FC = () => {
                             </Link>
                         </div>
                     </div>
+
+                    {/* Benchmarks Card */}
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                        <div className="p-8 h-full flex flex-col gap-4">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-blue-100 dark:bg-blue-900 p-3 rounded-lg">
+                                    <svg
+                                        className="w-6 h-6 text-blue-600 dark:text-blue-400"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                                        />
+                                    </svg>
+                                </div>
+                                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                                    Benchmarks
+                                </h3>
+                            </div>
+                            <p className="text-gray-600 dark:text-gray-300 text-sm text-left flex-grow leading-relaxed">
+                                Run automated benchmark tests to evaluate extraction quality, search relevance, and memory evolution.
+                            </p>
+                            <Link
+                                to="/benchmarks"
+                                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200 text-sm"
+                            >
+                                Run Benchmarks
+                                <svg
+                                    className="ml-2 w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 7l5 5m0 0l-5 5m5-5H6"
+                                    />
+                                </svg>
+                            </Link>
+                        </div>
+                    </div>
+
+                    {/* Activity Monitor Card */}
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 h-full">
+                        <div className="p-8 h-full flex flex-col gap-4">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-teal-100 dark:bg-teal-900 p-3 rounded-lg">
+                                    <svg
+                                        className="w-6 h-6 text-teal-600 dark:text-teal-400"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+                                        />
+                                    </svg>
+                                </div>
+                                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                                    Activity Monitor
+                                </h3>
+                            </div>
+                            <p className="text-gray-600 dark:text-gray-300 text-sm text-left flex-grow leading-relaxed">
+                                Monitor running extractions, pending tasks, and recent activity. Track progress in real-time with auto-refresh.
+                            </p>
+                            <Link
+                                to="/activity-monitor"
+                                className="inline-flex items-center px-4 py-2 bg-teal-600 text-white font-medium rounded-lg hover:bg-teal-700 transition-colors duration-200 text-sm"
+                            >
+                                View Activity
+                                <svg
+                                    className="ml-2 w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 7l5 5m0 0l-5 5m5-5H6"
+                                    />
+                                </svg>
+                            </Link>
+                        </div>
+                    </div>
                 </div>
 
                 {/* Core Features */}
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8">
+                <div className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-md p-8">
                     <h3 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">
                         Core Features
                     </h3>
@@ -360,15 +485,16 @@ const HomePage: React.FC = () => {
                 </div>
             </main>
 
-            {/* Footer */}
-            <footer className="bg-gray-800 text-white py-8">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-                    <p className="text-gray-400">
-                        Mnemosyne - AI Memory Service • Built with Django &
-                        React
-                    </p>
-                </div>
-            </footer>
+                {/* Footer - floating with rounded edges */}
+                <footer className="bg-gray-50 dark:bg-gray-800 rounded-lg shadow-sm mx-2 mb-2 py-8">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+                        <p className="text-gray-600 dark:text-gray-400">
+                            Mnemosyne - AI Memory Service • Built with Django &
+                            React
+                        </p>
+                    </div>
+                </footer>
+            </div>
         </div>
     );
 };

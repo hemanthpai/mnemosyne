@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { cancelImport, getImportProgress, startOpenWebUIImport } from "../services/api";
 import PageHeader from "../components/PageHeader";
+import { useSidebar } from "../contexts/SidebarContext";
 
 // Constants
 const POLL_INTERVAL_MS = 1000; // Poll progress every second
 const MAX_POLL_FAILURES = 5; // Stop polling after this many consecutive failures
 
 const ImportPage: React.FC = () => {
+    const { isSidebarOpen } = useSidebar();
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [targetUserId, setTargetUserId] = useState<string>("");
     const [openwebuiUserId, setOpenwebuiUserId] = useState<string>("");
@@ -255,11 +257,12 @@ const ImportPage: React.FC = () => {
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
             <PageHeader
                 title="Import Open WebUI History"
-                badge={{ text: "Beta", color: "gray" }}
+                subtitle="Import conversation history from Open WebUI and extract atomic notes automatically"
             />
 
-            {/* Main Content */}
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {/* Main Content - shifts when sidebar opens */}
+            <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'}`}>
+                <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 {/* Wizard Steps Indicator */}
                 <div className="mb-8">
                     {/* Mobile: Compact stepper */}
@@ -664,7 +667,8 @@ const ImportPage: React.FC = () => {
                         </div>
                     </div>
                 </div>
-            </main>
+                </main>
+            </div>
         </div>
     );
 };

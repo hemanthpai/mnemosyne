@@ -18,15 +18,68 @@ Key principles from A-MEM:
 
 import logging
 import json
+import sys
+from io import StringIO
 from typing import List, Dict, Any
 from django_q.tasks import async_task, schedule
 from django.utils import timezone
+from django.core.management import call_command
 
 from .models import ConversationTurn, AtomicNote, NoteRelationship
 from .llm_service import llm_service
 from .vector_service import vector_service
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Benchmark Task
+# =============================================================================
+
+def run_benchmark_task(tracking_id, test_type, dataset):
+    """
+    Async task to run benchmarks
+    Django-Q will automatically store the result
+
+    Args:
+        tracking_id: UUID for tracking progress (passed from views.py)
+        test_type: Type of benchmark to run
+        dataset: Dataset filename
+    """
+    try:
+        logger.info(f"Starting benchmark task with tracking_id={tracking_id}, test_type={test_type}, dataset={dataset}")
+
+        # Capture stdout
+        output = StringIO()
+        sys.stdout = output
+
+        # Run benchmark command with tracking_id for progress tracking
+        call_command('run_benchmark', test_type=test_type, dataset=dataset, task_id=tracking_id)
+
+        # Restore stdout
+        sys.stdout = sys.__stdout__
+
+        # Return the output - django-q will store this as the task result
+        return {
+            'success': True,
+            'output': output.getvalue(),
+            'test_type': test_type,
+            'dataset': dataset,
+            'timestamp': timezone.now().isoformat()
+        }
+
+    except Exception as e:
+        sys.stdout = sys.__stdout__
+        logger.error(f"Benchmark task failed: {e}", exc_info=True)
+
+        # Return error - django-q will store this as the task result
+        return {
+            'success': False,
+            'error': str(e),
+            'test_type': test_type,
+            'dataset': dataset,
+            'timestamp': timezone.now().isoformat()
+        }
 
 
 # =============================================================================
@@ -46,6 +99,11 @@ Extract ALL individual, atomic facts about the user from their message. Each fac
 4. Stated by the USER (not assistant responses)
 
 Be comprehensive - extract every distinct piece of information about the user.
+
+**IMPORTANT:**
+- Extract each fact separately - DO NOT combine related facts into one note
+- Include both explicit statements AND clear implications from context
+- When in doubt, create separate notes rather than merging them
 
 **Format your response as JSON:**
 ```json
@@ -199,6 +257,20 @@ Extract additional facts that Pass 1 missed:
 # Task 1: Extract Atomic Notes
 # =============================================================================
 
+def update_extraction_progress(turn_id: str, phase: str, current: int, total: int, detail: str = ''):
+    """Update extraction progress in cache for UI monitoring"""
+    from django.core.cache import cache
+    progress_data = {
+        'phase': phase,
+        'current': current,
+        'total': total,
+        'percentage': int((current / total * 100)) if total > 0 else 0,
+        'detail': detail,
+        'turn_id': turn_id
+    }
+    cache.set(f'extraction_progress_{turn_id}', progress_data, timeout=3600)  # 1 hour
+
+
 def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
     """
     Extract atomic notes from a conversation turn (background task)
@@ -214,6 +286,9 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
     time for the conversation to complete and to avoid blocking the user.
     """
     try:
+        # Initialize progress tracking
+        update_extraction_progress(turn_id, 'Starting extraction', 0, 4, '')
+
         # Get the conversation turn
         turn = ConversationTurn.objects.get(id=turn_id)
 
@@ -223,6 +298,9 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
             return {"status": "skipped", "reason": "already_extracted"}
 
         logger.info(f"Extracting atomic notes from turn {turn_id} (attempt {retry_count + 1}/3)")
+
+        # Phase 1: Pass 1 Extraction
+        update_extraction_progress(turn_id, 'Extracting notes (Pass 1)', 1, 4, 'Running LLM extraction...')
 
         # Get extraction prompt (custom from settings or default)
         from .settings_model import Settings
@@ -259,15 +337,80 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
         extraction_data = json.loads(response_text)
         notes_data = extraction_data.get('notes', [])
 
+        # Validate notes have required fields
+        valid_notes = []
+        for note in notes_data:
+            if 'content' in note and 'type' in note and note['content'].strip():
+                valid_notes.append(note)
+            else:
+                logger.debug(f"Skipping invalid note (missing required fields): {note}")
+        notes_data = valid_notes
+
+        # Multi-pass extraction (Pass 2) if enabled
+        if settings.enable_multipass_extraction and notes_data:
+            logger.info(f"Running Pass 2 extraction for turn {turn_id} (found {len(notes_data)} notes in Pass 1)")
+            update_extraction_progress(turn_id, 'Extracting notes (Pass 2)', 1, 4, f'Found {len(notes_data)} notes in Pass 1, running Pass 2...')
+
+            # Format Pass 1 facts for Pass 2 prompt
+            pass1_facts_str = "\n".join([
+                f"- {note['content']}" for note in notes_data
+            ])
+
+            # Generate Pass 2 prompt
+            pass2_prompt = EXTRACTION_PROMPT_PASS2.format(
+                user_message=turn.user_message,
+                pass1_facts=pass1_facts_str
+            )
+
+            # Call LLM for Pass 2 extraction
+            try:
+                pass2_response = llm_service.generate_text(
+                    prompt=pass2_prompt,
+                    max_tokens=1000
+                )
+
+                if pass2_response['success']:
+                    # Parse Pass 2 JSON response
+                    pass2_text = pass2_response['text'].strip()
+
+                    # Extract JSON from markdown code blocks if present
+                    if "```json" in pass2_text:
+                        json_start = pass2_text.find("```json") + 7
+                        json_end = pass2_text.find("```", json_start)
+                        pass2_text = pass2_text[json_start:json_end].strip()
+                    elif "```" in pass2_text:
+                        json_start = pass2_text.find("```") + 3
+                        json_end = pass2_text.find("```", json_start)
+                        pass2_text = pass2_text[json_start:json_end].strip()
+
+                    pass2_data = json.loads(pass2_text)
+                    pass2_notes = pass2_data.get('notes', [])
+
+                    if pass2_notes:
+                        logger.info(f"Pass 2 found {len(pass2_notes)} additional notes")
+                        # Merge Pass 2 notes into notes_data
+                        notes_data.extend(pass2_notes)
+                    else:
+                        logger.info("Pass 2 found no additional notes")
+                else:
+                    logger.warning(f"Pass 2 extraction failed: {pass2_response.get('error')}")
+            except Exception as e:
+                logger.warning(f"Pass 2 extraction failed with exception: {e}. Continuing with Pass 1 results only.")
+
         if not notes_data:
             logger.warning(f"No notes extracted from turn {turn_id}")
             turn.extracted = True
             turn.save(update_fields=['extracted'])
+            update_extraction_progress(turn_id, 'Completed', 4, 4, 'No notes extracted')
             return {"status": "completed", "notes_created": 0}
+
+        # Phase 2-4: Process each note (enrichment, embedding, linking, evolution)
+        total_notes = len(notes_data)
+        update_extraction_progress(turn_id, 'Processing notes', 2, 4, f'Processing {total_notes} notes...')
 
         # Validate and store notes
         notes_created = 0
-        for note_data in notes_data:
+        for idx, note_data in enumerate(notes_data, 1):
             # Validate required fields
             if not note_data.get('content') or not note_data.get('type'):
                 logger.warning(f"Skipping invalid note: {note_data}")
@@ -294,24 +437,55 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
                 source_turn=turn
             )
 
-            # Generate embedding for the note
-            embedding_result = llm_service.get_embeddings([note.content])
+            # Phase 2: A-MEM enrichment
+            update_extraction_progress(turn_id, f'Enriching note {idx}/{total_notes}', 2, 4,
+                                      f'{note_data["content"][:50]}...')
 
-            if not embedding_result['success']:
-                logger.error(f"Failed to embed note {note.id}: {embedding_result['error']}")
+            from .amem_service import amem_service
+            try:
+                enrichment = amem_service.enrich_note(note)
+
+                # Update note with A-MEM attributes
+                note.keywords = enrichment['keywords']
+                note.llm_tags = enrichment['llm_tags']
+                note.contextual_description = enrichment['contextual_description']
+                note.is_amem_enriched = True
+                note.save(update_fields=['keywords', 'llm_tags', 'contextual_description', 'is_amem_enriched'])
+
+                logger.info(f"A-MEM enrichment: {len(enrichment['keywords'])} keywords, {len(enrichment['llm_tags'])} tags")
+            except Exception as e:
+                logger.warning(f"A-MEM enrichment failed for note {note.id}: {e}. Continuing with basic note.")
+                # Continue with non-enriched note
+
+            # Generate A-MEM embedding (multi-attribute if enriched, content-only as fallback)
+            try:
+                if note.is_amem_enriched:
+                    embedding = amem_service.generate_amem_embedding(note)
+                else:
+                    # Fallback to content-only embedding
+                    embedding_result = llm_service.get_embeddings([note.content])
+                    if not embedding_result['success']:
+                        raise ValueError(f"Embedding generation failed: {embedding_result['error']}")
+                    embedding = embedding_result['embeddings'][0]
+            except Exception as e:
+                logger.error(f"Failed to embed note {note.id}: {e}")
                 note.delete()  # Rollback
                 continue
 
-            # Store in vector DB
+            # Store in vector DB with A-MEM metadata
             vector_id = vector_service.store_embedding(
-                embedding=embedding_result['embeddings'][0],
+                embedding=embedding,
                 user_id=str(turn.user_id),
                 metadata={
                     'type': 'atomic_note',
                     'note_id': str(note.id),
                     'note_type': note.note_type,
                     'confidence': note.confidence,
-                    'timestamp': note.created_at.isoformat()
+                    'timestamp': note.created_at.isoformat(),
+                    # A-MEM attributes for rich metadata
+                    'keywords': note.keywords if note.is_amem_enriched else [],
+                    'llm_tags': note.llm_tags if note.is_amem_enriched else [],
+                    'is_amem_enriched': note.is_amem_enriched
                 }
             )
 
@@ -319,120 +493,91 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
             note.vector_id = vector_id
             note.save(update_fields=['vector_id'])
 
+            # Phase 3 & 4: Link Generation + Memory Evolution
+            update_extraction_progress(turn_id, f'Generating links {idx}/{total_notes}', 3, 4,
+                                      f'{note_data["content"][:50]}...')
+
+            # Generate links to related notes and evolve neighbor memories
+            try:
+                # Get neighbor notes for both linking and evolution
+                if note.is_amem_enriched:
+                    # Find similar notes (same process as link generation)
+                    note_embedding = amem_service.generate_amem_embedding(note)
+                    similar_results = vector_service.search_similar(
+                        embedding=note_embedding,
+                        user_id=str(note.user_id),
+                        limit=6,  # top-5 + self
+                        score_threshold=0.5
+                    )
+
+                    # Get neighbor note objects
+                    neighbor_ids = [
+                        r['metadata']['note_id']
+                        for r in similar_results
+                        if r['metadata'].get('note_id') != str(note.id)
+                    ][:5]
+
+                    if neighbor_ids:
+                        neighbors = list(AtomicNote.objects.filter(id__in=neighbor_ids))
+
+                        # Phase 3: Generate links
+                        link_specs = amem_service.generate_links(note, k=5)
+                        links_created = 0
+
+                        from .models import NoteRelationship
+                        for link_spec in link_specs:
+                            try:
+                                relationship = NoteRelationship.objects.create(
+                                    from_note_id=note.id,
+                                    to_note_id=link_spec['target_note_id'],
+                                    relationship_type=link_spec['relationship_type'],
+                                    strength=link_spec['strength']
+                                )
+                                links_created += 1
+                                logger.info(
+                                    f"Created link: {note.id} -{link_spec['relationship_type']}-> "
+                                    f"{link_spec['target_note_id']} (strength: {link_spec['strength']:.2f})"
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to create link: {e}")
+
+                        if links_created > 0:
+                            logger.info(f"Created {links_created} links for note {note.id}")
+
+                        # Phase 4: Memory Evolution
+                        update_extraction_progress(turn_id, f'Evolving memories {idx}/{total_notes}', 4, 4,
+                                                  f'Updating {len(neighbors)} related notes...')
+
+                        # Evolve neighbor memories based on new information
+                        try:
+                            evolution_result = amem_service.evolve_memories(note, neighbors)
+                            if evolution_result['evolved']:
+                                logger.info(
+                                    f"Memory evolution: {len(evolution_result['evolved'])} notes evolved "
+                                    f"for note {note.id}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"Memory evolution failed for note {note.id}: {e}")
+
+            except Exception as e:
+                logger.warning(f"Link generation/evolution failed for note {note.id}: {e}")
+                # Continue anyway - note is already created
+
             notes_created += 1
             logger.info(f"Created atomic note: {note.content[:50]}... (type: {note.note_type})")
-
-        # ========================================
-        # PASS 2: Extract contextual & implied facts
-        # ========================================
-        if notes_data and settings.enable_multipass_extraction:  # Only run if Pass 1 found facts
-            logger.info(f"Running Pass 2 extraction for turn {turn_id}")
-
-            # Format Pass 1 facts for Pass 2 prompt
-            pass1_facts_text = "\n".join([
-                f"- {note['content']}"
-                for note in notes_data
-            ])
-
-            # Generate Pass 2 prompt
-            prompt_pass2 = EXTRACTION_PROMPT_PASS2.format(
-                user_message=turn.user_message,
-                pass1_facts=pass1_facts_text
-            )
-
-            # Call LLM for Pass 2 extraction
-            response_pass2 = llm_service.generate_text(
-                prompt=prompt_pass2,
-                max_tokens=1000
-            )
-
-            if response_pass2['success']:
-                # Parse Pass 2 JSON response
-                response_text_pass2 = response_pass2['text'].strip()
-
-                # Extract JSON from markdown code blocks if present
-                if "```json" in response_text_pass2:
-                    json_start = response_text_pass2.find("```json") + 7
-                    json_end = response_text_pass2.find("```", json_start)
-                    response_text_pass2 = response_text_pass2[json_start:json_end].strip()
-                elif "```" in response_text_pass2:
-                    json_start = response_text_pass2.find("```") + 3
-                    json_end = response_text_pass2.find("```", json_start)
-                    response_text_pass2 = response_text_pass2[json_start:json_end].strip()
-
-                try:
-                    extraction_data_pass2 = json.loads(response_text_pass2)
-                    notes_data_pass2 = extraction_data_pass2.get('notes', [])
-
-                    logger.info(f"Pass 2 found {len(notes_data_pass2)} additional facts")
-
-                    # Store Pass 2 notes using same logic as Pass 1
-                    for note_data in notes_data_pass2:
-                        # Validate required fields
-                        if not note_data.get('content') or not note_data.get('type'):
-                            logger.warning(f"Skipping invalid Pass 2 note: {note_data}")
-                            continue
-
-                        # Check for duplicates
-                        existing = AtomicNote.objects.filter(
-                            user_id=turn.user_id,
-                            content__iexact=note_data['content']
-                        ).first()
-
-                        if existing:
-                            logger.info(f"Pass 2 note already exists: {note_data['content'][:50]}...")
-                            continue
-
-                        # Create atomic note
-                        note = AtomicNote.objects.create(
-                            user_id=turn.user_id,
-                            content=note_data['content'],
-                            note_type=note_data['type'],
-                            context=note_data.get('context', ''),
-                            confidence=note_data.get('confidence', 0.7),  # Slightly lower default for Pass 2
-                            tags=note_data.get('tags', []),
-                            source_turn=turn
-                        )
-
-                        # Generate embedding
-                        embedding_result = llm_service.get_embeddings([note.content])
-
-                        if not embedding_result['success']:
-                            logger.error(f"Failed to embed Pass 2 note {note.id}: {embedding_result['error']}")
-                            note.delete()
-                            continue
-
-                        # Store in vector DB
-                        vector_id = vector_service.store_embedding(
-                            embedding=embedding_result['embeddings'][0],
-                            user_id=str(turn.user_id),
-                            metadata={
-                                'type': 'atomic_note',
-                                'note_id': str(note.id),
-                                'note_type': note.note_type,
-                                'confidence': note.confidence,
-                                'timestamp': note.created_at.isoformat()
-                            }
-                        )
-
-                        note.vector_id = vector_id
-                        note.save(update_fields=['vector_id'])
-
-                        notes_created += 1
-                        logger.info(f"Created Pass 2 note: {note.content[:50]}... (type: {note.note_type})")
-
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse Pass 2 response: {e}")
-                    # Continue anyway - Pass 1 notes are already stored
-            else:
-                logger.warning(f"Pass 2 extraction failed: {response_pass2.get('error')}")
-                # Continue anyway - Pass 1 notes are already stored
 
         # Mark turn as extracted
         turn.extracted = True
         turn.save(update_fields=['extracted'])
 
+        # Final progress update
+        update_extraction_progress(turn_id, 'Completed', 4, 4, f'Successfully extracted {notes_created} notes')
+
         logger.info(f"Successfully extracted {notes_created} notes from turn {turn_id}")
+
+        # Clean up progress cache after a short delay (task is done)
+        from django.core.cache import cache
+        cache.delete(f'extraction_progress_{turn_id}')
 
         return {
             "status": "completed",
@@ -480,335 +625,6 @@ def extract_atomic_notes(turn_id: str, retry_count: int = 0) -> Dict[str, Any]:
 
 
 # =============================================================================
-# Relationship Building Prompt
-# =============================================================================
-
-RELATIONSHIP_PROMPT = """Analyze relationships between atomic notes.
-
-**New Note:**
-Content: {new_note_content}
-Type: {new_note_type}
-Context: {new_note_context}
-
-**Existing Notes:**
-{existing_notes}
-
-**Instructions:**
-Identify relationships between the new note and existing notes. For each relationship found:
-1. Determine the relationship type
-2. Assess the strength (0.0-1.0, where 1.0 is strongest)
-
-**Relationship Types:**
-- **related_to**: General thematic connection (e.g., both about Python, both preferences)
-- **contradicts**: Direct contradiction (e.g., "prefers dark mode" vs "prefers light mode")
-- **refines**: The new note adds detail/nuance to an existing note
-- **context_for**: The new note provides context for understanding an existing note
-- **follows_from**: The new note is a logical consequence of an existing note
-
-**Strength Guidelines:**
-- 1.0: Very strong/direct relationship
-- 0.7-0.9: Clear relationship
-- 0.5-0.6: Moderate relationship
-- 0.3-0.4: Weak relationship
-- Below 0.3: Don't create relationship
-
-**Format your response as JSON:**
-```json
-{{
-  "relationships": [
-    {{
-      "to_note_id": "note-id",
-      "relationship_type": "related_to|contradicts|refines|context_for|follows_from",
-      "strength": 0.85,
-      "reasoning": "brief explanation"
-    }}
-  ]
-}}
-```
-
-**Guidelines:**
-- Only create relationships with strength >= 0.3
-- Contradictions should be rare and obvious
-- Most relationships will be "related_to" or "refines"
-- Focus on meaningful connections, not superficial similarities
-- Limit to top 5 strongest relationships
-
-**Example:**
-
-New Note: "uses vim keybindings"
-Existing Notes:
-1. [abc123] prefers VSCode | preference:editor
-2. [def456] learning Python | skill:programming
-3. [ghi789] prefers keyboard shortcuts | preference:ui
-
-Response:
-```json
-{{
-  "relationships": [
-    {{
-      "to_note_id": "abc123",
-      "relationship_type": "context_for",
-      "strength": 0.9,
-      "reasoning": "vim keybindings are used within VSCode editor"
-    }},
-    {{
-      "to_note_id": "ghi789",
-      "relationship_type": "related_to",
-      "strength": 0.7,
-      "reasoning": "both relate to keyboard-driven workflow preferences"
-    }}
-  ]
-}}
-```
-
-Now analyze the relationships for the note above:
-"""
-
-
-# =============================================================================
-# Task 2: Build Note Relationships
-# =============================================================================
-
-def build_note_relationships_for_note(note_id: str, retry_count: int = 0) -> Dict[str, Any]:
-    """
-    Build relationships for a single atomic note (dynamic task)
-
-    Called after a note is extracted to find connections with existing notes.
-
-    Args:
-        note_id: UUID of the AtomicNote to build relationships for
-        retry_count: Current retry attempt (0-2)
-
-    Returns:
-        Dict with relationship building results
-    """
-    try:
-        # Get the new note
-        note = AtomicNote.objects.get(id=note_id)
-
-        logger.info(f"Building relationships for note {note_id}: {note.content[:50]}...")
-
-        # Find similar existing notes via vector search (excluding the note itself)
-        # Use graph service to search for related atomic notes
-        from .graph_service import graph_service
-
-        # Search for similar notes
-        similar_notes = graph_service.search_atomic_notes(
-            query=note.content,
-            user_id=str(note.user_id),
-            limit=10,
-            threshold=0.3  # Lower threshold to catch more potential relationships
-        )
-
-        # Filter out the note itself
-        similar_notes = [n for n in similar_notes if n['id'] != str(note.id)]
-
-        if not similar_notes:
-            logger.info(f"No similar notes found for {note_id}")
-            return {"status": "completed", "relationships_created": 0}
-
-        # Format existing notes for prompt
-        existing_notes_text = "\n".join([
-            f"{i+1}. [{n['id']}] {n['content']} | {n['note_type']}"
-            for i, n in enumerate(similar_notes[:5])  # Limit to top 5 for prompt
-        ])
-
-        # Get relationship prompt (custom from settings or default)
-        from .settings_model import Settings
-        settings = Settings.get_settings()
-        relationship_template = settings.relationship_prompt or RELATIONSHIP_PROMPT
-
-        # Generate relationship analysis prompt
-        prompt = relationship_template.format(
-            new_note_content=note.content,
-            new_note_type=note.note_type,
-            new_note_context=note.context or "none",
-            existing_notes=existing_notes_text
-        )
-
-        # Call LLM for relationship analysis using configured temperature
-        response = llm_service.generate_text(
-            prompt=prompt,
-            max_tokens=800
-        )
-
-        if not response['success']:
-            raise ValueError(f"LLM generation failed: {response.get('error')}")
-
-        # Parse JSON response
-        response_text = response['text'].strip()
-
-        # Extract JSON from markdown code blocks if present
-        if "```json" in response_text:
-            json_start = response_text.find("```json") + 7
-            json_end = response_text.find("```", json_start)
-            response_text = response_text[json_start:json_end].strip()
-        elif "```" in response_text:
-            json_start = response_text.find("```") + 3
-            json_end = response_text.find("```", json_start)
-            response_text = response_text[json_start:json_end].strip()
-
-        relationship_data = json.loads(response_text)
-        relationships_list = relationship_data.get('relationships', [])
-
-        # Create relationships
-        relationships_created = 0
-        for rel_data in relationships_list:
-            to_note_id = rel_data.get('to_note_id')
-            rel_type = rel_data.get('relationship_type')
-            strength = rel_data.get('strength', 0.5)
-
-            # Validate
-            if not to_note_id or not rel_type:
-                logger.warning(f"Skipping invalid relationship: {rel_data}")
-                continue
-
-            if strength < 0.3:
-                logger.info(f"Skipping weak relationship (strength={strength})")
-                continue
-
-            # Check if relationship already exists
-            existing_rel = NoteRelationship.objects.filter(
-                from_note_id=note.id,
-                to_note_id=to_note_id
-            ).first()
-
-            if existing_rel:
-                # Update strength if new analysis is stronger
-                if strength > existing_rel.strength:
-                    existing_rel.strength = strength
-                    existing_rel.relationship_type = rel_type
-                    existing_rel.save()
-                    logger.info(f"Updated relationship strength: {note.id} -> {to_note_id}")
-                continue
-
-            # Create new relationship
-            NoteRelationship.objects.create(
-                from_note_id=note.id,
-                to_note_id=to_note_id,
-                relationship_type=rel_type,
-                strength=strength
-            )
-
-            relationships_created += 1
-            logger.info(f"Created relationship: {note.id} --[{rel_type}, {strength:.2f}]--> {to_note_id}")
-
-        # Update importance scores based on connectivity
-        _update_importance_score(note)
-
-        logger.info(f"Built {relationships_created} relationships for note {note_id}")
-
-        return {
-            "status": "completed",
-            "relationships_created": relationships_created,
-            "note_id": str(note_id)
-        }
-
-    except AtomicNote.DoesNotExist:
-        logger.error(f"AtomicNote {note_id} not found")
-        return {"status": "error", "error": "note_not_found"}
-
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse LLM response for note {note_id}: {e}")
-        logger.error(f"Response text: {response_text[:500]}")
-
-        # Retry up to 3 times
-        if retry_count < 2:
-            logger.info(f"Retrying relationship building for note {note_id} (attempt {retry_count + 2}/3)")
-            async_task(
-                'memories.tasks.build_note_relationships_for_note',
-                note_id,
-                retry_count + 1,
-                task_name=f"retry_relationships_{note_id}_{retry_count + 1}"
-            )
-            return {"status": "retry_scheduled", "attempt": retry_count + 1}
-        else:
-            logger.error(f"Failed to build relationships for note {note_id} after 3 attempts")
-            return {"status": "failed", "error": "max_retries_exceeded"}
-
-    except Exception as e:
-        logger.error(f"Unexpected error building relationships for note {note_id}: {e}", exc_info=True)
-
-        # Retry on unexpected errors too
-        if retry_count < 2:
-            async_task(
-                'memories.tasks.build_note_relationships_for_note',
-                note_id,
-                retry_count + 1,
-                task_name=f"retry_relationships_{note_id}_{retry_count + 1}"
-            )
-            return {"status": "retry_scheduled", "attempt": retry_count + 1}
-        else:
-            return {"status": "failed", "error": str(e)}
-
-
-def _update_importance_score(note: AtomicNote):
-    """
-    Update importance score based on connectivity in the graph
-
-    More connected notes are more important. Score is based on:
-    - Number of relationships (incoming + outgoing)
-    - Strength of relationships
-    - Confidence of the note itself
-    """
-    # Count relationships
-    outgoing = NoteRelationship.objects.filter(from_note_id=note.id)
-    incoming = NoteRelationship.objects.filter(to_note_id=note.id)
-
-    # Calculate score based on connectivity
-    outgoing_score = sum(rel.strength for rel in outgoing)
-    incoming_score = sum(rel.strength for rel in incoming)
-
-    # Importance = base confidence + connectivity bonus
-    # Max connectivity bonus is 2.0 (so max total importance is 3.0)
-    connectivity_bonus = min(2.0, (outgoing_score + incoming_score) * 0.2)
-    importance = note.confidence + connectivity_bonus
-
-    # Update note
-    note.importance_score = importance
-    note.save(update_fields=['importance_score'])
-
-    logger.info(f"Updated importance score for note {note.id}: {importance:.2f} (confidence={note.confidence:.2f}, connections={len(outgoing) + len(incoming)})")
-
-
-def build_note_relationships(user_id: str) -> Dict[str, Any]:
-    """
-    Build relationships for all notes for a user (nightly batch task)
-
-    This is the batch version that processes all notes for a user.
-    Used as a backup to catch any missed relationships.
-
-    Args:
-        user_id: UUID of the user
-
-    Returns:
-        Dict with relationship building results
-    """
-    logger.info(f"Starting batch relationship building for user {user_id}")
-
-    # Get all notes for user
-    notes = AtomicNote.objects.filter(user_id=user_id).order_by('-created_at')
-
-    total_relationships = 0
-    notes_processed = 0
-
-    for note in notes:
-        result = build_note_relationships_for_note(str(note.id))
-        if result['status'] == 'completed':
-            total_relationships += result.get('relationships_created', 0)
-            notes_processed += 1
-
-    logger.info(f"Batch relationship building complete: {total_relationships} relationships for {notes_processed} notes")
-
-    return {
-        "status": "completed",
-        "user_id": user_id,
-        "notes_processed": notes_processed,
-        "relationships_created": total_relationships
-    }
-
-
-# =============================================================================
 # Helper: Schedule Extraction Task
 # =============================================================================
 
@@ -818,8 +634,9 @@ def schedule_extraction(turn_id: str, delay_seconds: int = 0):
 
     Args:
         turn_id: UUID of the ConversationTurn
-        delay_seconds: Delay before extraction (default: 0s = immediate)
-                      Queue will naturally space out processing
+        delay_seconds: Optional delay before queueing (default: 0 = queue immediately)
+                      Worker processes async when available. Delay only needed for
+                      specific use cases (e.g., waiting for conversation to complete)
     """
     async_task(
         'memories.tasks.extract_atomic_notes',
@@ -838,32 +655,9 @@ def extraction_hook(task):
     if task.success:
         logger.info(f"Extraction task {task.name} completed successfully")
 
-        # Schedule relationship building for newly created notes
-        try:
-            result = task.result
-            if isinstance(result, dict) and result.get('status') == 'completed':
-                notes_created = result.get('notes_created', 0)
-
-                if notes_created > 0:
-                    # Get the turn_id from the task result
-                    turn_id = result.get('turn_id')
-                    if turn_id:
-                        # Find notes created from this turn and schedule relationship building
-                        from .models import AtomicNote
-                        notes = AtomicNote.objects.filter(source_turn_id=turn_id)
-
-                        for note in notes:
-                            async_task(
-                                'memories.tasks.build_note_relationships_for_note',
-                                str(note.id),
-                                0,  # retry_count starts at 0
-                                task_name=f"relationships_{note.id}",
-                                timeout=600
-                            )
-                            logger.info(f"Scheduled relationship building for note {note.id}")
-
-        except Exception as e:
-            logger.error(f"Failed to schedule relationship building: {e}", exc_info=True)
+        # NOTE: Relationship building has been removed as it was causing worker failures
+        # The extraction task already handles A-MEM link generation and evolution inline
+        # See extract_atomic_notes() lines 451-513 for in-task relationship handling
 
     else:
         logger.error(f"Extraction task {task.name} failed: {task.result}")
@@ -877,56 +671,23 @@ def nightly_relationship_building_all_users() -> Dict[str, Any]:
     """
     Nightly task to build relationships for all users (scheduled task)
 
-    This is a backup/catch-all task that runs at 2am daily to:
-    1. Process any users who have new notes
-    2. Catch any missed relationships from dynamic processing
-    3. Update importance scores across the graph
+    NOTE: This task has been disabled as relationship building now happens
+    inline during extraction (see extract_atomic_notes lines 451-513).
+    A-MEM link generation and memory evolution are handled automatically
+    when each note is created.
+
+    This function is kept for backward compatibility with scheduled tasks
+    but performs no operations.
 
     Returns:
         Dict with processing results
     """
-    from .models import AtomicNote
-    from django.db.models import Count
-
-    logger.info("Starting nightly relationship building for all users")
-
-    # Get users who have atomic notes
-    users_with_notes = (
-        AtomicNote.objects
-        .values('user_id')
-        .annotate(note_count=Count('id'))
-        .filter(note_count__gt=0)
-    )
-
-    total_users = len(users_with_notes)
-    total_relationships = 0
-    users_processed = 0
-
-    for user_data in users_with_notes:
-        user_id = str(user_data['user_id'])
-        note_count = user_data['note_count']
-
-        logger.info(f"Processing user {user_id} ({note_count} notes)")
-
-        try:
-            result = build_note_relationships(user_id)
-
-            if result['status'] == 'completed':
-                total_relationships += result.get('relationships_created', 0)
-                users_processed += 1
-
-        except Exception as e:
-            logger.error(f"Failed to process relationships for user {user_id}: {e}")
-            continue
-
-    logger.info(
-        f"Nightly relationship building complete: "
-        f"{total_relationships} relationships created for {users_processed}/{total_users} users"
-    )
+    logger.info("Nightly relationship building task called (currently disabled - relationships built inline)")
 
     return {
         "status": "completed",
-        "users_processed": users_processed,
-        "total_users": total_users,
-        "relationships_created": total_relationships
+        "users_processed": 0,
+        "total_users": 0,
+        "relationships_created": 0,
+        "message": "Relationship building now happens inline during extraction"
     }

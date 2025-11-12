@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import PageHeader from '../components/PageHeader';
 import Dropdown from '../components/Dropdown';
+import { useSidebar } from "../contexts/SidebarContext";
 
 // Auto-detect API base URL
 const getApiBaseUrl = (): string => {
@@ -35,6 +36,7 @@ interface NoteType {
 }
 
 const NotesPage: React.FC = () => {
+  const { isSidebarOpen } = useSidebar();
   const [notes, setNotes] = useState<AtomicNote[]>([]);
   const [noteTypes, setNoteTypes] = useState<NoteType[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,7 +198,8 @@ const NotesPage: React.FC = () => {
         badge={total > 0 ? { text: `${total.toLocaleString()} notes`, color: "green" } : undefined}
       />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'}`}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
         {/* Filters */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md mb-6">
@@ -204,7 +207,7 @@ const NotesPage: React.FC = () => {
             {/* First Row: User, Search, Type */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
               {/* User Selection */}
-              <div className="lg:col-span-2">
+              <div className="lg:col-span-3">
                 <label htmlFor="filter-user" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   User
                 </label>
@@ -222,7 +225,7 @@ const NotesPage: React.FC = () => {
               </div>
 
               {/* Search */}
-              <div className="sm:col-span-2 lg:col-span-7">
+              <div className="sm:col-span-2 lg:col-span-6">
                 <label htmlFor="filter-search" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Search
                 </label>
@@ -450,6 +453,7 @@ const NotesPage: React.FC = () => {
             </button>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

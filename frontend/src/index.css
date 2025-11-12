@@ -1,5 +1,11 @@
-/* filepath: /home/hemanth/Developer/mnemosyne/frontend/src/index.css */
 @import "tailwindcss";
+
+@theme {
+  --color-gray-50: #f9fafb;
+  --color-gray-900: #111827;
+}
+
+@variant dark (&:where(.dark, .dark *));
 
 /* Apply Parkinsans font globally */
 * {

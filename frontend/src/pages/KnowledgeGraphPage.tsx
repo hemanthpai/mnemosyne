@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GraphCanvas, GraphNode as ReagraphNode, GraphEdge as ReagraphEdge, lightTheme, darkTheme } from 'reagraph';
 import PageHeader from '../components/PageHeader';
 import { useTheme } from '../contexts/ThemeContext';
+import { useSidebar } from '../contexts/SidebarContext';
 
 // Auto-detect API base URL
 const getApiBaseUrl = (): string => {
@@ -82,6 +83,7 @@ const getNoteTypeColor = (noteType: string): string => {
 
 const KnowledgeGraphPage: React.FC = () => {
   const { theme } = useTheme();
+  const { isSidebarOpen } = useSidebar();
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -264,9 +266,11 @@ const KnowledgeGraphPage: React.FC = () => {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
       <PageHeader
         title="Knowledge Graph"
+        subtitle="Interactive visualization of your knowledge graph showing atomic notes and their relationships"
         badge={{ text: `${graphData.stats.total_nodes.toLocaleString()} nodes`, color: "blue" }}
       />
 
+      <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'} flex-1 flex flex-col`}>
       {/* Filters */}
       <div className="bg-white dark:bg-gray-800 shadow-sm border-b dark:border-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
@@ -550,6 +554,7 @@ const KnowledgeGraphPage: React.FC = () => {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

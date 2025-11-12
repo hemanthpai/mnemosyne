@@ -16,7 +16,7 @@ class ConversationTurn(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 
     # Vector storage
-    vector_id = models.CharField(max_length=255, unique=True)
+    vector_id = models.CharField(max_length=255, unique=True, null=True, blank=True)
 
     # Track extraction status
     extracted = models.BooleanField(default=False)
@@ -97,6 +97,22 @@ class AtomicNote(models.Model):
 
     # Tags for filtering and organization
     tags = models.JSONField(default=list, blank=True)
+
+    # =============================================================================
+    # A-MEM Enhancement Fields (Section 3.1)
+    # =============================================================================
+
+    # LLM-generated keywords (Ki) - 3-5 specific terms capturing key concepts
+    keywords = models.JSONField(default=list, blank=True)
+
+    # LLM-generated tags (Gi) - 3+ categorical labels for classification
+    llm_tags = models.JSONField(default=list, blank=True)
+
+    # LLM-generated contextual description (Xi) - Rich semantic summary
+    contextual_description = models.TextField(blank=True)
+
+    # Track if note has been enriched with A-MEM attributes
+    is_amem_enriched = models.BooleanField(default=False, db_index=True)
 
     # Lifecycle timestamps
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

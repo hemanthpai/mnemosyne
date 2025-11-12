@@ -41,6 +41,9 @@ class LLMService:
                 'temperature': db_settings.generation_temperature,
                 'max_tokens': db_settings.generation_max_tokens,
                 'timeout': db_settings.generation_timeout,
+                'top_p': db_settings.generation_top_p,
+                'top_k': db_settings.generation_top_k,
+                'min_p': db_settings.generation_min_p,
             }
         except Exception as e:
             # Fallback to environment variables
@@ -53,6 +56,9 @@ class LLMService:
                 'temperature': 0.3,
                 'max_tokens': 1000,
                 'timeout': settings.EMBEDDINGS_TIMEOUT * 2,
+                'top_p': 0.8,
+                'top_k': 20,
+                'min_p': 0.0,
             }
 
     def generate_text(
@@ -108,6 +114,16 @@ class LLMService:
         model = config['model']
 
         try:
+            options = {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "top_p": config['top_p'],
+                "top_k": config['top_k'],
+            }
+            # Only add min_p if it's non-zero (Ollama may not support it on all models)
+            if config['min_p'] > 0.0:
+                options["min_p"] = config['min_p']
+
             response = self.session.post(
                 endpoint,
                 json={
@@ -115,10 +131,7 @@ class LLMService:
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",  # Enable JSON mode for constrained generation
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens
-                    }
+                    "options": options
                 },
                 timeout=config['timeout']
             )
@@ -153,16 +166,23 @@ class LLMService:
         try:
             # Note: response_format removed for compatibility
             # The prompt already requests JSON format
+            request_body = {
+                "model": model,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": config['top_p'],
+            }
+            # OpenAI-compatible APIs may support additional parameters
+            # Only add min_p if non-zero (not standard OpenAI, but some compatible APIs support it)
+            if config['min_p'] > 0.0:
+                request_body["min_p"] = config['min_p']
+
             response = self.session.post(
                 endpoint,
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": temperature,
-                    "max_tokens": max_tokens
-                },
+                json=request_body,
                 headers=headers,
                 timeout=config['timeout']
             )

@@ -2,10 +2,12 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import { getSettings, updateSettings, validateEndpoint, fetchModels } from "../services/api";
 import PageHeader from "../components/PageHeader";
 import Dropdown from "../components/Dropdown";
+import { useSidebar } from "../contexts/SidebarContext";
 
-type TabType = 'embeddings' | 'generation' | 'prompts';
+type TabType = 'embeddings' | 'generation' | 'prompts' | 'amem';
 
 const SettingsPage: React.FC = () => {
+    const { isSidebarOpen } = useSidebar();
     const [activeTab, setActiveTab] = useState<TabType>('embeddings');
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -33,7 +35,9 @@ const SettingsPage: React.FC = () => {
 
     // Show default prompts
     const [showDefaultExtraction, setShowDefaultExtraction] = useState<boolean>(false);
-    const [showDefaultRelationship, setShowDefaultRelationship] = useState<boolean>(false);
+    const [showNoteConstruction, setShowNoteConstruction] = useState<boolean>(false);
+    const [showLinkGeneration, setShowLinkGeneration] = useState<boolean>(false);
+    const [showMemoryEvolution, setShowMemoryEvolution] = useState<boolean>(false);
 
     useEffect(() => {
         const fetchSettings = async () => {
@@ -243,9 +247,11 @@ const SettingsPage: React.FC = () => {
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
             <PageHeader
                 title="Settings"
+                subtitle="Configure LLM providers, models, and parameters for embeddings and text generation"
                 badge={{ text: "Configuration", color: "gray" }}
             />
 
+            <div className={`transition-all duration-300 ${isSidebarOpen ? 'ml-60' : 'ml-0'}`}>
             {/* Main Content */}
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 {/* Save Status Messages */}
@@ -290,6 +296,7 @@ const SettingsPage: React.FC = () => {
                                 <option value="embeddings">Embeddings Configuration</option>
                                 <option value="generation">Generation Configuration</option>
                                 <option value="prompts">Prompts Configuration</option>
+                                <option value="amem">A-MEM & Advanced</option>
                             </select>
                         </div>
 
@@ -324,6 +331,16 @@ const SettingsPage: React.FC = () => {
                                 }`}
                             >
                                 Prompts
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('amem')}
+                                className={`px-6 py-4 text-sm font-medium border-b-2 transition-colors ${
+                                    activeTab === 'amem'
+                                        ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+                                }`}
+                            >
+                                A-MEM
                             </button>
                         </nav>
                     </div>
@@ -595,6 +612,62 @@ const SettingsPage: React.FC = () => {
                                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     />
                                 </div>
+
+                                {/* Top-P */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Top-P (0.0 - 1.0)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.1"
+                                        value={editedSettings.generation_top_p ?? 0.8}
+                                        onChange={(e) => handleFieldChange('generation_top_p', parseFloat(e.target.value))}
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        Nucleus sampling - only tokens with cumulative probability up to this value are considered
+                                    </p>
+                                </div>
+
+                                {/* Top-K */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Top-K (0 = disabled)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="1000"
+                                        value={editedSettings.generation_top_k ?? 20}
+                                        onChange={(e) => handleFieldChange('generation_top_k', parseInt(e.target.value))}
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        Limits sampling to top K most likely tokens (0 = disabled)
+                                    </p>
+                                </div>
+
+                                {/* Min-P */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Min-P (0.0 - 1.0)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={editedSettings.generation_min_p ?? 0.0}
+                                        onChange={(e) => handleFieldChange('generation_min_p', parseFloat(e.target.value))}
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        Minimum probability threshold relative to most likely token (0 = disabled)
+                                    </p>
+                                </div>
                             </div>
                         )}
 
@@ -720,115 +793,316 @@ Now extract facts from the conversation above:`}
                                         </div>
                                     )}
                                 </div>
+                            </div>
+                        )}
 
-                                {/* Relationship Prompt */}
+                        {/* A-MEM Tab */}
+                        {activeTab === 'amem' && (
+                            <div className="space-y-8">
+                                {/* Header */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                                        Relationship Prompt
-                                    </label>
-                                    <textarea
-                                        value={editedSettings.relationship_prompt || ''}
-                                        onChange={(e) => handleFieldChange('relationship_prompt', e.target.value)}
-                                        placeholder="Leave empty to use default relationship prompt"
-                                        rows={12}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
-                                    />
-                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                        Required template variables: {'{new_note_content}'}, {'{new_note_type}'}, {'{new_note_context}'}, {'{existing_notes}'}
+                                    <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                                        A-MEM Configuration & Advanced Settings
+                                    </h3>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                                        View the A-MEM prompts used for note construction, link generation, and memory evolution.
+                                        Adjust advanced parameters to fine-tune A-MEM behavior.
                                     </p>
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowDefaultRelationship(!showDefaultRelationship)}
-                                        className="mt-2 text-sm text-blue-600 hover:text-blue-800"
-                                    >
-                                        {showDefaultRelationship ? '▼ Hide' : '▶ Show'} Default Relationship Prompt
-                                    </button>
-                                    {showDefaultRelationship && (
-                                        <div className="mt-3 p-4 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md">
-                                            <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Default Relationship Prompt:</p>
-                                            <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-mono">
-{`Analyze relationships between atomic notes.
+                                </div>
 
-**New Note:**
-Content: {new_note_content}
-Type: {new_note_type}
-Context: {new_note_context}
+                                {/* A-MEM Prompts - Read Only */}
+                                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6">
+                                    <h4 className="text-md font-semibold text-blue-900 dark:text-blue-100 mb-3">
+                                        A-MEM Prompts (Read-Only)
+                                    </h4>
+                                    <p className="text-sm text-blue-800 dark:text-blue-200 mb-4">
+                                        These prompts are from the A-MEM paper (NeurIPS 2025, Appendix B) and cannot be edited.
+                                        They control how Mnemosyne enriches notes, generates links, and evolves memories.
+                                    </p>
 
-**Existing Notes:**
-{existing_notes}
+                                    {/* Note Construction Prompt */}
+                                    <div className="mb-4">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowNoteConstruction(!showNoteConstruction)}
+                                            className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+                                        >
+                                            {showNoteConstruction ? '▼ Hide' : '▶ Show'} Note Construction Prompt (Phase 1)
+                                        </button>
+                                        {showNoteConstruction && (
+                                            <div className="mt-3 p-4 bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700 rounded-md">
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                                                    Phase 1: Note Enrichment (Keywords, Context, Tags)
+                                                </p>
+                                                <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-mono overflow-x-auto">
+{`Generate a structured analysis of the following content by:
+1. Identifying the most salient keywords (focus on nouns, verbs, and key concepts)
+2. Extracting core themes and contextual elements
+3. Creating relevant categorical tags
 
-**Instructions:**
-Identify relationships between the new note and existing notes. For each relationship found:
-1. Determine the relationship type
-2. Assess the strength (0.0-1.0, where 1.0 is strongest)
-
-**Relationship Types:**
-- **related_to**: General thematic connection (e.g., both about Python, both preferences)
-- **contradicts**: Direct contradiction (e.g., "prefers dark mode" vs "prefers light mode")
-- **refines**: The new note adds detail/nuance to an existing note
-- **context_for**: The new note provides context for understanding an existing note
-- **follows_from**: The new note is a logical consequence of an existing note
-
-**Strength Guidelines:**
-- 1.0: Very strong/direct relationship
-- 0.7-0.9: Clear relationship
-- 0.5-0.6: Moderate relationship
-- 0.3-0.4: Weak relationship
-- Below 0.3: Don't create relationship
-
-**Format your response as JSON:**
-\`\`\`json
+Format the response as a JSON object:
 {
-  "relationships": [
-    {
-      "to_note_id": "note-id",
-      "relationship_type": "related_to|contradicts|refines|context_for|follows_from",
-      "strength": 0.85,
-      "reasoning": "brief explanation"
-    }
+  "keywords": [
+    // several specific, distinct keywords that capture key concepts and terminology
+    // Order from most to least important
+    // Don't include keywords that are the name of the speaker or time
+    // At least three keywords, but don't be too redundant.
+  ],
+  "context": // one sentence summarizing:
+             // - Main topic/domain
+             // - Key arguments/points
+             // - Intended audience/purpose,
+  "tags": [
+    // several broad categories/themes for classification
+    // Include domain, format, and type tags
+    // At least three tags, but don't be too redundant.
   ]
 }
-\`\`\`
 
-**Guidelines:**
-- Only create relationships with strength >= 0.3
-- Contradictions should be rare and obvious
-- Most relationships will be "related_to" or "refines"
-- Focus on meaningful connections, not superficial similarities
-- Limit to top 5 strongest relationships
+Content for analysis:
+{content}
 
-**Example:**
+Timestamp: {timestamp}`}
+                                                </pre>
+                                            </div>
+                                        )}
+                                    </div>
 
-New Note: "uses vim keybindings"
-Existing Notes:
-1. [abc123] prefers VSCode | preference:editor
-2. [def456] learning Python | skill:programming
-3. [ghi789] prefers keyboard shortcuts | preference:ui
+                                    {/* Link Generation Prompt */}
+                                    <div className="mb-4">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowLinkGeneration(!showLinkGeneration)}
+                                            className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+                                        >
+                                            {showLinkGeneration ? '▼ Hide' : '▶ Show'} Link Generation Prompt (Phase 3)
+                                        </button>
+                                        {showLinkGeneration && (
+                                            <div className="mt-3 p-4 bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700 rounded-md">
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                                                    Phase 3: Link Generation (Relationship Analysis)
+                                                </p>
+                                                <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-mono overflow-x-auto">
+{`You are an AI memory evolution agent responsible for managing and evolving a knowledge base.
 
-Response:
-\`\`\`json
+Analyze the new memory note according to keywords and context, also with their several nearest neighbors memory.
+
+The new memory:
+Context: {new_context}
+Content: {new_content}
+Keywords: {new_keywords}
+
+The nearest neighbors memories:
+{nearest_neighbors}
+
+Based on this information, determine:
+Should this memory be evolved? Consider its relationships with other memories.
+
+Return your decision in JSON format:
 {
-  "relationships": [
+  "should_link": true/false,
+  "links": [
     {
-      "to_note_id": "abc123",
-      "relationship_type": "context_for",
-      "strength": 0.9,
-      "reasoning": "vim keybindings are used within VSCode editor"
-    },
-    {
-      "to_note_id": "ghi789",
-      "relationship_type": "related_to",
-      "strength": 0.7,
-      "reasoning": "both relate to keyboard-driven workflow preferences"
+      "target_note_id": "uuid",
+      "relationship_type": "string",
+      "strength": 0.0-1.0,
+      "rationale": "why this link makes sense"
     }
   ]
-}
-\`\`\`
+}`}
+                                                </pre>
+                                            </div>
+                                        )}
+                                    </div>
 
-Now analyze relationships for the new note above:`}
-                                            </pre>
+                                    {/* Memory Evolution Prompt */}
+                                    <div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowMemoryEvolution(!showMemoryEvolution)}
+                                            className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+                                        >
+                                            {showMemoryEvolution ? '▼ Hide' : '▶ Show'} Memory Evolution Prompt (Phase 4)
+                                        </button>
+                                        {showMemoryEvolution && (
+                                            <div className="mt-3 p-4 bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700 rounded-md">
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                                                    Phase 4: Memory Evolution (Neighbor Updates)
+                                                </p>
+                                                <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-mono overflow-x-auto">
+{`You are an AI memory evolution agent responsible for managing and evolving a knowledge base.
+
+Analyze the new memory note according to keywords and context, also with their several nearest neighbors memory.
+
+Make decisions about its evolution.
+
+The new memory:
+Context: {new_context}
+Content: {new_content}
+Keywords: {new_keywords}
+
+The nearest neighbors memories:
+{nearest_neighbors}
+
+Based on this information, determine:
+1. What specific actions should be taken (strengthen, update_neighbor)?
+1.1 If choose to strengthen the connection, which memory should it be connected to? Can you give the updated tags of this memory?
+1.2 If choose to update neighbor, you can update the context and tags of these memories based on the understanding of these memories.
+
+Tags should be determined by the content of these characteristic of these memories, which can be used to retrieve them later and categorize them.
+
+All the above information should be returned in a list format according to the sequence: [[new_memory],[neighbor_memory_1],...[neighbor_memory_n]]
+
+Return your decision in JSON format:
+{
+  "should_evolve": true/false,
+  "actions": ["strengthen", "merge", "prune"],
+  "suggested_connections": ["neighbor_memory_ids"],
+  "tags_to_update": ["tag_1",...,"tag_n"],
+  "new_context_neighborhood": ["new context",...,"new context"],
+  "new_tags_neighborhood": [["tag_1",...,"tag_n"],...["tag_1",...,"tag_n"]]
+}`}
+                                                </pre>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Advanced Settings */}
+                                <div>
+                                    <h4 className="text-md font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                                        Advanced A-MEM Parameters
+                                    </h4>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                                        Fine-tune how A-MEM processes your memories. Lower temperature = more focused/deterministic,
+                                        higher temperature = more creative/varied responses.
+                                    </p>
+
+                                    <div className="space-y-6">
+                                        {/* Note Enrichment Settings */}
+                                        <div className="bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                                            <h5 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                                                Phase 1: Note Enrichment
+                                            </h5>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        Temperature (0.0 - 1.0)
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.1"
+                                                        value={editedSettings?.amem_enrichment_temperature ?? 0.3}
+                                                        onChange={(e) => handleFieldChange('amem_enrichment_temperature', parseFloat(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        Max Tokens
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="50"
+                                                        max="2000"
+                                                        value={editedSettings?.amem_enrichment_max_tokens ?? 300}
+                                                        onChange={(e) => handleFieldChange('amem_enrichment_max_tokens', parseInt(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
-                                    )}
+
+                                        {/* Link Generation Settings */}
+                                        <div className="bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                                            <h5 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                                                Phase 3: Link Generation
+                                            </h5>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        Temperature (0.0 - 1.0)
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.1"
+                                                        value={editedSettings?.amem_link_generation_temperature ?? 0.3}
+                                                        onChange={(e) => handleFieldChange('amem_link_generation_temperature', parseFloat(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        Max Tokens
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="50"
+                                                        max="2000"
+                                                        value={editedSettings?.amem_link_generation_max_tokens ?? 500}
+                                                        onChange={(e) => handleFieldChange('amem_link_generation_max_tokens', parseInt(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        k (Nearest Neighbors)
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        max="50"
+                                                        value={editedSettings?.amem_link_generation_k ?? 10}
+                                                        onChange={(e) => handleFieldChange('amem_link_generation_k', parseInt(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                        Number of similar notes to consider
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Memory Evolution Settings */}
+                                        <div className="bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                                            <h5 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                                                Phase 4: Memory Evolution
+                                            </h5>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        Temperature (0.0 - 1.0)
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.1"
+                                                        value={editedSettings?.amem_evolution_temperature ?? 0.3}
+                                                        onChange={(e) => handleFieldChange('amem_evolution_temperature', parseFloat(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                        Max Tokens
+                                                    </label>
+                                                    <input
+                                                        type="number"
+                                                        min="50"
+                                                        max="2000"
+                                                        value={editedSettings?.amem_evolution_max_tokens ?? 800}
+                                                        onChange={(e) => handleFieldChange('amem_evolution_max_tokens', parseInt(e.target.value))}
+                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -868,6 +1142,7 @@ Now analyze relationships for the new note above:`}
                     </div>
                 </div>
             </main>
+            </div>
         </div>
     );
 };

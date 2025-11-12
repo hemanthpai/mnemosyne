@@ -101,7 +101,7 @@ class ConversationService:
                 'turn_number': turn_number
             })
 
-            # Schedule background extraction (15min delay)
+            # Schedule background extraction (async via Django-Q worker)
             _schedule_extraction(str(turn.id))
 
             logger.info(f"Stored turn {turn.id} for user {user_id}")
@@ -121,8 +121,16 @@ class ConversationService:
         threshold: float = 0.5
     ) -> List[Dict[str, Any]]:
         """
-        Fast path search - direct embedding, no LLM calls
-        Target: <10ms (cache hit), 100-300ms (cache miss)
+        Fast path search with cache-first architecture
+
+        Performance Targets:
+        - Cache hit: <10ms (return immediately from Redis)
+        - Cache miss: 100-300ms (embedding + vector search + cache update)
+
+        Architecture:
+        1. Check Redis cache for exact query match
+        2. If cache hit: return cached results immediately
+        3. If cache miss: generate embedding, vector search, cache result
 
         Args:
             query: Search query text
@@ -136,11 +144,13 @@ class ConversationService:
         Raises:
             ValueError: If embedding generation fails
         """
-        # Check cache first
+        # Step 1: Check cache first (cache-first architecture)
         cached_results = cache_service.get_cached_search(user_id, query)
         if cached_results is not None:
-            logger.info(f"Cache hit for search query: {query[:30]}...")
+            logger.info(f"✓ Cache hit for search: {query[:30]}... (latency: <10ms)")
             return cached_results[:limit]
+
+        logger.debug(f"✗ Cache miss for search: {query[:30]}... (falling back to vector search)")
 
         # Generate query embedding
         embedding_result = llm_service.get_embeddings([query])

@@ -158,3 +158,170 @@ export const fetchModels = async (
     });
     return response.data;
 };
+
+// ============================================================================
+// Queue Status API
+// ============================================================================
+
+export interface QueueStatusResponse {
+    success: boolean;
+    timestamp: string;
+    queue: {
+        waiting_in_queue: number;
+        currently_running: number;
+        pending: number;  // Legacy field
+        processing: number;  // Legacy field
+    };
+    queue_details: {
+        waiting_tasks: Array<{
+            name: string;
+            func: string;
+            lock: number;
+        }>;
+        waiting_breakdown: Array<{
+            func: string;
+            count: number;
+        }>;
+        running_tasks: Array<{
+            name: string;
+            func: string;
+            started: string | null;
+            duration_seconds: number;
+        }>;
+        oldest_waiting_lock: number | null;
+    };
+    stats: {
+        last_hour: {
+            total: number;
+            successful: number;
+            failed: number;
+            success_rate: number;
+        };
+        throughput: {
+            tasks_per_minute: number;
+            last_5_minutes: number;
+        };
+    };
+    task_breakdown: Array<{
+        func: string;
+        count: number;
+    }>;
+    recent_failures: Array<{
+        name: string;
+        func: string;
+        started: string | null;
+        stopped: string | null;
+        attempt_count: number;
+    }>;
+    worker_healthy: boolean;
+}
+
+export const getQueueStatus = async (): Promise<QueueStatusResponse> => {
+    const response = await axios.get(`${API_BASE_URL}/api/queue/status/`);
+    return response.data;
+};
+
+// ============================================================================
+// Benchmark API Functions
+// ============================================================================
+
+export const runBenchmark = async (testType: string, dataset: string): Promise<any> => {
+    const response = await axios.post(`${API_BASE_URL}/api/benchmarks/run/`, {
+        test_type: testType,
+        dataset: dataset
+    });
+    return response.data;
+};
+
+export const getBenchmarkStatus = async (taskId: string): Promise<any> => {
+    const response = await axios.get(`${API_BASE_URL}/api/benchmarks/status/${taskId}/`);
+    return response.data;
+};
+
+export const getBenchmarkResults = async (taskId: string): Promise<any> => {
+    const response = await axios.get(`${API_BASE_URL}/api/benchmarks/results/${taskId}/`);
+    return response.data;
+};
+
+export const listDatasets = async (): Promise<any> => {
+    const response = await axios.get(`${API_BASE_URL}/api/benchmarks/datasets/`);
+    return response.data;
+};
+
+export const uploadDataset = async (file: File): Promise<any> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await axios.post(`${API_BASE_URL}/api/benchmarks/datasets/upload/`, formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+        },
+    });
+    return response.data;
+};
+
+// ============================================================================
+// Activity Monitor API
+// ============================================================================
+
+export interface TaskProgress {
+    phase: string;
+    current: number;
+    total: number;
+    percentage: number;
+    detail?: string;
+    turn_id?: string;
+}
+
+export interface RunningTask {
+    task_id: string;
+    type: string;
+    name: string;
+    started: string;
+    elapsed_seconds: number;
+    progress?: TaskProgress;
+    turn_id?: string;
+}
+
+export interface PendingTask {
+    task_id: string;
+    type: string;
+    name: string;
+    queued_at: string;
+    wait_seconds: number;
+    turn_id?: string;
+}
+
+export interface RecentTask {
+    task_id: string;
+    type: string;
+    name: string;
+    status: 'completed' | 'failed';
+    started: string | null;
+    stopped: string | null;
+    duration_seconds: number;
+}
+
+export interface ActiveTasksResponse {
+    success: boolean;
+    timestamp: string;
+    running: RunningTask[];
+    pending: PendingTask[];
+    running_count: number;
+    pending_count: number;
+}
+
+export interface RecentTasksResponse {
+    success: boolean;
+    tasks: RecentTask[];
+}
+
+export const getActiveTasks = async (): Promise<ActiveTasksResponse> => {
+    const response = await axios.get(`${API_BASE_URL}/api/tasks/active/`);
+    return response.data;
+};
+
+export const getRecentTasks = async (): Promise<RecentTasksResponse> => {
+    const response = await axios.get(`${API_BASE_URL}/api/tasks/recent/`);
+    return response.data;
+};

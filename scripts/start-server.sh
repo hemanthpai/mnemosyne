@@ -41,14 +41,33 @@ echo "Phase 1: Settings configured via environment variables"
 echo "Collecting static files..."
 python manage.py collectstatic --noinput --clear || echo "Static files collection skipped"
 
+echo "=== Starting Django-Q Worker Cluster ==="
+# Start Django-Q cluster in background for async task processing
+python manage.py qcluster &
+QCLUSTER_PID=$!
+echo "Django-Q cluster started with PID: $QCLUSTER_PID"
+
+# Give Django-Q a moment to initialize
+sleep 2
+
 echo "=== Starting Gunicorn Server ==="
 # Minimal but production-ready gunicorn config
-exec gunicorn memory_service.wsgi:application \
+# Run in background (not exec) so qcluster stays alive
+gunicorn memory_service.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers 2 \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --access-logfile - \
     --error-logfile - \
-    --log-level info
+    --log-level info &
+GUNICORN_PID=$!
+echo "Gunicorn server started with PID: $GUNICORN_PID"
 
 echo "=== Mnemosyne AI Memory Service Started Successfully ==="
+echo "Django-Q PID: $QCLUSTER_PID | Gunicorn PID: $GUNICORN_PID"
+
+# Trap SIGTERM and SIGINT to gracefully shutdown both processes
+trap "echo 'Shutting down...'; kill -TERM $QCLUSTER_PID $GUNICORN_PID 2>/dev/null; wait" SIGTERM SIGINT
+
+# Wait for both processes - if either exits, the script will exit
+wait

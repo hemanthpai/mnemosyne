@@ -4,7 +4,7 @@ import PageHeader from "../components/PageHeader";
 import Dropdown from "../components/Dropdown";
 import { useSidebar } from "../contexts/SidebarContext";
 
-type TabType = 'embeddings' | 'generation' | 'prompts' | 'amem';
+type TabType = 'embeddings' | 'generation' | 'reranking' | 'prompts' | 'amem';
 
 const SettingsPage: React.FC = () => {
     const { isSidebarOpen } = useSidebar();
@@ -295,6 +295,7 @@ const SettingsPage: React.FC = () => {
                             >
                                 <option value="embeddings">Embeddings Configuration</option>
                                 <option value="generation">Generation Configuration</option>
+                                <option value="reranking">Reranking Configuration</option>
                                 <option value="prompts">Prompts Configuration</option>
                                 <option value="amem">A-MEM & Advanced</option>
                             </select>
@@ -321,6 +322,16 @@ const SettingsPage: React.FC = () => {
                                 }`}
                             >
                                 Generation
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('reranking')}
+                                className={`px-6 py-4 text-sm font-medium border-b-2 transition-colors ${
+                                    activeTab === 'reranking'
+                                        ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+                                }`}
+                            >
+                                Reranking
                             </button>
                             <button
                                 onClick={() => setActiveTab('prompts')}
@@ -666,6 +677,252 @@ const SettingsPage: React.FC = () => {
                                     />
                                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                         Minimum probability threshold relative to most likely token (0 = disabled)
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Reranking Tab */}
+                        {activeTab === 'reranking' && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                                        Reranking Configuration
+                                    </h3>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                                        Configure cross-encoder reranking to improve search precision and recall.
+                                        Reranking retrieves more candidates from vector search, then uses a more accurate model to rerank them.
+                                    </p>
+                                </div>
+
+                                {/* Enable Reranking */}
+                                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                                    <div className="flex items-start gap-3">
+                                        <input
+                                            type="checkbox"
+                                            id="enable_reranking"
+                                            checked={editedSettings.enable_reranking || false}
+                                            onChange={(e) => handleFieldChange('enable_reranking', e.target.checked)}
+                                            className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                        />
+                                        <div className="flex-1">
+                                            <label htmlFor="enable_reranking" className="block text-sm font-medium text-blue-900 dark:text-blue-100 cursor-pointer">
+                                                Enable Reranking
+                                            </label>
+                                            <p className="text-sm text-blue-800 dark:text-blue-200 mt-1">
+                                                Improve search quality by reranking initial results with a more accurate model.
+                                                Expected improvement: +5-10% precision, +8-15% recall.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Provider */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Provider
+                                    </label>
+                                    <Dropdown
+                                        value={editedSettings.reranking_provider || 'ollama'}
+                                        options={[
+                                            { value: 'remote', label: 'Remote Server (GPU recommended)' },
+                                            { value: 'ollama', label: 'Ollama (LLM-based)' },
+                                            { value: 'sentence_transformers', label: 'Sentence Transformers (Local)' }
+                                        ]}
+                                        onChange={(value) => handleFieldChange('reranking_provider', value)}
+                                    />
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        {editedSettings.reranking_provider === 'remote' &&
+                                            '🚀 Best performance: Connect to GPU server running reranking endpoint'
+                                        }
+                                        {editedSettings.reranking_provider === 'ollama' &&
+                                            '🐢 Good quality, slower: Uses LLM for relevance scoring'
+                                        }
+                                        {editedSettings.reranking_provider === 'sentence_transformers' &&
+                                            '⚡ Fast with GPU, slow with CPU: Loads model locally'
+                                        }
+                                    </p>
+                                </div>
+
+                                {/* Remote Server Settings */}
+                                {editedSettings.reranking_provider === 'remote' && (
+                                    <div className="space-y-4 pl-4 border-l-2 border-blue-500">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Endpoint URL
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editedSettings.reranking_endpoint_url || ''}
+                                                onChange={(e) => handleFieldChange('reranking_endpoint_url', e.target.value)}
+                                                placeholder="http://your-gpu-server:8081"
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                URL of your reranking server (TEI or custom FastAPI)
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Model Name
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editedSettings.reranking_model_name || 'BAAI/bge-reranker-base'}
+                                                onChange={(e) => handleFieldChange('reranking_model_name', e.target.value)}
+                                                placeholder="BAAI/bge-reranker-base"
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                Model reference (display only, actual model loaded on server)
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Ollama Settings */}
+                                {editedSettings.reranking_provider === 'ollama' && (
+                                    <div className="space-y-4 pl-4 border-l-2 border-purple-500">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Ollama Base URL
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editedSettings.ollama_reranking_base_url || 'http://host.docker.internal:11434'}
+                                                onChange={(e) => handleFieldChange('ollama_reranking_base_url', e.target.value)}
+                                                placeholder="http://host.docker.internal:11434"
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Ollama Model
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editedSettings.ollama_reranking_model || 'llama3.2:3b'}
+                                                onChange={(e) => handleFieldChange('ollama_reranking_model', e.target.value)}
+                                                placeholder="llama3.2:3b"
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                Recommended: llama3.2:3b, qwen2.5:3b, or gemma2:2b
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Temperature
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                min="0"
+                                                max="1"
+                                                value={editedSettings.ollama_reranking_temperature ?? 0.0}
+                                                onChange={(e) => handleFieldChange('ollama_reranking_temperature', parseFloat(e.target.value))}
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                0.0 = deterministic scoring (recommended)
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Sentence Transformers Settings */}
+                                {editedSettings.reranking_provider === 'sentence_transformers' && (
+                                    <div className="space-y-4 pl-4 border-l-2 border-green-500">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Model Name
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editedSettings.reranking_model_name || 'BAAI/bge-reranker-base'}
+                                                onChange={(e) => handleFieldChange('reranking_model_name', e.target.value)}
+                                                placeholder="BAAI/bge-reranker-base"
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                Recommended: BAAI/bge-reranker-base (278M params, balanced) or cross-encoder/ms-marco-MiniLM-L-6-v2 (faster on CPU)
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Device
+                                            </label>
+                                            <Dropdown
+                                                value={editedSettings.reranking_device || 'cpu'}
+                                                options={[
+                                                    { value: 'auto', label: 'Auto-detect' },
+                                                    { value: 'cpu', label: 'CPU' },
+                                                    { value: 'cuda', label: 'CUDA (GPU)' }
+                                                ]}
+                                                onChange={(value) => handleFieldChange('reranking_device', value)}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Batch Size
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="64"
+                                                value={editedSettings.reranking_batch_size || 16}
+                                                onChange={(e) => handleFieldChange('reranking_batch_size', parseInt(e.target.value))}
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                Lower = less memory, Higher = faster (GPU only)
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Performance Settings */}
+                                <div>
+                                    <h4 className="text-md font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                                        Performance Settings
+                                    </h4>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                            Candidate Multiplier
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="2"
+                                            max="10"
+                                            value={editedSettings.reranking_candidate_multiplier || 3}
+                                            onChange={(e) => handleFieldChange('reranking_candidate_multiplier', parseInt(e.target.value))}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            Retrieve N× more candidates before reranking. Example: 3 means retrieve 30 candidates to rerank top 10.
+                                            Higher = better recall but slower. Recommended: 3-5.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* Information Box */}
+                                <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                                    <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                                        📊 Expected Improvements
+                                    </h4>
+                                    <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                                        <li>• Precision@10: +5-10% improvement</li>
+                                        <li>• Recall@10: +8-15% improvement</li>
+                                        <li>• Latency: +50-200ms per query</li>
+                                    </ul>
+                                    <p className="text-xs text-gray-500 dark:text-gray-500 mt-3">
+                                        💡 Tip: Use "remote" provider with GPU server for best performance, or "ollama" for quick setup without additional infrastructure.
                                     </p>
                                 </div>
                             </div>

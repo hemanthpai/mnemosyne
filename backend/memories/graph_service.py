@@ -19,6 +19,7 @@ from .models import AtomicNote, NoteRelationship
 from .vector_service import vector_service
 from .llm_service import llm_service
 from .settings_model import Settings
+from .reranking_service import get_reranking_service
 
 logger = logging.getLogger(__name__)
 
@@ -181,68 +182,114 @@ class GraphService:
         use_expansion: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Search atomic notes with optional query expansion
+        Search atomic notes with optional query expansion and reranking
 
         When expansion is enabled, expands the query into multiple variations
         and fuses results using maximum score across all variations.
 
+        When reranking is enabled, retrieves more candidates and reranks them
+        for improved precision.
+
         Args:
             query: Search query text
             user_id: UUID of the user
-            limit: Maximum number of results
+            limit: Maximum number of results to return
             threshold: Minimum similarity score
             use_expansion: Whether to use query expansion
 
         Returns:
             List of atomic notes with scores
         """
-        # Check settings
+        # Get settings
         settings = Settings.get_settings()
+        
+        # Determine candidate limit for reranking
+        enable_reranking = settings.enable_reranking
+        if enable_reranking:
+            # Retrieve more candidates for reranking
+            candidate_limit = limit * settings.reranking_candidate_multiplier
+            logger.info(f"Reranking enabled: retrieving {candidate_limit} candidates to rerank top {limit}")
+        else:
+            candidate_limit = limit
+
+        # Perform search (with or without expansion)
         if not use_expansion or not settings.enable_query_expansion:
             # No expansion: use original search
-            return self.search_atomic_notes(query, user_id, limit, threshold)
+            results = self.search_atomic_notes(query, user_id, candidate_limit, threshold)
+        else:
+            try:
+                # Expand query
+                query_variations = self.expand_query(query)
 
-        try:
-            # Expand query
-            query_variations = self.expand_query(query)
+                # Search with each variation and collect results
+                all_results: Dict[str, Dict[str, Any]] = {}  # note_id → best result
 
-            # Search with each variation and collect results
-            all_results: Dict[str, Dict[str, Any]] = {}  # note_id → best result
+                for variant in query_variations:
+                    # Search with larger limit to cast wider net
+                    variant_results = self.search_atomic_notes(
+                        query=variant,
+                        user_id=user_id,
+                        limit=candidate_limit * 2,  # Get even more candidates with expansion
+                        threshold=max(0.0, threshold - 0.2)  # Lower threshold for recall
+                    )
 
-            for variant in query_variations:
-                # Search with larger limit to cast wider net
-                variant_results = self.search_atomic_notes(
-                    query=variant,
-                    user_id=user_id,
-                    limit=limit * 3,  # Get more candidates
-                    threshold=max(0.0, threshold - 0.2)  # Lower threshold for recall
+                    # Merge results, keeping best score for each note
+                    for result in variant_results:
+                        note_id = result['id']
+                        score = result['score']
+
+                        if note_id not in all_results or score > all_results[note_id]['score']:
+                            all_results[note_id] = result
+
+                # Sort by score and take top candidates
+                results = sorted(
+                    all_results.values(),
+                    key=lambda x: x['score'],
+                    reverse=True
+                )[:candidate_limit]
+
+                logger.info(
+                    f"Query expansion search: {len(query_variations)} variations → "
+                    f"{len(all_results)} unique results → top {len(results)} candidates"
                 )
 
-                # Merge results, keeping best score for each note
-                for result in variant_results:
-                    note_id = result['id']
-                    score = result['score']
+            except Exception as e:
+                logger.error(f"Search with expansion failed: {e}. Falling back to basic search.")
+                results = self.search_atomic_notes(query, user_id, candidate_limit, threshold)
 
-                    if note_id not in all_results or score > all_results[note_id]['score']:
-                        all_results[note_id] = result
-
-            # Sort by score and return top-k
-            final_results = sorted(
-                all_results.values(),
-                key=lambda x: x['score'],
-                reverse=True
-            )[:limit]
-
-            logger.info(
-                f"Query expansion search: {len(query_variations)} variations → "
-                f"{len(all_results)} unique results → top {len(final_results)} returned"
-            )
-
-            return final_results
-
-        except Exception as e:
-            logger.error(f"Search with expansion failed: {e}. Falling back to basic search.")
-            return self.search_atomic_notes(query, user_id, limit, threshold)
+        # Apply reranking if enabled and we have results
+        if enable_reranking and results and len(results) > limit:
+            try:
+                logger.info(f"Reranking {len(results)} candidates with provider: {settings.reranking_provider}")
+                
+                # Get reranking service
+                reranker = get_reranking_service()
+                
+                # Extract document texts for reranking
+                documents = [result['content'] for result in results]
+                
+                # Rerank
+                reranked_indices = reranker.rerank(query, documents, top_k=limit)
+                
+                # Reorder results based on reranker output
+                reranked_results = []
+                for idx, rerank_score in reranked_indices:
+                    result = results[idx].copy()
+                    # Store both original vector score and rerank score
+                    result['vector_score'] = result['score']
+                    result['rerank_score'] = rerank_score
+                    result['score'] = rerank_score  # Use rerank score as primary
+                    reranked_results.append(result)
+                
+                logger.info(f"Reranking complete: {len(reranked_results)} results returned")
+                return reranked_results
+                
+            except Exception as e:
+                logger.error(f"Reranking failed: {e}. Returning original results.")
+                # Fall through to return original results
+        
+        # Return top-k results (no reranking or reranking disabled)
+        return results[:limit]
 
     def traverse_graph(
         self,

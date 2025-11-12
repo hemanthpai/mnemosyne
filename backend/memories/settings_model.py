@@ -158,6 +158,60 @@ class Settings(models.Model):
         help_text="Enable query expansion (may be redundant with A-MEM multi-attribute embeddings - test both)"
     )
 
+    # Reranking Configuration
+    enable_reranking = models.BooleanField(
+        default=True,
+        help_text="Enable cross-encoder reranking for improved search precision"
+    )
+    reranking_provider = models.CharField(
+        max_length=50,
+        default='ollama',
+        help_text="Provider: remote (GPU server endpoint), ollama (LLM-based), or sentence_transformers (local cross-encoder)"
+    )
+
+    # Remote/Sentence-Transformers Reranking Settings
+    reranking_endpoint_url = models.CharField(
+        max_length=500,
+        default='http://your-gpu-server:8081',
+        help_text="Endpoint URL for remote reranking server (used with 'remote' provider)"
+    )
+    reranking_model_name = models.CharField(
+        max_length=200,
+        default='BAAI/bge-reranker-base',
+        help_text="Model name (for remote: reference only; for sentence_transformers: model to load)"
+    )
+    reranking_batch_size = models.IntegerField(
+        default=16,
+        help_text="Batch size for reranking (lower = less memory, higher = faster)"
+    )
+    reranking_device = models.CharField(
+        max_length=20,
+        default='cpu',
+        help_text="Device: cpu, cuda (if GPU available), or auto (auto-detect)"
+    )
+
+    # Ollama Reranking Settings
+    ollama_reranking_base_url = models.CharField(
+        max_length=500,
+        default='http://host.docker.internal:11434',
+        help_text="Ollama API endpoint URL for reranking"
+    )
+    ollama_reranking_model = models.CharField(
+        max_length=200,
+        default='llama3.2:3b',
+        help_text="Ollama model for LLM-based reranking (e.g., llama3.2:3b, qwen2.5:3b, gemma2:2b)"
+    )
+    ollama_reranking_temperature = models.FloatField(
+        default=0.0,
+        help_text="Temperature for Ollama reranking (0.0 = deterministic scoring)"
+    )
+
+    # Reranking Performance Settings
+    reranking_candidate_multiplier = models.IntegerField(
+        default=3,
+        help_text="Retrieve N× more candidates before reranking (e.g., 3 = retrieve 30 to rerank top 10)"
+    )
+
     # Metadata
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.CharField(max_length=200, blank=True, default='system')
@@ -277,6 +331,22 @@ class Settings(models.Model):
             'amem_link_generation_k': self.amem_link_generation_k,
             'amem_evolution_temperature': self.amem_evolution_temperature,
             'amem_evolution_max_tokens': self.amem_evolution_max_tokens,
+
+            # Search configuration
+            'enable_multipass_extraction': self.enable_multipass_extraction,
+            'enable_query_expansion': self.enable_query_expansion,
+
+            # Reranking configuration
+            'enable_reranking': self.enable_reranking,
+            'reranking_provider': self.reranking_provider,
+            'reranking_endpoint_url': self.reranking_endpoint_url,
+            'reranking_model_name': self.reranking_model_name,
+            'reranking_batch_size': self.reranking_batch_size,
+            'reranking_device': self.reranking_device,
+            'ollama_reranking_base_url': self.ollama_reranking_base_url,
+            'ollama_reranking_model': self.ollama_reranking_model,
+            'ollama_reranking_temperature': self.ollama_reranking_temperature,
+            'reranking_candidate_multiplier': self.reranking_candidate_multiplier,
 
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

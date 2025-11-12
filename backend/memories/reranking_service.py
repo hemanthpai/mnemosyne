@@ -177,7 +177,7 @@ class RerankingService:
             if isinstance(results, list):
                 # Format: [{"index": 0, "score": 0.98}, ...]
                 if results and isinstance(results[0], dict) and 'index' in results[0]:
-                    return [(r['index'], r['score']) for r in results[:top_k] if top_k else results]
+                    return [(r['index'], r['score']) for r in (results[:top_k] if top_k else results)]
                 # Format: [0.98, 0.45, ...] (scores in original order)
                 elif results and isinstance(results[0], (int, float)):
                     indexed = [(i, float(score)) for i, score in enumerate(results)]

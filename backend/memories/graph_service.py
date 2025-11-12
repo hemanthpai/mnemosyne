@@ -356,11 +356,11 @@ Rewritten query:"""
                     bm25_notes = AtomicNote.objects.filter(
                         id__in=bm25_note_ids,
                         user_id=user_id
-                    ).values('id', 'content', 'contextual_description', 'importance', 'created_at')
-                    
+                    ).values('id', 'content', 'contextual_description', 'importance_score', 'created_at')
+
                     # Build lookup dict for BM25 scores
                     bm25_score_map = {r['note_id']: r['bm25_score'] for r in bm25_results}
-                    
+
                     # Convert to result format with BM25 scores
                     bm25_results_full = []
                     for note in bm25_notes:
@@ -370,7 +370,7 @@ Rewritten query:"""
                             'note_id': note_id,
                             'content': note['content'],
                             'contextual_description': note['contextual_description'],
-                            'importance': note['importance'],
+                            'importance_score': note['importance_score'],
                             'created_at': note['created_at'],
                             'bm25_score': bm25_score_map.get(note_id, 0.0),
                             'score': bm25_score_map.get(note_id, 0.0)  # Use BM25 as score for RRF

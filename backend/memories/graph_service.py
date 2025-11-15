@@ -358,8 +358,8 @@ Rewritten query:"""
                         user_id=user_id
                     ).values('id', 'content', 'contextual_description', 'importance_score', 'created_at')
 
-                    # Build lookup dict for BM25 scores
-                    bm25_score_map = {r['note_id']: r['bm25_score'] for r in bm25_results}
+                    # Build lookup dict for BM25 scores (ensure string keys for consistency)
+                    bm25_score_map = {str(r['note_id']): r['bm25_score'] for r in bm25_results}
 
                     # Convert to result format with BM25 scores
                     bm25_results_full = []
@@ -408,7 +408,7 @@ Rewritten query:"""
             results = vector_results
 
         # STEP 3: Apply reranking if enabled
-        if enable_reranking and results and len(results) > limit:
+        if enable_reranking and results:
             try:
                 logger.info(f"Reranking {len(results)} candidates with provider: {settings.reranking_provider}")
                 

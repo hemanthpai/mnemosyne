@@ -17,7 +17,9 @@ from .views import (
     ListDatasetsView,
     UploadDatasetView,
     ActiveTasksView,
-    RecentTasksView
+    RecentTasksView,
+    ClearAllDataView,
+    CancelBenchmarkView
 )
 from .import_views import (
     StartImportView,
@@ -71,8 +73,12 @@ urlpatterns = [
     path('benchmarks/results/<str:task_id>/', BenchmarkResultsView.as_view(), name='benchmark_results'),
     path('benchmarks/datasets/', ListDatasetsView.as_view(), name='list_datasets'),
     path('benchmarks/datasets/upload/', csrf_exempt(UploadDatasetView.as_view()), name='upload_dataset'),
+    path('benchmarks/cancel/', csrf_exempt(CancelBenchmarkView.as_view()), name='cancel_benchmark'),
 
     # Activity Monitor endpoints
     path('tasks/active/', ActiveTasksView.as_view(), name='active_tasks'),
     path('tasks/recent/', RecentTasksView.as_view(), name='recent_tasks'),
+
+    # Data Management endpoints
+    path('data/clear-all/', ClearAllDataView.as_view(), name='clear_all_data'),
 ]

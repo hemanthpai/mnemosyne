@@ -63,7 +63,8 @@ class RerankingService:
             self.model = CrossEncoder(
                 self.settings.reranking_model_name,
                 device=device,
-                max_length=512  # Standard length for most rerankers
+                max_length=512,  # Standard length for most rerankers
+                automodel_args={'trust_remote_code': True}  # Required for v2 models
             )
 
             logger.info(f"Cross-encoder model loaded successfully on {device}")

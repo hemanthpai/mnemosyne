@@ -50,6 +50,7 @@ services:
     ports:
       - "8080:8000"
     environment:
+      - TZ=UTC
       - DEBUG=False
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-homeserver_postgres_pass}@db:5432/mnemosyne
       - DATABASE_HOST=db
@@ -87,6 +88,7 @@ services:
     build: .
     command: python manage.py qcluster
     environment:
+      - TZ=UTC
       - DEBUG=False
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-homeserver_postgres_pass}@db:5432/mnemosyne
       - DATABASE_HOST=db

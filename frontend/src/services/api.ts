@@ -1,8 +1,8 @@
 import axios from 'axios';
 import {
-    StoreConversationTurnResponse,
-    SearchConversationsResponse,
     ListConversationsResponse,
+    SearchConversationsResponse,
+    StoreConversationTurnResponse,
 } from '../types/index';
 
 // Auto-detect API base URL based on environment
@@ -260,6 +260,11 @@ export const uploadDataset = async (file: File): Promise<any> => {
     return response.data;
 };
 
+export const cancelBenchmark = async (taskId: string): Promise<any> => {
+    const response = await axios.post(`${API_BASE_URL}/api/benchmarks/cancel/`, { task_id: taskId });
+    return response.data;
+};
+
 // ============================================================================
 // Activity Monitor API
 // ============================================================================
@@ -323,5 +328,14 @@ export const getActiveTasks = async (): Promise<ActiveTasksResponse> => {
 
 export const getRecentTasks = async (): Promise<RecentTasksResponse> => {
     const response = await axios.get(`${API_BASE_URL}/api/tasks/recent/`);
+    return response.data;
+};
+
+// ============================================================================
+// Data Management API
+// ============================================================================
+
+export const clearAllData = async (): Promise<{ success: boolean; error?: string }> => {
+    const response = await axios.post(`${API_BASE_URL}/api/data/clear-all/`);
     return response.data;
 };

@@ -70,6 +70,20 @@ def run_benchmark_task(tracking_id, test_type, dataset):
 
     except Exception as e:
         sys.stdout = sys.__stdout__
+
+        # Check if this is a cancellation
+        error_msg = str(e)
+        if 'cancelled' in error_msg.lower() or 'BenchmarkCancelledException' in str(type(e)):
+            logger.info(f"Benchmark task {tracking_id} was cancelled by user")
+            return {
+                'success': False,
+                'error': 'cancelled_by_user',
+                'message': 'Benchmark was cancelled by user',
+                'test_type': test_type,
+                'dataset': dataset,
+                'timestamp': timezone.now().isoformat()
+            }
+
         logger.error(f"Benchmark task failed: {e}", exc_info=True)
 
         # Return error - django-q will store this as the task result

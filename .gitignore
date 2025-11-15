@@ -75,3 +75,6 @@ qdrant_storage/
 
 # Editor backups
 *~
+
+#Serena
+.serena

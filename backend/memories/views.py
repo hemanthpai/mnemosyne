@@ -300,7 +300,10 @@ class UpdateSettingsView(APIView):
                           'amem_enrichment_temperature', 'amem_enrichment_max_tokens',
                           'amem_link_generation_temperature', 'amem_link_generation_max_tokens',
                           'amem_link_generation_k', 'amem_evolution_temperature', 'amem_evolution_max_tokens',
-                          'enable_multipass_extraction', 'enable_query_expansion']:
+                          'enable_multipass_extraction', 'enable_query_expansion', 'enable_query_rewriting', 'enable_hybrid_search',
+                          'enable_reranking', 'reranking_provider', 'reranking_endpoint_url', 'reranking_model_name',
+                          'reranking_batch_size', 'reranking_device', 'ollama_reranking_base_url',
+                          'ollama_reranking_model', 'ollama_reranking_temperature', 'reranking_candidate_multiplier']:
                 if field in request.data:
                     value = request.data[field]
 
@@ -309,6 +312,55 @@ class UpdateSettingsView(APIView):
                         if value and value not in ['ollama', 'openai', 'openai_compatible', '']:
                             return Response(
                                 {'success': False, 'error': f'Invalid provider: {value}'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'reranking_provider':
+                        if value not in ['remote', 'ollama', 'sentence_transformers']:
+                            return Response(
+                                {'success': False, 'error': f'Invalid reranking provider: {value}'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'reranking_batch_size':
+                        try:
+                            value = int(value)
+                            if value < 1 or value > 256:
+                                return Response(
+                                    {'success': False, 'error': 'Batch size must be between 1 and 256'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid batch size value'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'reranking_candidate_multiplier':
+                        try:
+                            value = int(value)
+                            if value < 1 or value > 10:
+                                return Response(
+                                    {'success': False, 'error': 'Candidate multiplier must be between 1 and 10'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid candidate multiplier value'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'ollama_reranking_temperature':
+                        try:
+                            value = float(value)
+                            if value < 0.0 or value > 1.0:
+                                return Response(
+                                    {'success': False, 'error': 'Ollama reranking temperature must be between 0.0 and 1.0'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid ollama_reranking_temperature value'},
                                 status=status.HTTP_400_BAD_REQUEST
                             )
 
@@ -410,9 +462,9 @@ class UpdateSettingsView(APIView):
                                    'amem_evolution_max_tokens']:
                         try:
                             value = int(value)
-                            if value < 50 or value > 2000:
+                            if value < 50 or value > 8192:
                                 return Response(
-                                    {'success': False, 'error': f'{field} must be between 50 and 2000'},
+                                    {'success': False, 'error': f'{field} must be between 50 and 8192'},
                                     status=status.HTTP_400_BAD_REQUEST
                                 )
                         except (ValueError, TypeError):
@@ -437,7 +489,8 @@ class UpdateSettingsView(APIView):
                             )
 
                     # Validate boolean fields
-                    elif field in ['enable_multipass_extraction', 'enable_query_expansion']:
+                    elif field in ['enable_multipass_extraction', 'enable_query_expansion',
+                                   'enable_query_rewriting', 'enable_hybrid_search', 'enable_reranking']:
                         if not isinstance(value, bool):
                             return Response(
                                 {'success': False, 'error': f'{field} must be a boolean'},
@@ -1482,6 +1535,208 @@ class RecentTasksView(APIView):
 
         except Exception as e:
             logger.error(f"Error fetching recent tasks: {e}", exc_info=True)
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+# ============================================================================
+# Data Management API Views  
+# ============================================================================
+
+class ClearAllDataView(APIView):
+    """Clear all data except settings"""
+
+    def post(self, request):
+        """
+        Clear all data from conversations, notes, relationships
+        Preserves settings and other configuration data
+        """
+        try:
+            logger.info("Starting clear all data operation")
+            
+            # Clear conversation turns
+            conversations_deleted = ConversationTurn.objects.all().delete()[0]
+            logger.info(f"Deleted {conversations_deleted} conversation turns")
+            
+            # Clear atomic notes
+            notes_deleted = AtomicNote.objects.all().delete()[0]
+            logger.info(f"Deleted {notes_deleted} atomic notes")
+            
+            # Clear relationships (should cascade, but explicit is safer)
+            relationships_deleted = NoteRelationship.objects.all().delete()[0]
+            logger.info(f"Deleted {relationships_deleted} note relationships")
+            
+            # Clear vector storage in Qdrant if available
+            try:
+                # The vector service exposes a global instance `vector_service`
+                # with a `clear_all_memories()` admin method that deletes/recreates
+                # the Qdrant collection. Use that instead of non-existent helpers.
+                from .vector_service import vector_service as q_vector_service
+
+                if hasattr(q_vector_service, 'clear_all_memories'):
+                    resp = q_vector_service.clear_all_memories()
+                    logger.info("Cleared all vector embeddings: %s", resp)
+                else:
+                    logger.warning("Vector service does not implement clear_all_memories(), skipping Qdrant clear")
+            except Exception as e:
+                logger.warning(f"Failed to clear vector storage: {e}")
+            
+            # Clear Django-Q cache
+            try:
+                from django.core.cache import cache
+                cache.clear()
+                logger.info("Cleared Django cache")
+            except Exception as e:
+                logger.warning(f"Failed to clear cache: {e}")
+            
+            total_deleted = conversations_deleted + notes_deleted + relationships_deleted
+            logger.info(f"Clear all data completed: {total_deleted} items deleted total")
+            
+            return Response({
+                'success': True,
+                'message': f'Successfully cleared all data ({total_deleted} items)',
+                'deleted_items': {
+                    'conversations': conversations_deleted,
+                    'notes': notes_deleted,
+                    'relationships': relationships_deleted
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"Failed to clear all data: {e}", exc_info=True)
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class CancelBenchmarkView(APIView):
+    """Cancel a running benchmark task"""
+
+    def post(self, request):
+        """
+        Cancel a running benchmark task by stopping it in Django-Q
+        """
+        try:
+            # Accept either the django-q numeric task id or our tracking_id (returned to frontend)
+            django_q_task_id = request.data.get('django_q_task_id')
+            tracking_id = request.data.get('tracking_id') or request.data.get('task_id')
+            
+            # Debug logging to understand what's being received
+            logger.info(f"Cancel benchmark request data: {request.data}")
+            logger.info(f"django_q_task_id: {django_q_task_id}, tracking_id: {tracking_id}")
+            logger.info(f"Request method: {request.method}")
+            logger.info(f"Content type: {request.content_type}")
+
+            from django.core.cache import cache
+
+            # If caller provided tracking_id, look up the django-q id from cache
+            if not django_q_task_id and tracking_id:
+                cached = cache.get(f'benchmark_django_q_id_{tracking_id}')
+                if cached:
+                    django_q_task_id = cached
+                else:
+                    # Cache miss - try to find the task by group (which contains tracking_id)
+                    try:
+                        task = Task.objects.filter(group=tracking_id).order_by('-started').first()
+                        if task:
+                            django_q_task_id = task.id
+                            logger.info(f"Found task {django_q_task_id} for tracking_id {tracking_id}")
+                    except Exception as e:
+                        logger.debug(f"Could not find task by tracking_id: {e}")
+
+            # Try to cancel queued OrmQ entries first (even if Task record not found)
+            # This handles cases where task is queued but not yet in Task table
+            queued_count = 0
+            extraction_count = 0
+            try:
+                from django_q.models import OrmQ
+
+                # OrmQ.task is a pickled field, we need to iterate to filter
+                # Cannot use Django ORM queries on pickled data
+                to_delete = []
+                extraction_tasks = []
+
+                for q in OrmQ.objects.all():
+                    task_data = q.task  # Unpickles the data
+                    task_name = task_data.get('name', '')
+
+                    # Check if this task matches our tracking_id or task_id
+                    if (tracking_id and task_data.get('group') == tracking_id) or \
+                       (django_q_task_id and task_data.get('id') == str(django_q_task_id)):
+                        to_delete.append(q.id)
+                        logger.debug(f"Marking for deletion: {task_name} (group={task_data.get('group')})")
+
+                    # Also remove any extraction tasks spawned by the benchmark
+                    # These have names like "extract_<uuid>" or "retry_extract_<uuid>_N" but no group
+                    elif task_name.startswith('extract_') or task_name.startswith('retry_extract_'):
+                        extraction_tasks.append(q.id)
+                        logger.debug(f"Marking extraction task for deletion: {task_name}")
+
+                if to_delete:
+                    queued_count = len(to_delete)
+                    OrmQ.objects.filter(id__in=to_delete).delete()
+                    logger.info(f"Removed {queued_count} queued benchmark task(s) for tracking_id={tracking_id}")
+
+                # Also remove extraction tasks when cancelling benchmark
+                if extraction_tasks:
+                    extraction_count = len(extraction_tasks)
+                    OrmQ.objects.filter(id__in=extraction_tasks).delete()
+                    logger.info(f"Removed {extraction_count} queued extraction task(s)")
+
+            except Exception as e:
+                logger.error(f"Error checking/removing OrmQ entries: {e}", exc_info=True)
+
+            # If no Task record found, return success (we already cleaned up OrmQ above)
+            if not django_q_task_id:
+                total_cleared = queued_count + extraction_count
+                logger.warning(f"No Task record found for tracking_id {tracking_id}, cleared {total_cleared} queued entries (benchmark: {queued_count}, extraction: {extraction_count})")
+                return Response({
+                    'success': True,
+                    'message': f'Cleared {total_cleared} queued task(s) for {tracking_id} (benchmark: {queued_count}, extraction: {extraction_count}). Task may have already completed or failed.',
+                    'already_stopped': True,
+                    'queued_cleared': queued_count,
+                    'extraction_cleared': extraction_count
+                })
+
+            # Mark the Task object as cancelled/failed so status endpoints reflect cancellation
+            try:
+                task = Task.objects.get(id=django_q_task_id)
+
+                # Only update if not already stopped
+                if not task.stopped:
+                    task.success = False
+                    task.result = json.dumps({
+                        'success': False,
+                        'output': f'Benchmark task {django_q_task_id} was cancelled by user',
+                        'error': 'cancelled_by_user',
+                        'timestamp': timezone.now().isoformat()
+                    })
+                    task.stopped = timezone.now()
+                    task.save()
+                    logger.info(f"Marked django-q Task {django_q_task_id} as cancelled")
+
+                return Response({
+                    'success': True,
+                    'message': f'Benchmark task {django_q_task_id} cancelled successfully'
+                })
+
+            except Task.DoesNotExist:
+                # Task record doesn't exist - likely already completed/failed
+                # We've already cleared any queued entries, so return success
+                total_cleared = queued_count + extraction_count
+                logger.info(f"Task {django_q_task_id} not found in database (may have completed/failed), cleared {total_cleared} queued entries (benchmark: {queued_count}, extraction: {extraction_count})")
+                return Response({
+                    'success': True,
+                    'message': f'Task not found in database (already completed/failed). Cleared {total_cleared} queued task(s) (benchmark: {queued_count}, extraction: {extraction_count}).',
+                    'already_stopped': True,
+                    'queued_cleared': queued_count,
+                    'extraction_cleared': extraction_count
+                })
+
+        except Exception as e:
+            logger.error(f"Failed to cancel benchmark task: {e}", exc_info=True)
             return Response(
                 {'success': False, 'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

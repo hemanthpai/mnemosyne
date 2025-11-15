@@ -22,12 +22,34 @@ from memories.conversation_service import conversation_service
 import time
 
 
+class BenchmarkCancelledException(Exception):
+    """Exception raised when benchmark is cancelled by user"""
+    pass
+
+
 class Command(BaseCommand):
     help = "Run benchmark tests for extraction and search quality"
 
     def __init__(self):
         super().__init__()
         self.task_id = None
+
+    def check_cancellation(self):
+        """Check if the benchmark has been cancelled by user"""
+        if not self.task_id:
+            return False
+
+        try:
+            from django_q.models import Task
+            # Check if task exists and has been marked as stopped
+            task = Task.objects.filter(group=self.task_id).first()
+            if task and task.stopped:
+                self.stdout.write(self.style.WARNING('\n⚠️  Benchmark cancelled by user'))
+                raise BenchmarkCancelledException(f"Benchmark {self.task_id} was cancelled")
+        except Task.DoesNotExist:
+            pass
+
+        return False
 
     def update_progress(self, current, total, phase=''):
         """Update progress in cache for UI polling"""
@@ -188,6 +210,9 @@ class Command(BaseCommand):
         completed_tests = 0
 
         for test_case in test_conversations:
+            # Check if benchmark was cancelled
+            self.check_cancellation()
+
             test_id = test_case['id']
             category = test_case.get('category', 'unknown')
             user_message = test_case['user_message']
@@ -384,6 +409,9 @@ class Command(BaseCommand):
         completed_queries = 0
 
         for query_test in test_queries:
+            # Check if benchmark was cancelled
+            self.check_cancellation()
+
             query_id = query_test['query_id']
             query = query_test['query']
             relevant_test_ids = query_test.get('relevant_note_ids', [])
@@ -502,6 +530,9 @@ class Command(BaseCommand):
 
         # Test evolution for each note
         for note in all_notes[:10]:  # Limit to 10 notes to avoid timeout
+            # Check if benchmark was cancelled
+            self.check_cancellation()
+
             if verbose:
                 self.stdout.write(f'\nTesting evolution for note {note.id}')
                 self.stdout.write(f'  Content: {note.content[:80]}...')

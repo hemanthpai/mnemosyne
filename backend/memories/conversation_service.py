@@ -5,6 +5,7 @@ from .models import ConversationTurn
 from .vector_service import vector_service
 from .llm_service import llm_service
 from .cache_service import cache_service
+from .settings_model import Settings
 
 logger = logging.getLogger(__name__)
 

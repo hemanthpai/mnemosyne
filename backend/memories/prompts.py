@@ -59,12 +59,15 @@ The nearest neighbors memories:
 Based on this information, determine:
 Should this memory be evolved? Consider its relationships with other memories.
 
+**IMPORTANT**: The "target_note_id" field MUST be one of the exact note IDs listed above in "The nearest neighbors memories" section.
+Do NOT generate, invent, or create new IDs. Only use the actual IDs provided above.
+
 Return your decision in JSON format:
 {{
   "should_link": true/false,
   "links": [
     {{
-      "target_note_id": "uuid",
+      "target_note_id": "<<use exact ID from neighbors list above>>",
       "relationship_type": "string",
       "strength": 0.0-1.0,
       "rationale": "why this link makes sense"

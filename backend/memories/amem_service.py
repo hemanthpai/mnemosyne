@@ -373,12 +373,19 @@ class AMEMService:
                 validated_links = []
                 for link in links:
                     if all(k in link for k in ['target_note_id', 'relationship_type']):
-                        validated_links.append({
-                            'target_note_id': str(link['target_note_id']),
-                            'relationship_type': link['relationship_type'],
-                            'strength': float(link.get('strength', 0.8)),
-                            'rationale': link.get('rationale', '')
-                        })
+                        # Validate UUID format
+                        target_id = str(link['target_note_id'])
+                        try:
+                            import uuid
+                            uuid.UUID(target_id)  # Will raise ValueError if invalid
+                            validated_links.append({
+                                'target_note_id': target_id,
+                                'relationship_type': link['relationship_type'],
+                                'strength': float(link.get('strength', 0.8)),
+                                'rationale': link.get('rationale', '')
+                            })
+                        except ValueError:
+                            logger.warning(f"Invalid UUID in link target_note_id: '{target_id}' - skipping link")
                     else:
                         logger.warning(f"Invalid link structure: {link}")
 

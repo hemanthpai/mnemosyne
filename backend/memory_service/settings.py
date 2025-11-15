@@ -84,6 +84,11 @@ DATABASES = {
     )
 }
 
+# Ensure PostgreSQL uses UTC timezone
+if DATABASES["default"]["ENGINE"] == "django.db.backends.postgresql":
+    DATABASES["default"]["OPTIONS"] = DATABASES["default"].get("OPTIONS", {})
+    DATABASES["default"]["OPTIONS"]["options"] = "-c timezone=UTC"
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -196,7 +201,7 @@ Q_CLUSTER = {
     "name": "mnemosyne",
     "workers": 2,
     "timeout": 7200,  # 2 hours max per task (benchmarks can take a long time)
-    "retry": 10800,  # Retry failed tasks after 3 hours (must be > timeout)
+    "retry": 60,  # Retry failed tasks after 60 seconds
     "queue_limit": 50,
     "bulk": 10,
     "orm": "default",  # Use Django ORM (PostgreSQL) for task queue

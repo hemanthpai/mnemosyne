@@ -478,18 +478,18 @@ const SettingsPage: React.FC = () => {
                                         Embedding Dimension
                                     </label>
                                     <Dropdown
-                                        value={editedSettings.embeddings_dimension ?? 1024}
+                                        value={String(editedSettings.embeddings_dimension ?? 1024)}
                                         options={[
-                                            { value: 384, label: '384' },
-                                            { value: 768, label: '768' },
-                                            { value: 1024, label: '1024' },
-                                            { value: 1536, label: '1536' },
-                                            { value: 2048, label: '2048' },
-                                            { value: 3072, label: '3072' },
-                                            { value: 4096, label: '4096' },
-                                            { value: 8192, label: '8192' }
+                                            { value: '384', label: '384' },
+                                            { value: '768', label: '768' },
+                                            { value: '1024', label: '1024' },
+                                            { value: '1536', label: '1536' },
+                                            { value: '2048', label: '2048' },
+                                            { value: '3072', label: '3072' },
+                                            { value: '4096', label: '4096' },
+                                            { value: '8192', label: '8192' }
                                         ]}
-                                        onChange={(value) => handleFieldChange('embeddings_dimension', value)}
+                                        onChange={(value) => handleFieldChange('embeddings_dimension', parseInt(value))}
                                     />
                                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                         Vector dimension for embeddings. Must match your model's output dimension. Common values: 1024 (mxbai-embed-large), 4096 (qwen3-embedding-4k:8b)

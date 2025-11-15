@@ -292,7 +292,7 @@ class UpdateSettingsView(APIView):
             # Update fields from request
             updated_fields = []
             for field in ['embeddings_provider', 'embeddings_endpoint_url', 'embeddings_model',
-                          'embeddings_api_key', 'embeddings_timeout',
+                          'embeddings_api_key', 'embeddings_timeout', 'embeddings_dimension',
                           'generation_provider', 'generation_endpoint_url', 'generation_model',
                           'generation_api_key', 'generation_temperature', 'generation_max_tokens',
                           'generation_timeout', 'generation_top_p', 'generation_top_k', 'generation_min_p',
@@ -375,6 +375,20 @@ class UpdateSettingsView(APIView):
                         except (ValueError, TypeError):
                             return Response(
                                 {'success': False, 'error': 'Invalid timeout value'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+
+                    elif field == 'embeddings_dimension':
+                        try:
+                            value = int(value)
+                            if value not in [384, 768, 1024, 1536, 2048, 3072, 4096, 8192]:
+                                return Response(
+                                    {'success': False, 'error': 'Dimension must be one of: 384, 768, 1024, 1536, 2048, 3072, 4096, 8192'},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                        except (ValueError, TypeError):
+                            return Response(
+                                {'success': False, 'error': 'Invalid dimension value'},
                                 status=status.HTTP_400_BAD_REQUEST
                             )
 

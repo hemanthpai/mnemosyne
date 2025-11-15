@@ -54,6 +54,10 @@ class Settings(models.Model):
         default=30,
         help_text="Request timeout in seconds"
     )
+    embeddings_dimension = models.IntegerField(
+        default=1024,
+        help_text="Embedding vector dimension (e.g., 1024, 4096)"
+    )
 
     # Generation Configuration (for extraction and relationship building)
     # Separate from embeddings to allow different providers/endpoints

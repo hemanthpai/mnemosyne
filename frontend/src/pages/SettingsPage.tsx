@@ -471,6 +471,30 @@ const SettingsPage: React.FC = () => {
                                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     />
                                 </div>
+
+                                {/* Dimension */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Embedding Dimension
+                                    </label>
+                                    <Dropdown
+                                        value={editedSettings.embeddings_dimension ?? 1024}
+                                        options={[
+                                            { value: 384, label: '384' },
+                                            { value: 768, label: '768' },
+                                            { value: 1024, label: '1024' },
+                                            { value: 1536, label: '1536' },
+                                            { value: 2048, label: '2048' },
+                                            { value: 3072, label: '3072' },
+                                            { value: 4096, label: '4096' },
+                                            { value: 8192, label: '8192' }
+                                        ]}
+                                        onChange={(value) => handleFieldChange('embeddings_dimension', value)}
+                                    />
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        Vector dimension for embeddings. Must match your model's output dimension. Common values: 1024 (mxbai-embed-large), 4096 (qwen3-embedding-4k:8b)
+                                    </p>
+                                </div>
                             </div>
                         )}
 

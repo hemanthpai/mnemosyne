@@ -22,8 +22,13 @@ class VectorService:
 
     def __init__(self):
         self.collection_name = getattr(settings, "QDRANT_COLLECTION_NAME", "memories")
-        self._expected_dimension = None  # Will be detected from first embedding
         self._connect()
+
+    def _get_dimension(self) -> int:
+        """Get embedding dimension from settings"""
+        from .settings_model import Settings
+        db_settings = Settings.get_settings()
+        return db_settings.embeddings_dimension
 
     def _connect(self):
         """Initialize Qdrant client connection"""
@@ -44,13 +49,14 @@ class VectorService:
             logger.error("Failed to connect to Qdrant: %s", e)
             raise
 
-    def _ensure_collection(self, dimension: int = 1024):
-        """Create collection if it doesn't exist with specified dimension"""
+    def _ensure_collection(self):
+        """Create collection if it doesn't exist using dimension from settings"""
         try:
             collections = self.client.get_collections().collections
             collection_names = [c.name for c in collections]
 
             if self.collection_name not in collection_names:
+                dimension = self._get_dimension()
                 logger.info("Creating Qdrant collection: %s with dimension %d", self.collection_name, dimension)
                 self.client.create_collection(
                     collection_name=self.collection_name,
@@ -66,57 +72,6 @@ class VectorService:
         except Exception as e:
             logger.error("Failed to ensure collection exists: %s", e)
             raise
-
-    def _get_collection_dimension(self) -> int:
-        """Get the current dimension of the collection"""
-        try:
-            collection_info = self.client.get_collection(self.collection_name)
-            return collection_info.config.params.vectors.size  # type: ignore
-        except Exception as e:
-            logger.error("Failed to get collection dimension: %s", e)
-            return 0
-
-    def _ensure_correct_dimension(self, embedding: List[float]) -> bool:
-        """
-        Check if the collection dimension matches the embedding dimension.
-        If not, recreate the collection with the correct dimension.
-
-        Returns:
-            True if collection was recreated, False otherwise
-        """
-        embedding_dim = len(embedding)
-        logger.info(f"[DIMENSION CHECK] Embedding dimension: {embedding_dim}")
-        current_dim = self._get_collection_dimension()
-        logger.info(f"[DIMENSION CHECK] Collection dimension: {current_dim}")
-
-        if current_dim == 0:
-            # Collection doesn't exist, create it
-            self._ensure_collection(embedding_dim)
-            return True
-
-        if current_dim != embedding_dim:
-            logger.warning(
-                f"Dimension mismatch detected! Collection: {current_dim}, Embedding: {embedding_dim}. "
-                f"Recreating collection..."
-            )
-
-            # Get current point count
-            collection_info = self.client.get_collection(self.collection_name)
-            point_count = collection_info.points_count
-
-            if point_count > 0:
-                logger.warning(
-                    f"Deleting collection with {point_count} existing vectors to fix dimension mismatch!"
-                )
-
-            # Delete and recreate with correct dimension
-            self.client.delete_collection(self.collection_name)
-            self._ensure_collection(embedding_dim)
-
-            logger.info(f"Collection recreated with dimension {embedding_dim}")
-            return True
-
-        return False
 
     def store_embedding(
         self,
@@ -138,9 +93,6 @@ class VectorService:
             Vector ID (UUID string)
         """
         try:
-            # Ensure collection has correct dimension (auto-recreate if mismatch)
-            self._ensure_correct_dimension(embedding)
-
             vector_id = str(uuid.uuid4())
 
             point = PointStruct(
@@ -350,6 +302,24 @@ class VectorService:
 
         except Exception as e:
             logger.error(f"Error deleting user vectors: {e}")
+            return {"success": False, "error": str(e)}
+
+    def force_index_rebuild(self):
+        """Force Qdrant to rebuild the HNSW index immediately"""
+        try:
+            from qdrant_client import models
+
+            logger.info("Forcing Qdrant index rebuild...")
+            self.client.update_collection(
+                collection_name=self.collection_name,
+                optimizer_config=models.OptimizersConfigDiff(
+                    indexing_threshold=0  # Index all vectors immediately
+                )
+            )
+            logger.info("Index rebuild initiated successfully")
+            return {"success": True, "message": "Index rebuild initiated"}
+        except Exception as e:
+            logger.error(f"Error forcing index rebuild: {e}")
             return {"success": False, "error": str(e)}
 
 

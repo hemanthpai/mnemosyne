@@ -319,6 +319,7 @@ class Settings(models.Model):
             'embeddings_model': self.embeddings_model,
             'embeddings_api_key': embeddings_api_key,
             'embeddings_timeout': self.embeddings_timeout,
+            'embeddings_dimension': self.embeddings_dimension,
 
             # Generation configuration (with fallbacks)
             'generation_provider': self.generation_provider or self.embeddings_provider,

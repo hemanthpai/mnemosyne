@@ -262,18 +262,14 @@ class ExtractMemoriesView(APIView):
                     raise ValueError("Expected a JSON array")
 
             except (json.JSONDecodeError, ValueError) as e:
+                # API-P2-10 fix: Removed duplicate logging
                 logger.error("Failed to parse LLM response as JSON: %s", e)
                 logger.debug(
-                    "LLM response length: %d chars", len(llm_result.get("response", ""))
-                )
-                logger.debug(
-                    "LLM response preview: %s...", llm_result.get("response", "")[:500]
+                    "LLM response length: %d chars, preview: %s...",
+                    len(llm_result.get("response", "")),
+                    llm_result.get("response", "")[:500]
                 )
 
-                # Simple fallback - return helpful error message
-                logger.error("Failed to parse LLM response as JSON: %s", e)
-                logger.debug("Invalid LLM response: %s", llm_result.get("response", "")[:500])
-                
                 return Response(
                     {
                         "success": False,
@@ -577,7 +573,8 @@ class RetrieveMemoriesView(APIView):
                     "debug_info": {
                         "quality_filtering_applied": True,
                         "improved_summarization": True,
-                        "raw_memory_count_before_filtering": len(relevant_memories) if 'relevant_memories' in locals() else 0
+                        # API-P2-11 fix: relevant_memories is always defined here
+                        "raw_memory_count_before_filtering": len(relevant_memories)
                     }
                 }
             )
@@ -921,17 +918,21 @@ class ImportOpenWebUIHistoryView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Save uploaded file to temporary location
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp_file:
-                for chunk in db_file.chunks():
-                    tmp_file.write(chunk)
-                tmp_path = tmp_file.name
-
-            # Get optional parameters
+            # Get and validate optional parameters BEFORE creating temp file
+            # API-P2-12 fix: Validate all parameters before creating temp file
+            # to prevent file leak on early returns
             target_user_id = request.data.get('target_user_id')
             openwebui_user_id = request.data.get('openwebui_user_id')
             after_date_str = request.data.get('after_date')
-            dry_run = request.data.get('dry_run', 'false').lower() == 'true'
+
+            # API-P2-04 fix: Proper boolean parsing instead of string comparison
+            dry_run_value = request.data.get('dry_run', False)
+            if isinstance(dry_run_value, bool):
+                dry_run = dry_run_value
+            elif isinstance(dry_run_value, str):
+                dry_run = dry_run_value.lower() in ('true', '1', 'yes')
+            else:
+                dry_run = bool(dry_run_value)
 
             # Validate and clamp batch_size
             try:
@@ -983,6 +984,13 @@ class ImportOpenWebUIHistoryView(APIView):
                         {"success": False, "error": "Invalid target_user_id format. Must be UUID."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+
+            # API-P2-12 fix: Only create temp file AFTER all validations pass
+            # This prevents file leaks from early returns during validation
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp_file:
+                for chunk in db_file.chunks():
+                    tmp_file.write(chunk)
+                tmp_path = tmp_file.name
 
             # Run import in background thread
             def run_import():

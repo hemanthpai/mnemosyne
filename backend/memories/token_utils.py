@@ -1,5 +1,6 @@
 import logging
-import re
+
+# SVC-P2-11 fix: Removed unused 're' import after optimizing regex operations
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,22 @@ class TokenCounter:
         word_estimate = words * 1.3
 
         # Method 3: More sophisticated estimation considering punctuation and special chars
-        # Count different types of content
-        word_chars = len(re.findall(r"[a-zA-Z]", text))
-        number_chars = len(re.findall(r"[0-9]", text))
-        punct_chars = len(re.findall(r"[^\w\s]", text))
-        space_chars = len(re.findall(r"\s", text))
+        # SVC-P2-11 fix: Count character types in a single pass instead of 4 regex operations
+        # This is much more efficient, especially for large texts
+        word_chars = 0
+        number_chars = 0
+        punct_chars = 0
+        space_chars = 0
+
+        for char in text:
+            if char.isalpha():
+                word_chars += 1
+            elif char.isdigit():
+                number_chars += 1
+            elif char.isspace():
+                space_chars += 1
+            else:
+                punct_chars += 1
 
         sophisticated_estimate = (
             word_chars * 0.25  # Letters

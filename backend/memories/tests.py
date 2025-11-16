@@ -2144,6 +2144,100 @@ class APIP2HTTPMethodTests(TestCase):
                 self.assertEqual(response.data.get('error'), 'Confirmation required')
 
 
+class SVCP2RegexOptimizationTests(TestCase):
+    """Tests for SVC-P2-11: Inefficient Multiple Regex Operations"""
+
+    def test_token_estimation_with_mixed_content(self):
+        """Verify token estimation works correctly after regex optimization"""
+        from memories.token_utils import TokenCounter
+
+        # Test with mixed content
+        text = "Hello World! 123 test@example.com"
+        tokens = TokenCounter.estimate_tokens(text)
+
+        # Should return a positive number
+        self.assertGreater(tokens, 0)
+        # Should be reasonable for this text (roughly 8-12 tokens)
+        self.assertLess(tokens, 30)
+
+    def test_character_counting_optimization(self):
+        """Verify character type counting produces correct results"""
+        from memories.token_utils import TokenCounter
+
+        # Test with known content
+        text = "ABC 123 !@#"
+
+        # Estimate tokens - this will use the optimized character counting
+        tokens = TokenCounter.estimate_tokens(text)
+
+        # Should be positive
+        self.assertGreater(tokens, 0)
+
+    def test_large_text_performance(self):
+        """Verify optimized version handles large texts efficiently"""
+        from memories.token_utils import TokenCounter
+        import time
+
+        # Create a large text (10KB)
+        large_text = "Lorem ipsum dolor sit amet. " * 400
+
+        start_time = time.time()
+        tokens = TokenCounter.estimate_tokens(large_text)
+        elapsed = time.time() - start_time
+
+        # Should complete quickly (under 100ms even for large texts)
+        self.assertLess(elapsed, 0.1)
+        # Should return reasonable token count
+        self.assertGreater(tokens, 1000)
+
+    def test_character_types_counted_correctly(self):
+        """Verify different character types are counted correctly"""
+        from memories.token_utils import TokenCounter
+
+        # Test with each character type
+        test_cases = [
+            ("ABCD", 5, 10),      # Letters only
+            ("1234", 5, 10),      # Numbers only
+            ("    ", 3, 8),       # Spaces only
+            ("!@#$", 3, 8),       # Punctuation only
+            ("Test123!@#", 10, 20),  # Mixed
+        ]
+
+        for text, min_tokens, max_tokens in test_cases:
+            tokens = TokenCounter.estimate_tokens(text)
+            self.assertGreaterEqual(tokens, min_tokens, f"Failed for text: {text}")
+            self.assertLessEqual(tokens, max_tokens, f"Failed for text: {text}")
+
+    def test_empty_text_handling(self):
+        """Verify empty text is handled correctly"""
+        from memories.token_utils import TokenCounter
+
+        tokens = TokenCounter.estimate_tokens("")
+        self.assertEqual(tokens, 0)
+
+        tokens = TokenCounter.estimate_tokens("   ")
+        self.assertGreater(tokens, 0)
+
+    def test_unicode_characters(self):
+        """Verify unicode characters are handled correctly"""
+        from memories.token_utils import TokenCounter
+
+        # Test with unicode
+        text = "Hello 世界! Café ñoño"
+        tokens = TokenCounter.estimate_tokens(text)
+
+        # Should handle unicode without crashing
+        self.assertGreater(tokens, 0)
+
+    def test_no_regex_module_used(self):
+        """Verify 're' module is not imported in token_utils"""
+        import memories.token_utils as token_utils_module
+
+        # Check that 're' is not in the module's namespace
+        # (it was removed after optimization)
+        self.assertFalse(hasattr(token_utils_module, 're'))
+
+
 class SVCP2ValueErrorHandlingTests(TestCase):
     """Tests for SVC-P2-09: No Error Handling for ValueError"""
 

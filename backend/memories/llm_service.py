@@ -557,13 +557,18 @@ class LLMService:
             metadata = {}
 
             if provider_type in ["openai", "openai_compatible"]:
+                # SVC-P2-05 fix: Safe unwrapping of nested response structure
                 if (
                     data.get("choices")
+                    and len(data["choices"]) > 0
                     and data["choices"][0].get("message")
                     and data["choices"][0]["message"].get("content")
                 ):
-                    content = data["choices"][0]["message"]["content"]
-                    
+                    # Safely unwrap nested structure
+                    choice = data["choices"][0]
+                    message = choice.get("message", {})
+                    content = message.get("content", "")
+
                     # For structured outputs, unwrap arrays that were wrapped in objects
                     try:
                         import json
@@ -574,14 +579,16 @@ class LLMService:
                     except (json.JSONDecodeError, TypeError):
                         # If parsing fails, keep original content
                         pass
-                    
+
                     metadata = {
                         "usage": data.get("usage", {}),
-                        "finish_reason": data["choices"][0].get("finish_reason"),
+                        "finish_reason": choice.get("finish_reason"),
                     }
             elif provider_type == "ollama":
-                if data.get("message") and data["message"].get("content"):
-                    content = data["message"]["content"]
+                # SVC-P2-05 fix: Safe unwrapping of nested response structure
+                message = data.get("message", {})
+                if message and message.get("content"):
+                    content = message.get("content", "")
                     metadata = {
                         "total_duration": data.get("total_duration"),
                         "load_duration": data.get("load_duration"),

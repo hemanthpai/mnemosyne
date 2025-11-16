@@ -5,8 +5,10 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from django.db import transaction
+from django.db.models import QuerySet
 from rest_framework import parsers, status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -55,12 +57,16 @@ class MemoryPagination(PageNumberPagination):
 ALLOWED_MEMORY_FIELDS = {"id", "content", "metadata", "created_at", "updated_at"}
 
 
-def validate_fields(requested_fields):
+def validate_fields(requested_fields: Any) -> List[str]:
     """
     Validate requested fields against whitelist.
 
     API-P1-06 fix: Prevents users from requesting invalid fields
     that could cause errors or expose internal data.
+    API-P2-06 fix: Added type hints for better IDE support and type safety.
+
+    Args:
+        requested_fields: List of field names to validate (or any type, will be validated)
 
     Returns:
         list: Validated fields (only allowed ones)
@@ -86,8 +92,15 @@ class MemoryViewSet(viewsets.ModelViewSet):
     queryset = Memory.objects.all()
     pagination_class = MemoryPagination
 
-    def get_queryset(self):
-        """Filter memories by user_id if provided in query params"""
+    def get_queryset(self) -> QuerySet[Memory]:
+        """
+        Filter memories by user_id if provided in query params
+
+        API-P2-06 fix: Added type hints for better IDE support and type safety.
+
+        Returns:
+            QuerySet of Memory objects, filtered by user_id if provided
+        """
         user_id = self.request.GET.get("user_id")
         if user_id:
             try:
@@ -378,8 +391,25 @@ class RetrieveMemoriesView(APIView):
     Available fields: id, content, metadata, created_at, updated_at
     """
 
-    def _format_memory(self, memory, fields, include_search_metadata=False):
-        """Format a single memory with specified fields"""
+    def _format_memory(
+        self,
+        memory: Memory,
+        fields: List[str],
+        include_search_metadata: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Format a single memory with specified fields
+
+        API-P2-06 fix: Added type hints for better IDE support and type safety.
+
+        Args:
+            memory: Memory instance to format
+            fields: List of field names to include in response
+            include_search_metadata: Whether to include search scoring information
+
+        Returns:
+            dict: Formatted memory data with requested fields
+        """
         memory_data = {}
         
         # Include only requested fields

@@ -2144,6 +2144,114 @@ class APIP2HTTPMethodTests(TestCase):
                 self.assertEqual(response.data.get('error'), 'Confirmation required')
 
 
+class APIP2MissingTypeHintsTests(TestCase):
+    """Tests for API-P2-06: Missing Type Hints"""
+
+    def test_validate_fields_has_type_hints(self):
+        """Verify validate_fields function has type hints"""
+        import inspect
+        from memories.views import validate_fields
+
+        # Get the function signature
+        sig = inspect.signature(validate_fields)
+
+        # Check parameter type hint
+        self.assertIn('requested_fields', sig.parameters)
+        param = sig.parameters['requested_fields']
+        self.assertIsNotNone(param.annotation)
+        # The annotation should not be inspect.Parameter.empty
+        self.assertNotEqual(param.annotation, inspect.Parameter.empty)
+
+        # Check return type hint
+        self.assertIsNotNone(sig.return_annotation)
+        self.assertNotEqual(sig.return_annotation, inspect.Signature.empty)
+
+    def test_format_memory_has_type_hints(self):
+        """Verify _format_memory method has type hints"""
+        import inspect
+        from memories.views import RetrieveMemoriesView
+
+        # Get the method signature
+        method = RetrieveMemoriesView._format_memory
+        sig = inspect.signature(method)
+
+        # Check parameter type hints (excluding self)
+        params = list(sig.parameters.keys())
+        self.assertIn('memory', params)
+        self.assertIn('fields', params)
+        self.assertIn('include_search_metadata', params)
+
+        # Check memory parameter has type hint
+        memory_param = sig.parameters['memory']
+        self.assertIsNotNone(memory_param.annotation)
+        self.assertNotEqual(memory_param.annotation, inspect.Parameter.empty)
+
+        # Check fields parameter has type hint
+        fields_param = sig.parameters['fields']
+        self.assertIsNotNone(fields_param.annotation)
+        self.assertNotEqual(fields_param.annotation, inspect.Parameter.empty)
+
+        # Check include_search_metadata parameter has type hint
+        metadata_param = sig.parameters['include_search_metadata']
+        self.assertIsNotNone(metadata_param.annotation)
+        self.assertNotEqual(metadata_param.annotation, inspect.Parameter.empty)
+
+        # Check return type hint
+        self.assertIsNotNone(sig.return_annotation)
+        self.assertNotEqual(sig.return_annotation, inspect.Signature.empty)
+
+    def test_get_queryset_has_type_hints(self):
+        """Verify get_queryset method has type hints"""
+        import inspect
+        from memories.views import MemoryViewSet
+
+        # Get the method signature
+        method = MemoryViewSet.get_queryset
+        sig = inspect.signature(method)
+
+        # Check return type hint
+        self.assertIsNotNone(sig.return_annotation)
+        self.assertNotEqual(sig.return_annotation, inspect.Signature.empty)
+
+    def test_type_hints_are_correct_types(self):
+        """Verify type hints use correct typing module types"""
+        from typing import get_type_hints
+        from memories.views import validate_fields, RetrieveMemoriesView, MemoryViewSet
+
+        # Test validate_fields
+        hints = get_type_hints(validate_fields)
+        self.assertIn('requested_fields', hints)
+        self.assertIn('return', hints)
+
+        # Test _format_memory
+        hints = get_type_hints(RetrieveMemoriesView._format_memory)
+        self.assertIn('memory', hints)
+        self.assertIn('fields', hints)
+        self.assertIn('include_search_metadata', hints)
+        self.assertIn('return', hints)
+
+        # Test get_queryset
+        hints = get_type_hints(MemoryViewSet.get_queryset)
+        self.assertIn('return', hints)
+
+    def test_typing_imports_present(self):
+        """Verify necessary typing imports are present in views module"""
+        import memories.views as views_module
+
+        # Check that typing imports are available
+        self.assertTrue(hasattr(views_module, 'Any'))
+        self.assertTrue(hasattr(views_module, 'Dict'))
+        self.assertTrue(hasattr(views_module, 'List'))
+        self.assertTrue(hasattr(views_module, 'Optional'))
+
+    def test_django_queryset_import_present(self):
+        """Verify Django QuerySet import is present"""
+        import memories.views as views_module
+
+        # Check that QuerySet is imported
+        self.assertTrue(hasattr(views_module, 'QuerySet'))
+
+
 class APIP2ImportsInsideFunctionsTests(TestCase):
     """Tests for API-P2-07: Imports Inside Functions"""
 

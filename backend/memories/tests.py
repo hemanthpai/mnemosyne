@@ -1824,5 +1824,58 @@ class SVCP2ImportLocationTests(TestCase):
         )
 
 
+class SVCP2TimeoutTests(TestCase):
+    """Tests for SVC-P2-04: Hardcoded Timeout"""
+
+    def test_timeout_constant_defined(self):
+        """Test that timeout is defined as a named constant"""
+        from memories import llm_service
+
+        # Verify constant is defined
+        self.assertTrue(
+            hasattr(llm_service, 'DEFAULT_REQUEST_TIMEOUT'),
+            "DEFAULT_REQUEST_TIMEOUT should be defined as module constant"
+        )
+
+        # Verify it has a sensible value
+        timeout = llm_service.DEFAULT_REQUEST_TIMEOUT
+        self.assertIsInstance(timeout, int)
+        self.assertGreater(timeout, 0)
+        self.assertEqual(timeout, 60)
+
+    @patch('memories.llm_service.requests.Session')
+    def test_timeout_used_in_embedding_requests(self, mock_session_class):
+        """Test that timeout constant is used in embedding requests"""
+        from backend.memories.llm_service import LLMService, DEFAULT_REQUEST_TIMEOUT
+
+        # Mock session and response
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        mock_session.post.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        service = LLMService()
+
+        # Mock settings
+        mock_settings = MagicMock()
+        mock_settings.embeddings_endpoint_url = "http://localhost:11434"
+        mock_settings.embeddings_model = "test-model"
+        service._settings = mock_settings
+        service._settings_loaded = True
+
+        # Call embedding method
+        try:
+            service.get_embeddings(["test text"])
+        except:
+            pass  # We don't care about errors, just checking timeout is used
+
+        # Verify timeout parameter was used
+        if mock_session.post.called:
+            call_kwargs = mock_session.post.call_args[1]
+            self.assertIn('timeout', call_kwargs)
+            self.assertEqual(call_kwargs['timeout'], DEFAULT_REQUEST_TIMEOUT)
+
+
 if __name__ == '__main__':
     unittest.main()

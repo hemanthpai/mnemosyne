@@ -11,6 +11,9 @@ from .token_utils import TokenCounter  # Add this import
 
 logger = logging.getLogger(__name__)
 
+# SVC-P2-04 fix: Extract timeout as named constant
+DEFAULT_REQUEST_TIMEOUT = 60  # Default timeout for LLM API requests in seconds
+
 # Define format schemas - optimized for efficiency
 MEMORY_EXTRACTION_FORMAT = {
     "type": "array",
@@ -597,7 +600,7 @@ class LLMService:
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=60,
+                timeout=DEFAULT_REQUEST_TIMEOUT,
             )
             response.raise_for_status()
 
@@ -648,7 +651,7 @@ class LLMService:
         payload = {"model": self.settings.embeddings_model, "input": texts}
         headers = {"Content-Type": "application/json"}
 
-        response = self.session.post(url, json=payload, headers=headers, timeout=60)
+        response = self.session.post(url, json=payload, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT)
         response.raise_for_status()
 
         result = response.json()

@@ -1,7 +1,7 @@
 import json
 import logging
-from functools import lru_cache
-from typing import Any, Dict, List
+import threading
+from typing import Any, Dict, List, Optional
 
 from .llm_service import llm_service
 from .models import Memory
@@ -11,15 +11,53 @@ logger = logging.getLogger(__name__)
 
 
 class MemorySearchService:
-    """Optimized memory search with caching and batch operations"""
+    """
+    Optimized memory search with caching and batch operations.
+
+    Thread-safe implementation with manual LRU cache using locks.
+    """
 
     def __init__(self):
-        # Use LRU cache to prevent unbounded memory growth
-        # Cache up to 1000 embeddings (suitable for DIY/personal use)
-        self._get_cached_embedding = lru_cache(maxsize=1000)(self._get_embedding)
+        # Thread-safe LRU cache implementation
+        self._embedding_cache: Dict[str, List[float]] = {}
+        self._cache_order: List[str] = []  # Track access order for LRU
+        self._cache_lock = threading.RLock()
+        self._max_cache_size = 1000  # Suitable for DIY/personal use
+
+    def _get_cached_embedding(self, text: str) -> List[float]:
+        """
+        Get embedding for text with thread-safe LRU caching.
+
+        Thread Safety: Uses lock to prevent race conditions during cache access.
+        """
+        with self._cache_lock:
+            # Check if in cache
+            if text in self._embedding_cache:
+                # Move to end (most recently used)
+                self._cache_order.remove(text)
+                self._cache_order.append(text)
+                return self._embedding_cache[text]
+
+        # Not in cache - generate embedding (outside lock to avoid blocking)
+        embedding = self._get_embedding(text)
+
+        # Add to cache with lock
+        with self._cache_lock:
+            # Check if cache is full
+            if len(self._embedding_cache) >= self._max_cache_size:
+                # Remove least recently used (first in order list)
+                if self._cache_order:
+                    oldest = self._cache_order.pop(0)
+                    del self._embedding_cache[oldest]
+
+            # Add new embedding
+            self._embedding_cache[text] = embedding
+            self._cache_order.append(text)
+
+        return embedding
 
     def _get_embedding(self, text: str) -> List[float]:
-        """Get embedding for text (cached with LRU)"""
+        """Get embedding for text (not cached - use _get_cached_embedding instead)"""
         embedding_result = llm_service.get_embeddings([text])
         if not embedding_result["success"]:
             raise ValueError(f"Failed to generate embedding: {embedding_result['error']}")
@@ -313,13 +351,29 @@ class MemorySearchService:
         return enhanced_memories
 
     def clear_cache(self):
-        """Clear embedding cache (useful when settings change)"""
-        self._get_cached_embedding.cache_clear()
+        """
+        Clear embedding cache (useful when settings change).
+
+        Thread-safe: Protected by lock.
+        """
+        with self._cache_lock:
+            self._embedding_cache.clear()
+            self._cache_order.clear()
         logger.info("Cleared memory search service cache")
 
     def get_cache_info(self):
-        """Get cache statistics for debugging"""
-        return self._get_cached_embedding.cache_info()
+        """
+        Get cache statistics for debugging.
+
+        Thread-safe: Protected by lock for consistent snapshot.
+        """
+        with self._cache_lock:
+            return {
+                "hits": 0,  # Not tracked in manual implementation
+                "misses": 0,  # Not tracked in manual implementation
+                "maxsize": self._max_cache_size,
+                "currsize": len(self._embedding_cache)
+            }
 
     def find_semantic_connections(
         self, memories: List[Memory], original_query: str, user_id: str

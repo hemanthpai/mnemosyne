@@ -730,8 +730,16 @@ class DeleteAllMemoriesView(APIView):
     """Delete all memories for a user or all users"""
 
     def delete(self, request):
-        user_id = request.data.get("user_id")
-        confirm = request.data.get("confirm", False)
+        # API-P2-09 fix: Use query parameters instead of request body
+        # DELETE requests don't reliably support request bodies in all HTTP clients
+        user_id = request.query_params.get("user_id") or request.data.get("user_id")
+        confirm_param = request.query_params.get("confirm") or request.data.get("confirm", False)
+
+        # Parse confirm parameter (could be string or boolean)
+        if isinstance(confirm_param, str):
+            confirm = confirm_param.lower() in ('true', '1', 'yes')
+        else:
+            confirm = bool(confirm_param)
 
         if not confirm:
             return Response(

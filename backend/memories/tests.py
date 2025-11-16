@@ -2031,5 +2031,118 @@ class APIP2ProgressRaceTests(TestCase):
             _import_progresses.clear()
 
 
+class APIP2HTTPMethodTests(TestCase):
+    """Tests for API-P2-09: Wrong HTTP Method for Delete Endpoint"""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+
+    @patch('backend.memories.views.vector_service')
+    def test_delete_accepts_query_parameters(self, mock_vector_service):
+        """
+        Test that DELETE endpoint accepts query parameters.
+        API-P2-09: DELETE requests should use query params, not request body.
+        """
+        # Create test memory
+        memory = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory",
+            metadata={}
+        )
+
+        # Mock vector service
+        mock_vector_service.delete_memories.return_value = {"success": True}
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import DeleteAllMemoriesView
+
+        factory = APIRequestFactory()
+
+        # Test with query parameters (should work)
+        request = factory.delete(
+            f'/api/memories/delete-all/?user_id={self.user.id}&confirm=true'
+        )
+
+        view = DeleteAllMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['success'])
+
+    @patch('backend.memories.views.vector_service')
+    def test_delete_still_accepts_request_body(self, mock_vector_service):
+        """
+        Test that DELETE endpoint still accepts request body for backwards compatibility.
+        API-P2-09: Support both query params and request body.
+        """
+        # Create test memory
+        memory = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory 2",
+            metadata={}
+        )
+
+        # Mock vector service
+        mock_vector_service.delete_memories.return_value = {"success": True}
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import DeleteAllMemoriesView
+
+        factory = APIRequestFactory()
+
+        # Test with request body (should still work for backwards compatibility)
+        request = factory.delete(
+            '/api/memories/delete-all/',
+            {'user_id': str(self.user.id), 'confirm': True},
+            format='json'
+        )
+
+        view = DeleteAllMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['success'])
+
+    def test_delete_confirm_parameter_parsing(self):
+        """
+        Test that confirm parameter is properly parsed from strings.
+        API-P2-09: Query params are always strings, need proper parsing.
+        """
+        from rest_framework.test import APIRequestFactory
+        from memories.views import DeleteAllMemoriesView
+
+        factory = APIRequestFactory()
+        view = DeleteAllMemoriesView.as_view()
+
+        # Test various confirm string values
+        test_cases = [
+            ('true', True),
+            ('TRUE', True),
+            ('1', True),
+            ('yes', True),
+            ('false', False),
+            ('0', False),
+            ('no', False),
+            ('', False),
+        ]
+
+        for confirm_value, expected_requires_confirm in test_cases:
+            request = factory.delete(
+                f'/api/memories/delete-all/?confirm={confirm_value}'
+            )
+            response = view(request)
+
+            if expected_requires_confirm:
+                # Should proceed (might fail for other reasons like no user_id)
+                self.assertNotEqual(response.data.get('error'), 'Confirmation required')
+            else:
+                # Should require confirmation
+                self.assertEqual(response.data.get('error'), 'Confirmation required')
+
+
 if __name__ == '__main__':
     unittest.main()

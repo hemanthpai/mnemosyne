@@ -10,6 +10,18 @@ from .vector_service import vector_service
 
 logger = logging.getLogger(__name__)
 
+# SVC-P2-08 fix: Extract magic numbers as named constants
+DEFAULT_CACHE_SIZE = 1000  # Default embedding cache size (each ~4KB)
+MAX_CACHE_SIZE_WARNING = 10000  # Warn if cache size exceeds this
+EMBEDDING_SIZE_KB = 4  # Approximate size of each embedding in KB
+BYTES_PER_KB = 1024  # Bytes per kilobyte
+SETTINGS_CACHE_TTL = 300  # Settings cache TTL in seconds (5 minutes)
+DEFAULT_SEARCH_LIMIT = 10  # Default number of memories to return
+DEFAULT_SEARCH_THRESHOLD = 0.7  # Default similarity threshold
+SEARCH_CANDIDATE_LIMIT = 20  # Number of candidates to fetch for search
+CONTENT_PREVIEW_LENGTH = 100  # Length of content preview in logs
+MAX_MEMORIES_FOR_SUMMARY = 20  # Maximum memories to include in summary
+
 
 class MemorySearchService:
     """
@@ -28,19 +40,19 @@ class MemorySearchService:
         # Each embedding is ~4KB (1024 floats * 4 bytes), so 1000 = ~4MB
         # For production with many users, consider reducing or using Redis
         from django.conf import settings
-        self._max_cache_size = getattr(settings, 'EMBEDDING_CACHE_SIZE', 1000)
+        self._max_cache_size = getattr(settings, 'EMBEDDING_CACHE_SIZE', DEFAULT_CACHE_SIZE)
 
-        if self._max_cache_size > 10000:
+        if self._max_cache_size > MAX_CACHE_SIZE_WARNING:
             logger.warning(
                 f"Large embedding cache size ({self._max_cache_size}). "
-                f"This may use ~{self._max_cache_size * 4 / 1024:.1f}MB of memory. "
+                f"This may use ~{self._max_cache_size * EMBEDDING_SIZE_KB / BYTES_PER_KB:.1f}MB of memory. "
                 f"Consider using Redis for larger deployments."
             )
 
         # Settings cache to avoid hitting DB on every search (SVC-P1-08 fix)
         self._settings_cache = None
         self._settings_cache_time = 0
-        self._settings_cache_ttl = 300  # 5 minutes TTL
+        self._settings_cache_ttl = SETTINGS_CACHE_TTL
 
     def _get_cached_embedding(self, text: str) -> List[float]:
         """
@@ -156,7 +168,7 @@ class MemorySearchService:
             raise ValueError(f"Failed to store memory embedding: {e}") from e
 
     def search_memories(
-        self, query: str, user_id: str, limit: int = 10, threshold: float = 0.7
+        self, query: str, user_id: str, limit: int = DEFAULT_SEARCH_LIMIT, threshold: float = DEFAULT_SEARCH_THRESHOLD
     ) -> List[Memory]:
         """
         Search for relevant memories (synchronous)
@@ -210,7 +222,7 @@ class MemorySearchService:
         self,
         search_queries: List[Dict[str, Any]],
         user_id: str,
-        limit: int = 20,  # Increase to get more candidates
+        limit: int = SEARCH_CANDIDATE_LIMIT,
         threshold: float = 0.5,  # Lower threshold for broader search
     ) -> List[Memory]:
         """Enhanced search with multiple similarity approaches"""
@@ -482,7 +494,7 @@ class MemorySearchService:
                                 if mem not in enhanced_memories:
                                     enhanced_memories.append(mem)
                                     logger.debug(
-                                        f"Added semantic connection: {mem.content[:100]}..."
+                                        f"Added semantic connection: {mem.content[:CONTENT_PREVIEW_LENGTH]}..."
                                     )
                 else:
                     logger.info("No additional semantic connections found")
@@ -505,7 +517,7 @@ class MemorySearchService:
 
         # Prepare memory content for analysis
         memory_content = []
-        for i, memory in enumerate(memories[:20]):  # Limit to prevent prompt overflow
+        for i, memory in enumerate(memories[:MAX_MEMORIES_FOR_SUMMARY]):
             memory_content.append(f"{i + 1}. {memory.content}")
 
         memories_text = "\n".join(memory_content)

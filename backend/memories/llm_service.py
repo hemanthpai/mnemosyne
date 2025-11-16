@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 # SVC-P2-04 fix: Extract timeout as named constant
 DEFAULT_REQUEST_TIMEOUT = 60  # Default timeout for LLM API requests in seconds
 
+# SVC-P2-08 fix: Extract magic numbers as named constants
+LOG_CONTENT_TRUNCATE_LENGTH = 500  # Truncate log content for readability
+TOKEN_SAFETY_MARGIN = 512  # Extra token margin for response generation
+
 # Define format schemas - optimized for efficiency
 MEMORY_EXTRACTION_FORMAT = {
     "type": "array",
@@ -285,8 +289,8 @@ class LLMService:
                         if isinstance(msg, dict) and 'content' in msg:
                             # Truncate long content for readability
                             content = msg['content']
-                            if isinstance(content, str) and len(content) > 500:
-                                msg['content'] = content[:500] + f"... ({len(content)} chars total)"
+                            if isinstance(content, str) and len(content) > LOG_CONTENT_TRUNCATE_LENGTH:
+                                msg['content'] = content[:LOG_CONTENT_TRUNCATE_LENGTH] + f"... ({len(content)} chars total)"
                 logger.debug("Request data: %s", json.dumps(log_data, indent=2))
 
                 # Make the API call using the persistent session
@@ -395,7 +399,7 @@ class LLMService:
             prompt=system_prompt,
             user_input=user_prompt,
             model_name=model,
-            safety_margin=max_tokens + 512,  # Add extra margin for response
+            safety_margin=max_tokens + TOKEN_SAFETY_MARGIN,
         )
 
         logger.info(

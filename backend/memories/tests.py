@@ -1877,5 +1877,41 @@ class SVCP2TimeoutTests(TestCase):
             self.assertEqual(call_kwargs['timeout'], DEFAULT_REQUEST_TIMEOUT)
 
 
+class SVCP2MagicNumbersServiceTests(TestCase):
+    """Tests for SVC-P2-08: Hardcoded Magic Numbers in Services"""
+
+    def test_llm_service_constants_defined(self):
+        """Test that magic numbers in llm_service are extracted as constants"""
+        from memories import llm_service
+
+        self.assertTrue(hasattr(llm_service, 'LOG_CONTENT_TRUNCATE_LENGTH'))
+        self.assertTrue(hasattr(llm_service, 'TOKEN_SAFETY_MARGIN'))
+
+        self.assertEqual(llm_service.LOG_CONTENT_TRUNCATE_LENGTH, 500)
+        self.assertEqual(llm_service.TOKEN_SAFETY_MARGIN, 512)
+
+    def test_memory_search_service_constants_defined(self):
+        """Test that magic numbers in memory_search_service are extracted as constants"""
+        from memories import memory_search_service
+
+        self.assertTrue(hasattr(memory_search_service, 'DEFAULT_CACHE_SIZE'))
+        self.assertTrue(hasattr(memory_search_service, 'MAX_CACHE_SIZE_WARNING'))
+        self.assertTrue(hasattr(memory_search_service, 'SETTINGS_CACHE_TTL'))
+        self.assertTrue(hasattr(memory_search_service, 'DEFAULT_SEARCH_LIMIT'))
+        self.assertTrue(hasattr(memory_search_service, 'DEFAULT_SEARCH_THRESHOLD'))
+        self.assertTrue(hasattr(memory_search_service, 'SEARCH_CANDIDATE_LIMIT'))
+        self.assertTrue(hasattr(memory_search_service, 'CONTENT_PREVIEW_LENGTH'))
+        self.assertTrue(hasattr(memory_search_service, 'MAX_MEMORIES_FOR_SUMMARY'))
+
+        self.assertEqual(memory_search_service.DEFAULT_CACHE_SIZE, 1000)
+        self.assertEqual(memory_search_service.MAX_CACHE_SIZE_WARNING, 10000)
+        self.assertEqual(memory_search_service.SETTINGS_CACHE_TTL, 300)
+        self.assertEqual(memory_search_service.DEFAULT_SEARCH_LIMIT, 10)
+        self.assertEqual(memory_search_service.DEFAULT_SEARCH_THRESHOLD, 0.7)
+        self.assertEqual(memory_search_service.SEARCH_CANDIDATE_LIMIT, 20)
+        self.assertEqual(memory_search_service.CONTENT_PREVIEW_LENGTH, 100)
+        self.assertEqual(memory_search_service.MAX_MEMORIES_FOR_SUMMARY, 20)
+
+
 if __name__ == '__main__':
     unittest.main()

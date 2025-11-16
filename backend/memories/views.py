@@ -123,7 +123,11 @@ class MemoryViewSet(viewsets.ModelViewSet):
             uuid.UUID(pk)
             memory = self.get_object()
             serializer = self.get_serializer(memory)
-            return Response(serializer.data)
+            # API-P2-08 fix: Return consistent response format with success field
+            return Response({
+                "success": True,
+                "memory": serializer.data
+            })
         except ValueError as e:
             # API-P1-03: Log specific error but return generic message
             logger.debug(f"Invalid UUID format for memory retrieval: {pk} - {e}")
@@ -159,8 +163,12 @@ class MemoryViewSet(viewsets.ModelViewSet):
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
+            # API-P2-08 fix: Add success field to paginated response for consistency
+            paginated_response = self.get_paginated_response(serializer.data)
             # get_paginated_response adds 'count', 'next', 'previous' links
-            return self.get_paginated_response(serializer.data)
+            # Add success field to match API response format
+            paginated_response.data['success'] = True
+            return paginated_response
 
         # Fallback if pagination is disabled
         serializer = self.get_serializer(queryset, many=True)

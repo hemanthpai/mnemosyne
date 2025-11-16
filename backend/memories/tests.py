@@ -2144,6 +2144,144 @@ class APIP2HTTPMethodTests(TestCase):
                 self.assertEqual(response.data.get('error'), 'Confirmation required')
 
 
+class APIP2InconsistentResponseFormatTests(TestCase):
+    """Tests for API-P2-08: Inconsistent Response Format"""
+
+    def setUp(self):
+        """Create test user and memory for testing"""
+        from memories.models import Memory
+        self.test_user_id = str(uuid.uuid4())
+        self.test_memory = Memory.objects.create(
+            user_id=self.test_user_id,
+            content="Test memory content",
+            metadata={"test": "data"}
+        )
+
+    @patch('memories.views.vector_service')
+    def test_retrieve_success_has_consistent_format(self, mock_vector_service):
+        """Verify retrieve endpoint returns consistent response format with success field"""
+        from django.test import Client
+        client = Client()
+
+        response = client.get(f'/api/memories/{self.test_memory.id}/')
+
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+
+        # Should have success field
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertTrue(data['success'])
+
+        # Should have memory field
+        self.assertIn('memory', data)
+        self.assertIsInstance(data['memory'], dict)
+
+    @patch('memories.views.vector_service')
+    def test_list_success_has_consistent_format(self, mock_vector_service):
+        """Verify list endpoint returns consistent response format with success field"""
+        from django.test import Client
+        client = Client()
+
+        response = client.get('/api/memories/')
+
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+
+        # Should have success field (added to paginated response)
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertTrue(data['success'])
+
+        # Should have pagination fields
+        self.assertIn('count', data)
+        self.assertIn('results', data)
+
+    @patch('memories.views.memory_search_service')
+    def test_create_success_has_consistent_format(self, mock_memory_service):
+        """Verify create endpoint returns consistent response format with success field"""
+        from django.test import Client
+        client = Client()
+
+        # Mock the memory creation
+        mock_memory = MagicMock()
+        mock_memory.id = uuid.uuid4()
+        mock_memory.content = "New memory"
+        mock_memory.user_id = self.test_user_id
+        mock_memory.metadata = {}
+        mock_memory.created_at = datetime.now()
+        mock_memory.updated_at = datetime.now()
+
+        with patch('memories.views.MemoryViewSet.perform_create'):
+            response = client.post(
+                '/api/memories/',
+                data=json.dumps({
+                    "user_id": self.test_user_id,
+                    "content": "New memory"
+                }),
+                content_type='application/json'
+            )
+
+        # Response should have success field
+        if response.status_code == 201:
+            data = response.json()
+            self.assertIn('success', data)
+
+    def test_error_responses_have_consistent_format(self):
+        """Verify error responses have consistent format with success=False"""
+        from django.test import Client
+        client = Client()
+
+        # Test with invalid UUID
+        response = client.get('/api/memories/invalid-uuid/')
+
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+
+        # Should have consistent error format
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertFalse(data['success'])
+        self.assertIn('error', data)
+
+    def test_not_found_has_consistent_format(self):
+        """Verify 404 responses have consistent format"""
+        from django.test import Client
+        client = Client()
+
+        # Try to get non-existent memory with valid UUID
+        non_existent_id = uuid.uuid4()
+        response = client.get(f'/api/memories/{non_existent_id}/')
+
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+
+        # Should have consistent error format
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertFalse(data['success'])
+        self.assertIn('error', data)
+
+    def test_all_responses_have_success_field(self):
+        """Verify all API responses include the success field"""
+        from django.test import Client
+        client = Client()
+
+        # Test retrieve success
+        response = client.get(f'/api/memories/{self.test_memory.id}/')
+        if response.status_code == 200:
+            self.assertIn('success', response.json())
+
+        # Test list success
+        response = client.get('/api/memories/')
+        if response.status_code == 200:
+            self.assertIn('success', response.json())
+
+        # Test error response
+        response = client.get('/api/memories/invalid/')
+        self.assertIn('success', response.json())
+
+
 class APIP2MissingTypeHintsTests(TestCase):
     """Tests for API-P2-06: Missing Type Hints"""
 

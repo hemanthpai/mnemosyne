@@ -24,6 +24,10 @@ from .models import Memory
 
 logger = logging.getLogger(__name__)
 
+# SVC-P2-14 fix: Extract namespace UUID as named constant
+# Standard DNS namespace UUID from RFC 4122
+UUID_NAMESPACE_DNS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
 # Thread lock for progress access
 _progress_lock = threading.Lock()
 
@@ -361,9 +365,9 @@ class OpenWebUIImporter:
             uuid.UUID(openwebui_user_id)
             return openwebui_user_id
         except ValueError:
-            # Generate deterministic UUID from user ID
-            namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # DNS namespace
-            return str(uuid.uuid5(namespace, openwebui_user_id))
+            # Generate deterministic UUID from user ID using DNS namespace
+            # SVC-P2-14 fix: Use named constant instead of hardcoded UUID
+            return str(uuid.uuid5(UUID_NAMESPACE_DNS, openwebui_user_id))
 
     def import_conversations(
         self,

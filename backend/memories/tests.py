@@ -1913,5 +1913,43 @@ class SVCP2MagicNumbersServiceTests(TestCase):
         self.assertEqual(memory_search_service.MAX_MEMORIES_FOR_SUMMARY, 20)
 
 
+class SVCP2NamespaceUUIDTests(TestCase):
+    """Tests for SVC-P2-14: Hardcoded Namespace UUID"""
+
+    def test_namespace_uuid_constant_defined(self):
+        """Test that namespace UUID is defined as a named constant"""
+        from backend.memories import openwebui_importer
+
+        self.assertTrue(
+            hasattr(openwebui_importer, 'UUID_NAMESPACE_DNS'),
+            "UUID_NAMESPACE_DNS should be defined as module constant"
+        )
+
+        # Verify it's the standard DNS namespace from RFC 4122
+        namespace = openwebui_importer.UUID_NAMESPACE_DNS
+        self.assertEqual(str(namespace), "6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+    def test_map_user_generates_deterministic_uuid(self):
+        """Test that mapping generates deterministic UUIDs"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter
+
+        importer = OpenWebUIImporter(db_path=None)
+
+        # Test with same input
+        user_id1 = importer.map_openwebui_user_to_mnemosyne("test_user")
+        user_id2 = importer.map_openwebui_user_to_mnemosyne("test_user")
+
+        # Should generate same UUID for same input
+        self.assertEqual(user_id1, user_id2)
+
+        # Should be valid UUID
+        import uuid
+        uuid.UUID(user_id1)  # Will raise if invalid
+
+        # Different input should generate different UUID
+        user_id3 = importer.map_openwebui_user_to_mnemosyne("different_user")
+        self.assertNotEqual(user_id1, user_id3)
+
+
 if __name__ == '__main__':
     unittest.main()

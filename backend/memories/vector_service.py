@@ -11,6 +11,7 @@ from qdrant_client.models import (
     Filter,
     MatchAny,
     MatchValue,
+    PointIdsList,
     PointStruct,
     VectorParams,
 )
@@ -108,11 +109,20 @@ class VectorService:
             collection_names = [c.name for c in collections]
 
             if self.collection_name not in collection_names:
-                logger.info("Creating Qdrant collection: %s", self.collection_name)
+                # Get vector dimension from settings or use default
+                vector_dim = getattr(settings, "QDRANT_VECTOR_DIMENSION", 1024)
+                if not hasattr(settings, "QDRANT_VECTOR_DIMENSION"):
+                    logger.warning(
+                        "QDRANT_VECTOR_DIMENSION not set in settings, using default %d. "
+                        "Set this to match your embedding model dimension for best performance.",
+                        vector_dim
+                    )
+
+                logger.info("Creating Qdrant collection: %s with dimension %d", self.collection_name, vector_dim)
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(
-                        size=1024,  # Default for OpenAI embeddings - adjust based on your model
+                        size=vector_dim,
                         distance=Distance.COSINE,
                     ),
                 )
@@ -245,7 +255,8 @@ class VectorService:
 
         try:
             self.client.delete(
-                collection_name=self.collection_name, points_selector=[vector_id]
+                collection_name=self.collection_name,
+                points_selector=PointIdsList(points=[vector_id])
             )
             logger.debug("Deleted embedding with vector ID %s", vector_id)
             return True
@@ -280,10 +291,22 @@ class VectorService:
 
         try:
             collection_info = self.client.get_collection(self.collection_name)
+
+            # Safely extract nested attributes with error handling
+            try:
+                vector_count = collection_info.config.params.vectors.size
+            except (AttributeError, TypeError):
+                vector_count = None
+
+            try:
+                distance = collection_info.config.params.vectors.distance
+            except (AttributeError, TypeError):
+                distance = None
+
             return {
                 "status": collection_info.status,
-                "vector_count": collection_info.config.params.vectors.size,  # type: ignore
-                "distance": collection_info.config.params.vectors.distance,  # type: ignore
+                "vector_count": vector_count,
+                "distance": str(distance) if distance else None,
                 "optimizer_status": collection_info.optimizer_status,
                 "points_count": collection_info.points_count,
             }

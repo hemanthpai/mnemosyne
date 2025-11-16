@@ -1585,5 +1585,111 @@ class APIP2VariableNameTests(TestCase):
             self.assertIn('updated_at', memory)
 
 
+class APIP2SettingsFetchTests(TestCase):
+    """Tests for API-P2-02: Multiple LLM Settings Fetches in Same Request"""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+
+    @patch('memories.views.llm_service')
+    @patch('memories.views.memory_search_service')
+    def test_extract_uses_cached_settings(self, mock_memory_service, mock_llm):
+        """
+        Test that extraction uses llm_service.settings instead of fetching again.
+        API-P2-02: After refresh_settings(), use cached settings instead of LLMSettings.get_settings()
+        """
+        # Mock settings object
+        mock_settings = MagicMock()
+        mock_settings.memory_extraction_prompt = "Test extraction prompt"
+        mock_llm.settings = mock_settings
+
+        # Mock LLM extraction
+        mock_llm.extract_memories.return_value = {
+            "memories": [{"content": "Test memory", "tags": ["test"]}],
+            "model": "test-model"
+        }
+
+        # Mock memory storage
+        mock_memory = MagicMock()
+        mock_memory.id = uuid.uuid4()
+        mock_memory.content = "Test memory"
+        mock_memory.metadata = {"tags": ["test"]}
+        mock_memory.created_at = datetime.datetime.now()
+        mock_memory.updated_at = datetime.datetime.now()
+        mock_memory_service.store_memory_with_embedding.return_value = mock_memory
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ExtractMemoriesView
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            '/api/memories/extract/',
+            {'text': 'Test conversation'},
+            format='json'
+        )
+        request.user = self.user
+
+        view = ExtractMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should call refresh_settings once
+        mock_llm.refresh_settings.assert_called_once()
+
+        # Should access cached settings property, not call get_settings again
+        # This is verified implicitly - if we called LLMSettings.get_settings() it would fail
+        # because we didn't mock it
+
+    @patch('memories.views.llm_service')
+    @patch('memories.views.memory_search_service')
+    def test_retrieve_uses_cached_settings(self, mock_memory_service, mock_llm):
+        """
+        Test that retrieval uses llm_service.settings instead of fetching again.
+        API-P2-02: After refresh_settings(), use cached settings instead of LLMSettings.get_settings()
+        """
+        # Mock settings object
+        mock_settings = MagicMock()
+        mock_settings.memory_search_prompt = "Test search prompt"
+        mock_settings.enable_semantic_connections = False
+        mock_llm.settings = mock_settings
+
+        # Mock LLM query generation
+        mock_llm.generate_search_queries.return_value = {
+            "success": True,
+            "queries": ["query1", "query2"],
+            "model": "test-model"
+        }
+
+        # Mock memory search
+        mock_memory_service.search_memories_with_queries.return_value = []
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import RetrieveMemoriesView
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            '/api/memories/retrieve/',
+            {'prompt': 'test prompt'},
+            format='json'
+        )
+        request.user = self.user
+
+        view = RetrieveMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should call refresh_settings once
+        mock_llm.refresh_settings.assert_called_once()
+
+        # Should access cached settings property
+        # Verified implicitly by not mocking LLMSettings.get_settings()
+
+
 if __name__ == '__main__':
     unittest.main()

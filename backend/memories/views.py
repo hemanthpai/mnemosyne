@@ -217,10 +217,9 @@ class ExtractMemoriesView(APIView):
         try:
             # Refresh LLM settings to ensure we have the latest configuration
             llm_service.refresh_settings()
-            
-            # Get LLM settings for the extraction prompt
-            settings = LLMSettings.get_settings()
-            system_prompt = settings.memory_extraction_prompt
+
+            # API-P2-02 fix: Use cached settings from llm_service instead of fetching again
+            system_prompt = llm_service.settings.memory_extraction_prompt
 
             logger.info("Extracting memories for user %s", user_id)
 
@@ -457,10 +456,9 @@ class RetrieveMemoriesView(APIView):
         try:
             # Refresh LLM settings to ensure we have the latest configuration
             llm_service.refresh_settings()
-            
-            # Step 1: Get LLM settings and generate search queries
-            settings = LLMSettings.get_settings()
-            search_prompt = settings.memory_search_prompt
+
+            # API-P2-02 fix: Use cached settings from llm_service instead of fetching again
+            search_prompt = llm_service.settings.memory_search_prompt
 
             logger.info(
                 "Generating search queries for user %s with prompt: %s...",

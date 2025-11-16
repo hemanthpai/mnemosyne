@@ -1,7 +1,10 @@
 import json
 import logging
+import tempfile
+import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 
 from django.db import transaction
 from rest_framework import parsers, status, viewsets
@@ -13,6 +16,12 @@ from settings_app.models import LLMSettings
 from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_service
 from .memory_search_service import memory_search_service
 from .models import Memory
+from .openwebui_importer import (
+    ImportProgress,
+    OpenWebUIImporter,
+    _import_progresses,
+    _progress_lock,
+)
 from .rate_limiter import rate_limit_extract, rate_limit_retrieve
 from .serializers import MemorySerializer
 from .vector_service import vector_service
@@ -619,9 +628,8 @@ class TestConnectionView(APIView):
             # Test LLM connection
             llm_result = llm_service.test_connection()
 
+            # API-P2-07 fix: Moved import to module level
             # Test vector service
-            from .vector_service import vector_service
-
             vector_health = vector_service.health_check()
             vector_info = vector_service.get_collection_info()
 
@@ -697,9 +705,8 @@ class MemoryStatsView(APIView):
                     if tag in ["personal", "professional", "academic", "creative"]:
                         domain_tags[tag] = domain_tags.get(tag, 0) + 1
 
+            # API-P2-07 fix: Moved import to module level
             # Get vector service stats
-            from .vector_service import vector_service
-
             collection_info = vector_service.get_collection_info()
 
             return Response(
@@ -907,10 +914,7 @@ class ImportOpenWebUIHistoryView(APIView):
         - limit: (optional) Maximum conversations to import
         - dry_run: (optional) Preview mode (default: false)
         """
-        import tempfile
-        import threading
-        from pathlib import Path
-        from .openwebui_importer import OpenWebUIImporter
+        # API-P2-07 fix: Moved imports to module level
 
         try:
             # Get uploaded file
@@ -990,7 +994,7 @@ class ImportOpenWebUIHistoryView(APIView):
             after_date = None
             if after_date_str:
                 try:
-                    from datetime import timezone
+                    # API-P2-07 fix: Moved import to module level
                     # Parse date string and treat as start of day in UTC
                     # This ensures consistent filtering regardless of user's timezone
                     date_obj = datetime.fromisoformat(after_date_str.replace('Z', '')).date()
@@ -1057,7 +1061,7 @@ class ImportOpenWebUIHistoryView(APIView):
 
             # API-P2-13 fix: Initialize progress state BEFORE starting thread
             # to prevent race condition. Use _import_progresses dict with import_id.
-            from .openwebui_importer import ImportProgress, _import_progresses, _progress_lock
+            # API-P2-07 fix: Moved import to module level
             with _progress_lock:
                 if import_id not in _import_progresses:
                     _import_progresses[import_id] = ImportProgress()
@@ -1099,8 +1103,7 @@ class ImportProgressView(APIView):
 
     def get(self, request):
         try:
-            from .openwebui_importer import OpenWebUIImporter
-
+            # API-P2-07 fix: Moved import to module level
             progress = OpenWebUIImporter.get_progress()
 
             return Response(
@@ -1122,8 +1125,7 @@ class CancelImportView(APIView):
 
     def post(self, request):
         try:
-            from .openwebui_importer import OpenWebUIImporter
-
+            # API-P2-07 fix: Moved import to module level
             OpenWebUIImporter.cancel_import()
 
             return Response(

@@ -2144,5 +2144,123 @@ class APIP2HTTPMethodTests(TestCase):
                 self.assertEqual(response.data.get('error'), 'Confirmation required')
 
 
+class APIP2ImportsInsideFunctionsTests(TestCase):
+    """Tests for API-P2-07: Imports Inside Functions"""
+
+    def test_no_imports_in_test_connection_view(self):
+        """Verify TestConnectionView.get() has no imports inside function body"""
+        import inspect
+        from memories.views import TestConnectionView
+
+        # Get the source code of the get method
+        source = inspect.getsource(TestConnectionView.get)
+
+        # Check that 'import' and 'from' keywords don't appear in function body
+        # (after the function definition line)
+        lines = source.split('\n')
+        # Skip the def line
+        function_body = '\n'.join(lines[1:])
+
+        # Should not have 'import' or 'from ... import' in function body
+        self.assertNotIn('import tempfile', function_body)
+        self.assertNotIn('import threading', function_body)
+        self.assertNotIn('from .vector_service import', function_body)
+        self.assertNotIn('from .openwebui_importer import', function_body)
+        self.assertNotIn('from pathlib import', function_body)
+        self.assertNotIn('from datetime import timezone', function_body)
+
+    def test_no_imports_in_memory_stats_view(self):
+        """Verify MemoryStatsView.get() has no imports inside function body"""
+        import inspect
+        from memories.views import MemoryStatsView
+
+        # Get the source code of the get method
+        source = inspect.getsource(MemoryStatsView.get)
+
+        # Check that vector_service import is not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        self.assertNotIn('from .vector_service import', function_body)
+
+    def test_no_imports_in_import_openwebui_history_view(self):
+        """Verify ImportOpenWebUIHistoryView.post() has no imports inside function body"""
+        import inspect
+        from memories.views import ImportOpenWebUIHistoryView
+
+        # Get the source code of the post method
+        source = inspect.getsource(ImportOpenWebUIHistoryView.post)
+
+        # Check that imports are not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        # Should not have these imports in function body
+        self.assertNotIn('import tempfile', function_body)
+        self.assertNotIn('import threading', function_body)
+        self.assertNotIn('from pathlib import Path', function_body)
+        self.assertNotIn('from .openwebui_importer import OpenWebUIImporter', function_body)
+        self.assertNotIn('from datetime import timezone', function_body)
+        self.assertNotIn('from .openwebui_importer import ImportProgress', function_body)
+
+    def test_no_imports_in_import_progress_view(self):
+        """Verify ImportProgressView.get() has no imports inside function body"""
+        import inspect
+        from memories.views import ImportProgressView
+
+        # Get the source code of the get method
+        source = inspect.getsource(ImportProgressView.get)
+
+        # Check that imports are not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        self.assertNotIn('from .openwebui_importer import', function_body)
+
+    def test_no_imports_in_cancel_import_view(self):
+        """Verify CancelImportView.post() has no imports inside function body"""
+        import inspect
+        from memories.views import CancelImportView
+
+        # Get the source code of the post method
+        source = inspect.getsource(CancelImportView.post)
+
+        # Check that imports are not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        self.assertNotIn('from .openwebui_importer import', function_body)
+
+    def test_all_imports_at_module_level(self):
+        """Verify all required imports are at module level in views.py"""
+        import memories.views as views_module
+
+        # Check that all required imports are available at module level
+        self.assertTrue(hasattr(views_module, 'tempfile'))
+        self.assertTrue(hasattr(views_module, 'threading'))
+        self.assertTrue(hasattr(views_module, 'Path'))
+        self.assertTrue(hasattr(views_module, 'timezone'))
+        self.assertTrue(hasattr(views_module, 'vector_service'))
+        self.assertTrue(hasattr(views_module, 'OpenWebUIImporter'))
+        self.assertTrue(hasattr(views_module, 'ImportProgress'))
+        self.assertTrue(hasattr(views_module, '_import_progresses'))
+        self.assertTrue(hasattr(views_module, '_progress_lock'))
+
+    def test_imports_work_correctly(self):
+        """Verify that moved imports still work correctly"""
+        # This is a functional test to ensure the refactoring didn't break anything
+        import memories.views as views_module
+
+        # Test that we can use the imported modules/classes
+        self.assertIsNotNone(views_module.tempfile)
+        self.assertIsNotNone(views_module.threading)
+        self.assertIsNotNone(views_module.Path)
+        self.assertIsNotNone(views_module.timezone)
+
+        # Test that we can instantiate/use the classes
+        self.assertTrue(callable(views_module.OpenWebUIImporter))
+        self.assertTrue(callable(views_module.ImportProgress))
+
+
 if __name__ == '__main__':
     unittest.main()

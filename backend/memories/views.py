@@ -305,20 +305,21 @@ class ExtractMemoriesView(APIView):
                 # API-P1-06: Validate fields against whitelist
                 requested_fields = request.data.get("fields", ["id", "content"])
                 fields = validate_fields(requested_fields)
-                memory_data = {}
+                # API-P2-03 fix: Rename to avoid shadowing loop variable
+                response_memory = {}
 
                 if "id" in fields:
-                    memory_data["id"] = str(memory.id)
+                    response_memory["id"] = str(memory.id)
                 if "content" in fields:
-                    memory_data["content"] = memory.content
+                    response_memory["content"] = memory.content
                 if "metadata" in fields:
-                    memory_data["metadata"] = memory.metadata
+                    response_memory["metadata"] = memory.metadata
                 if "created_at" in fields:
-                    memory_data["created_at"] = memory.created_at.isoformat()
+                    response_memory["created_at"] = memory.created_at.isoformat()
                 if "updated_at" in fields:
-                    memory_data["updated_at"] = memory.updated_at.isoformat()
+                    response_memory["updated_at"] = memory.updated_at.isoformat()
 
-                stored_memories.append(memory_data)
+                stored_memories.append(response_memory)
 
             logger.info(
                 "Successfully extracted and stored %d memories", len(stored_memories)

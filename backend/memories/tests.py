@@ -1514,5 +1514,76 @@ class APIQueryOptimizationTests(TestCase):
         )
 
 
+class APIP2VariableNameTests(TestCase):
+    """Tests for API-P2-03: Variable Name Collision"""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+
+    @patch('memories.views.memory_search_service')
+    @patch('memories.views.llm_service')
+    def test_extract_memories_no_variable_shadowing(self, mock_llm, mock_memory_service):
+        """
+        Test that extraction doesn't have variable name collision issues.
+        API-P2-03: Ensure response_memory doesn't shadow memory_data loop variable.
+        """
+        # Mock LLM extraction to return multiple memories
+        mock_llm.extract_memories.return_value = {
+            "memories": [
+                {"content": "Memory 1", "tags": ["tag1"]},
+                {"content": "Memory 2", "tags": ["tag2"]},
+                {"content": "Memory 3", "tags": ["tag3"]},
+            ],
+            "model": "test-model"
+        }
+
+        # Mock memory storage
+        mock_memory = MagicMock()
+        mock_memory.id = uuid.uuid4()
+        mock_memory.content = "Memory 1"
+        mock_memory.metadata = {"tags": ["tag1"]}
+        mock_memory.created_at = datetime.datetime.now()
+        mock_memory.updated_at = datetime.datetime.now()
+        mock_memory_service.store_memory_with_embedding.return_value = mock_memory
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ExtractMemoriesView
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            '/api/memories/extract/',
+            {
+                'text': 'Test conversation with multiple memories',
+                'fields': ['id', 'content', 'metadata', 'created_at', 'updated_at']
+            },
+            format='json'
+        )
+        request.user = self.user
+
+        view = ExtractMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should have stored 3 memories
+        self.assertEqual(mock_memory_service.store_memory_with_embedding.call_count, 3)
+
+        # Check that all requested fields are in response
+        self.assertIn('memories', response.data)
+        stored_memories = response.data['memories']
+        self.assertEqual(len(stored_memories), 3)
+
+        # Each memory should have all requested fields (no variable shadowing issues)
+        for memory in stored_memories:
+            self.assertIn('id', memory)
+            self.assertIn('content', memory)
+            self.assertIn('metadata', memory)
+            self.assertIn('created_at', memory)
+            self.assertIn('updated_at', memory)
+
+
 if __name__ == '__main__':
     unittest.main()

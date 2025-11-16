@@ -15,8 +15,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import transaction
+from settings_app.models import LLMSettings
 
-from .llm_service import llm_service
+# SVC-P2-01 fix: Move imports to top level (was inside loop-called function)
+from .llm_service import MEMORY_EXTRACTION_FORMAT, llm_service
 from .memory_search_service import memory_search_service
 from .models import Memory
 
@@ -264,8 +266,7 @@ class OpenWebUIImporter:
 
         try:
             # Use the existing LLM service to extract memories
-            from settings_app.models import LLMSettings
-
+            # SVC-P2-01 fix: Import moved to top level
             settings = LLMSettings.get_settings()
             system_prompt = settings.memory_extraction_prompt
 
@@ -274,8 +275,7 @@ class OpenWebUIImporter:
             system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
 
             # Query LLM for memory extraction
-            from .llm_service import MEMORY_EXTRACTION_FORMAT
-
+            # SVC-P2-01 fix: Import moved to top level
             llm_result = llm_service.query_llm(
                 system_prompt=system_prompt_with_date,
                 prompt=conversation_text,

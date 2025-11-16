@@ -1777,5 +1777,52 @@ class APIP2MagicNumbersTests(TestCase):
         self.assertEqual(response.data['max_length'], MAX_PROMPT_LENGTH)
 
 
+class SVCP2ImportLocationTests(TestCase):
+    """Tests for SVC-P2-01: Import Inside Loop"""
+
+    def test_imports_at_module_level(self):
+        """
+        Test that critical imports are at module level, not inside functions.
+        SVC-P2-01: Imports should be at top of file to avoid repeated execution.
+        """
+        import importlib
+        import inspect
+
+        # Reload the module to ensure we're testing current code
+        from backend.memories import openwebui_importer
+        importlib.reload(openwebui_importer)
+
+        # Check that MEMORY_EXTRACTION_FORMAT is imported at module level
+        self.assertTrue(
+            hasattr(openwebui_importer, 'MEMORY_EXTRACTION_FORMAT'),
+            "MEMORY_EXTRACTION_FORMAT should be imported at module level"
+        )
+
+        # Check that LLMSettings is imported at module level
+        self.assertTrue(
+            hasattr(openwebui_importer, 'LLMSettings'),
+            "LLMSettings should be imported at module level"
+        )
+
+        # Verify the function doesn't have import statements
+        # by checking the source code
+        importer_class = openwebui_importer.OpenWebUIImporter
+        source = inspect.getsource(importer_class.extract_memories_from_conversation)
+
+        # Should not have 'from settings_app.models import' in the function
+        self.assertNotIn(
+            'from settings_app.models import',
+            source,
+            "Function should not have import statement for LLMSettings"
+        )
+
+        # Should not have 'from .llm_service import MEMORY_EXTRACTION_FORMAT' in the function
+        self.assertNotIn(
+            'from .llm_service import MEMORY_EXTRACTION_FORMAT',
+            source,
+            "Function should not have import statement for MEMORY_EXTRACTION_FORMAT"
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

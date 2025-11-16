@@ -414,7 +414,11 @@ class MemorySearchService:
     def find_semantic_connections(
         self, memories: List[Memory], original_query: str, user_id: str
     ) -> List[Memory]:
-        """Find additional semantic connections using LLM analysis"""
+        """
+        Find additional semantic connections using LLM analysis.
+
+        SVC-P1-10 fix: Returns new list instead of modifying input parameter.
+        """
         settings = self._get_cached_settings()
 
         # Check if semantic connections are enabled
@@ -428,6 +432,9 @@ class MemorySearchService:
                 f"Not enough memories ({len(memories)}) to trigger semantic enhancement (threshold: {settings.semantic_enhancement_threshold})"
             )
             return memories
+
+        # SVC-P1-10 fix: Create a copy to avoid modifying input parameter
+        enhanced_memories = list(memories)
 
         # Use the configurable prompt
         memory_summaries = [f"- {m.content}" for m in memories]
@@ -472,8 +479,8 @@ class MemorySearchService:
                                 threshold=0.3,  # Lower threshold for broader search
                             )
                             for mem in additional_memories:
-                                if mem not in memories:
-                                    memories.append(mem)
+                                if mem not in enhanced_memories:
+                                    enhanced_memories.append(mem)
                                     logger.debug(
                                         f"Added semantic connection: {mem.content[:100]}..."
                                     )
@@ -483,7 +490,7 @@ class MemorySearchService:
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning(f"Failed to parse semantic connections response: {e}")
 
-        return memories
+        return enhanced_memories
 
     def summarize_relevant_memories(
         self, memories: List[Memory], user_query: str

@@ -1043,5 +1043,142 @@ class GlobalSingletonThreadSafetyTests(TestCase):
         self.assertEqual(load_count[0], 1, "Settings should be loaded exactly once")
 
 
+class ListModificationTests(TestCase):
+    """Tests for SVC-P1-10: List modification during iteration"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    @patch('backend.memories.memory_search_service.llm_service')
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_find_semantic_connections_does_not_modify_input_list(
+        self, mock_llm_settings_class, mock_llm_service
+    ):
+        """Test that find_semantic_connections doesn't modify the input list"""
+        from backend.memories.memory_search_service import memory_search_service
+
+        # Create test memories
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="I love programming in Python",
+            metadata={}
+        )
+        memory2 = Memory.objects.create(
+            user_id=self.user.id,
+            content="I enjoy data science",
+            metadata={}
+        )
+        memory3 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Machine learning is fascinating",
+            metadata={}
+        )
+
+        original_memories = [memory1, memory2]
+        original_length = len(original_memories)
+        original_ids = [m.id for m in original_memories]
+
+        # Mock settings to enable semantic connections
+        mock_settings = Mock()
+        mock_settings.enable_semantic_connections = True
+        mock_settings.semantic_enhancement_threshold = 1
+        mock_settings.semantic_connection_prompt = "Test prompt"
+        mock_settings.llm_temperature = 0.7
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        # Mock LLM service to return additional search query
+        mock_llm_service.query_llm.return_value = {
+            "success": True,
+            "response": json.dumps({
+                "has_connections": True,
+                "additional_searches": [
+                    {"search_query": "machine learning"}
+                ],
+                "reasoning": "Test reasoning"
+            })
+        }
+
+        # Mock search_memories to return memory3
+        with patch.object(
+            memory_search_service,
+            'search_memories',
+            return_value=[memory3]
+        ):
+            result = memory_search_service.find_semantic_connections(
+                original_memories,
+                "Tell me about my tech interests",
+                str(self.user.id)
+            )
+
+        # Original list should NOT be modified
+        self.assertEqual(len(original_memories), original_length)
+        self.assertEqual([m.id for m in original_memories], original_ids)
+
+        # Result should contain original + additional memories
+        self.assertEqual(len(result), 3)
+        self.assertIn(memory1, result)
+        self.assertIn(memory2, result)
+        self.assertIn(memory3, result)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_disabled_semantic_connections_returns_original_list(
+        self, mock_llm_settings_class
+    ):
+        """Test that disabled semantic connections returns input unchanged"""
+        from backend.memories.memory_search_service import memory_search_service
+
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory",
+            metadata={}
+        )
+
+        original_memories = [memory1]
+
+        # Mock settings to disable semantic connections
+        mock_settings = Mock()
+        mock_settings.enable_semantic_connections = False
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        result = memory_search_service.find_semantic_connections(
+            original_memories,
+            "Test query",
+            str(self.user.id)
+        )
+
+        # Should return the same list
+        self.assertEqual(result, original_memories)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_below_threshold_returns_original_list(
+        self, mock_llm_settings_class
+    ):
+        """Test that below threshold returns input unchanged"""
+        from backend.memories.memory_search_service import memory_search_service
+
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory",
+            metadata={}
+        )
+
+        original_memories = [memory1]
+
+        # Mock settings with high threshold
+        mock_settings = Mock()
+        mock_settings.enable_semantic_connections = True
+        mock_settings.semantic_enhancement_threshold = 10  # Higher than we have
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        result = memory_search_service.find_semantic_connections(
+            original_memories,
+            "Test query",
+            str(self.user.id)
+        )
+
+        # Should return the same list
+        self.assertEqual(result, original_memories)
+
+
 if __name__ == '__main__':
     unittest.main()

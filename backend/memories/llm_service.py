@@ -217,8 +217,8 @@ class LLMService:
                     f"Bearer {self.settings.extraction_endpoint_api_key}"
                 )
 
-        for attempt in range(1, max_retries + 2):
-            logger.debug("LLM query attempt %d/%d", attempt, max_retries + 1)
+        for attempt in range(max_retries + 1):
+            logger.debug("LLM query attempt %d/%d", attempt + 1, max_retries + 1)
 
             try:
                 # Prepare request data based on provider type
@@ -255,13 +255,23 @@ class LLMService:
                 logger.info(
                     "Making API request to %s (attempt %d/%d)",
                     endpoint,
-                    attempt,
+                    attempt + 1,
                     max_retries + 1,
                 )
-                
-                # Log full request data for debugging
+
+                # Log request data for debugging (sanitize sensitive information)
                 import json
-                logger.info("Request data: %s", json.dumps(data, indent=2))
+                import copy
+                log_data = copy.deepcopy(data)
+                # Sanitize API keys and sensitive data from log output
+                if 'messages' in log_data:
+                    for msg in log_data['messages']:
+                        if isinstance(msg, dict) and 'content' in msg:
+                            # Truncate long content for readability
+                            content = msg['content']
+                            if isinstance(content, str) and len(content) > 500:
+                                msg['content'] = content[:500] + f"... ({len(content)} chars total)"
+                logger.debug("Request data: %s", json.dumps(log_data, indent=2))
 
                 # Make the API call using the persistent session
                 response = self.session.post(
@@ -287,7 +297,7 @@ class LLMService:
                     else:
                         error_msg = result["error"]
                         logger.error(error_msg)
-                        if attempt > max_retries:
+                        if attempt >= max_retries:
                             return {
                                 "success": False,
                                 "error": error_msg,
@@ -302,8 +312,8 @@ class LLMService:
                     # Determine if we should retry
                     is_retryable = response.status_code in [429, 500, 502, 503, 504]
 
-                    if is_retryable and attempt <= max_retries:
-                        sleep_time = retry_delay * (2 ** (attempt - 1))
+                    if is_retryable and attempt < max_retries:
+                        sleep_time = retry_delay * (2 ** attempt)
                         logger.warning("Retrying in %.2f seconds...", sleep_time)
                         time.sleep(sleep_time)
                         continue
@@ -316,9 +326,9 @@ class LLMService:
                         }
 
             except requests.exceptions.Timeout:
-                logger.warning("Attempt %d failed: LLM API request timed out", attempt)
-                if attempt <= max_retries:
-                    sleep_time = retry_delay * (2 ** (attempt - 1))
+                logger.warning("Attempt %d failed: LLM API request timed out", attempt + 1)
+                if attempt < max_retries:
+                    sleep_time = retry_delay * (2 ** attempt)
                     time.sleep(sleep_time)
                     continue
                 else:
@@ -331,11 +341,11 @@ class LLMService:
             except Exception as e:
                 logger.error(
                     "Attempt %d failed: Unexpected error during LLM query: %s",
-                    attempt,
+                    attempt + 1,
                     e,
                 )
-                if attempt <= max_retries:
-                    sleep_time = retry_delay * (2 ** (attempt - 1))
+                if attempt < max_retries:
+                    sleep_time = retry_delay * (2 ** attempt)
                     time.sleep(sleep_time)
                     continue
                 else:
@@ -427,7 +437,7 @@ class LLMService:
             ],
             "temperature": temperature,
             "top_p": float(self.settings.llm_top_p),
-            "top_k": int(self.settings.llm_top_k),
+            # Note: top_k is not supported by OpenAI API, only by Ollama
             "stream": False,
         }
 

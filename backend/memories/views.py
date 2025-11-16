@@ -19,6 +19,16 @@ from .vector_service import vector_service
 
 logger = logging.getLogger(__name__)
 
+# API-P2-05 fix: Extract magic numbers as named constants
+MAX_CONVERSATION_TEXT_LENGTH = 50000  # Maximum characters for extraction text (~50KB)
+MAX_PROMPT_LENGTH = 5000  # Maximum characters for search prompts (~5KB)
+EXTRACTION_MAX_TOKENS = 16384  # Token limit for LLM memory extraction
+ERROR_MESSAGE_TRUNCATE_LENGTH = 500  # Truncate error messages for logging
+DEFAULT_RETRIEVAL_LIMIT = 99  # Default number of memories to retrieve
+MAX_RETRIEVAL_LIMIT = 100  # Maximum allowed retrieval limit
+DEFAULT_CLAMPED_LIMIT = 10  # Default when invalid limit provided
+DEFAULT_IMPORT_BATCH_SIZE = 10  # Default batch size for imports
+
 
 class MemoryPagination(PageNumberPagination):
     """
@@ -188,12 +198,12 @@ class ExtractMemoriesView(APIView):
             )
         
         # Add reasonable content length limit for DIY systems
-        if len(conversation_text) > 50000:  # ~50KB limit
+        if len(conversation_text) > MAX_CONVERSATION_TEXT_LENGTH:
             return Response(
                 {
-                    "success": False, 
+                    "success": False,
                     "error": "Conversation text is too long. Please break it into smaller chunks.",
-                    "max_length": 50000,
+                    "max_length": MAX_CONVERSATION_TEXT_LENGTH,
                     "current_length": len(conversation_text)
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -237,7 +247,7 @@ class ExtractMemoriesView(APIView):
                 system_prompt=system_prompt_with_date,
                 prompt=conversation_text,
                 response_format=MEMORY_EXTRACTION_FORMAT,
-                max_tokens=16384,  # Increased token limit for memory extraction
+                max_tokens=EXTRACTION_MAX_TOKENS,
             )
 
             if not llm_result["success"]:
@@ -266,7 +276,7 @@ class ExtractMemoriesView(APIView):
                 logger.debug(
                     "LLM response length: %d chars, preview: %s...",
                     len(llm_result.get("response", "")),
-                    llm_result.get("response", "")[:500]
+                    llm_result.get("response", "")[:ERROR_MESSAGE_TRUNCATE_LENGTH]
                 )
 
                 return Response(
@@ -390,7 +400,7 @@ class RetrieveMemoriesView(APIView):
     def post(self, request):
         prompt = request.data.get("prompt", "")
         user_id = request.data.get("user_id")
-        limit = request.data.get("limit", 99)
+        limit = request.data.get("limit", DEFAULT_RETRIEVAL_LIMIT)
         threshold = request.data.get("threshold", 0.7)
         boosted_threshold = request.data.get("boosted_threshold", 0.5)
 
@@ -401,12 +411,12 @@ class RetrieveMemoriesView(APIView):
             )
         
         # Add reasonable prompt length limit
-        if len(prompt) > 5000:  # ~5KB limit for search prompts
+        if len(prompt) > MAX_PROMPT_LENGTH:
             return Response(
                 {
-                    "success": False, 
+                    "success": False,
                     "error": "Search prompt is too long. Please use a shorter, more focused query.",
-                    "max_length": 5000,
+                    "max_length": MAX_PROMPT_LENGTH,
                     "current_length": len(prompt)
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -430,12 +440,12 @@ class RetrieveMemoriesView(APIView):
         # API-P2-14 fix: Validate limit and threshold with logging
         try:
             limit = int(limit)
-            if limit <= 0 or limit > 100:
-                logger.warning(f"Invalid limit value {limit}, clamping to default 10")
-                limit = 10
+            if limit <= 0 or limit > MAX_RETRIEVAL_LIMIT:
+                logger.warning(f"Invalid limit value {limit}, clamping to default {DEFAULT_CLAMPED_LIMIT}")
+                limit = DEFAULT_CLAMPED_LIMIT
         except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid limit format: {e}, using default 10")
-            limit = 10
+            logger.warning(f"Invalid limit format: {e}, using default {DEFAULT_CLAMPED_LIMIT}")
+            limit = DEFAULT_CLAMPED_LIMIT
 
         try:
             threshold = float(threshold)
@@ -944,11 +954,11 @@ class ImportOpenWebUIHistoryView(APIView):
 
             # Validate and clamp batch_size
             try:
-                batch_size = int(request.data.get('batch_size', 10))
-                batch_size = max(1, min(100, batch_size))  # Clamp to 1-100
+                batch_size = int(request.data.get('batch_size', DEFAULT_IMPORT_BATCH_SIZE))
+                batch_size = max(1, min(MAX_RETRIEVAL_LIMIT, batch_size))  # Clamp to 1-100
             except (ValueError, TypeError):
                 return Response(
-                    {"success": False, "error": "Invalid batch_size. Must be an integer between 1-100."},
+                    {"success": False, "error": f"Invalid batch_size. Must be an integer between 1-{MAX_RETRIEVAL_LIMIT}."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 

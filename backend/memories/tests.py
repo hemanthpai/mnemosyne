@@ -1691,5 +1691,91 @@ class APIP2SettingsFetchTests(TestCase):
         # Verified implicitly by not mocking LLMSettings.get_settings()
 
 
+class APIP2MagicNumbersTests(TestCase):
+    """Tests for API-P2-05: Hardcoded Magic Numbers"""
+
+    def test_constants_defined(self):
+        """Test that magic numbers have been extracted as named constants"""
+        from memories import views
+
+        # Verify all constants are defined
+        self.assertTrue(hasattr(views, 'MAX_CONVERSATION_TEXT_LENGTH'))
+        self.assertTrue(hasattr(views, 'MAX_PROMPT_LENGTH'))
+        self.assertTrue(hasattr(views, 'EXTRACTION_MAX_TOKENS'))
+        self.assertTrue(hasattr(views, 'ERROR_MESSAGE_TRUNCATE_LENGTH'))
+        self.assertTrue(hasattr(views, 'DEFAULT_RETRIEVAL_LIMIT'))
+        self.assertTrue(hasattr(views, 'MAX_RETRIEVAL_LIMIT'))
+        self.assertTrue(hasattr(views, 'DEFAULT_CLAMPED_LIMIT'))
+        self.assertTrue(hasattr(views, 'DEFAULT_IMPORT_BATCH_SIZE'))
+
+        # Verify values are sensible
+        self.assertEqual(views.MAX_CONVERSATION_TEXT_LENGTH, 50000)
+        self.assertEqual(views.MAX_PROMPT_LENGTH, 5000)
+        self.assertEqual(views.EXTRACTION_MAX_TOKENS, 16384)
+        self.assertEqual(views.ERROR_MESSAGE_TRUNCATE_LENGTH, 500)
+        self.assertEqual(views.DEFAULT_RETRIEVAL_LIMIT, 99)
+        self.assertEqual(views.MAX_RETRIEVAL_LIMIT, 100)
+        self.assertEqual(views.DEFAULT_CLAMPED_LIMIT, 10)
+        self.assertEqual(views.DEFAULT_IMPORT_BATCH_SIZE, 10)
+
+    def test_conversation_text_length_limit_enforced(self):
+        """Test that MAX_CONVERSATION_TEXT_LENGTH is enforced"""
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ExtractMemoriesView, MAX_CONVERSATION_TEXT_LENGTH
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='testpass')
+
+        factory = APIRequestFactory()
+
+        # Create text that exceeds the limit
+        long_text = "x" * (MAX_CONVERSATION_TEXT_LENGTH + 1)
+
+        request = factory.post(
+            '/api/memories/extract/',
+            {'text': long_text, 'user_id': str(user.id)},
+            format='json'
+        )
+        request.user = user
+
+        view = ExtractMemoriesView.as_view()
+        response = view(request)
+
+        # Should be rejected with 400
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('max_length', response.data)
+        self.assertEqual(response.data['max_length'], MAX_CONVERSATION_TEXT_LENGTH)
+
+    def test_prompt_length_limit_enforced(self):
+        """Test that MAX_PROMPT_LENGTH is enforced"""
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIRequestFactory
+        from memories.views import RetrieveMemoriesView, MAX_PROMPT_LENGTH
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='testpass')
+
+        factory = APIRequestFactory()
+
+        # Create prompt that exceeds the limit
+        long_prompt = "x" * (MAX_PROMPT_LENGTH + 1)
+
+        request = factory.post(
+            '/api/memories/retrieve/',
+            {'prompt': long_prompt, 'user_id': str(user.id)},
+            format='json'
+        )
+        request.user = user
+
+        view = RetrieveMemoriesView.as_view()
+        response = view(request)
+
+        # Should be rejected with 400
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('max_length', response.data)
+        self.assertEqual(response.data['max_length'], MAX_PROMPT_LENGTH)
+
+
 if __name__ == '__main__':
     unittest.main()

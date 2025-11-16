@@ -1,6 +1,7 @@
 import json
 import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from .llm_service import llm_service
@@ -22,7 +23,24 @@ class MemorySearchService:
         self._embedding_cache: Dict[str, List[float]] = {}
         self._cache_order: List[str] = []  # Track access order for LRU
         self._cache_lock = threading.RLock()
-        self._max_cache_size = 1000  # Suitable for DIY/personal use
+
+        # SVC-P1-09 fix: Configurable cache size to prevent unbounded memory growth
+        # Each embedding is ~4KB (1024 floats * 4 bytes), so 1000 = ~4MB
+        # For production with many users, consider reducing or using Redis
+        from django.conf import settings
+        self._max_cache_size = getattr(settings, 'EMBEDDING_CACHE_SIZE', 1000)
+
+        if self._max_cache_size > 10000:
+            logger.warning(
+                f"Large embedding cache size ({self._max_cache_size}). "
+                f"This may use ~{self._max_cache_size * 4 / 1024:.1f}MB of memory. "
+                f"Consider using Redis for larger deployments."
+            )
+
+        # Settings cache to avoid hitting DB on every search (SVC-P1-08 fix)
+        self._settings_cache = None
+        self._settings_cache_time = 0
+        self._settings_cache_ttl = 300  # 5 minutes TTL
 
     def _get_cached_embedding(self, text: str) -> List[float]:
         """
@@ -62,6 +80,28 @@ class MemorySearchService:
         if not embedding_result["success"]:
             raise ValueError(f"Failed to generate embedding: {embedding_result['error']}")
         return embedding_result["embeddings"][0]
+
+    def _get_cached_settings(self):
+        """
+        Get LLM settings with caching to avoid DB queries in hot path.
+
+        Thread-safe with TTL of 5 minutes. Fixes SVC-P1-08.
+        """
+        with self._cache_lock:
+            current_time = time.time()
+
+            # Check if cache is valid
+            if (self._settings_cache is not None and
+                current_time - self._settings_cache_time < self._settings_cache_ttl):
+                return self._settings_cache
+
+            # Cache expired or not set, fetch from DB
+            from settings_app.models import LLMSettings
+            self._settings_cache = LLMSettings.get_settings()
+            self._settings_cache_time = current_time
+
+            logger.debug("Refreshed LLM settings cache")
+            return self._settings_cache
 
     def store_memory_with_embedding(
         self, content: str, user_id: str, metadata: Dict[str, Any]
@@ -259,9 +299,7 @@ class MemorySearchService:
 
     def _get_threshold_for_search_type(self, search_type: str) -> float:
         """Get similarity threshold based on search type from settings"""
-        from settings_app.models import LLMSettings
-
-        settings = LLMSettings.get_settings()
+        settings = self._get_cached_settings()
 
         thresholds = {
             "direct": settings.search_threshold_direct,
@@ -285,9 +323,7 @@ class MemorySearchService:
 
     def _rank_and_filter_results(self, results: Dict, limit: int) -> List[Memory]:
         """Enhanced ranking that considers semantic diversity and score quality"""
-        from settings_app.models import LLMSettings
-        
-        settings = LLMSettings.get_settings()
+        settings = self._get_cached_settings()
         
         # Sort by boosted score
         sorted_results = sorted(
@@ -379,9 +415,7 @@ class MemorySearchService:
         self, memories: List[Memory], original_query: str, user_id: str
     ) -> List[Memory]:
         """Find additional semantic connections using LLM analysis"""
-        from settings_app.models import LLMSettings
-
-        settings = LLMSettings.get_settings()
+        settings = self._get_cached_settings()
 
         # Check if semantic connections are enabled
         if not settings.enable_semantic_connections:
@@ -455,9 +489,7 @@ class MemorySearchService:
         self, memories: List[Memory], user_query: str
     ) -> Dict[str, Any]:
         """Analyze and summarize relevant memories for the user's query"""
-        from settings_app.models import LLMSettings
-
-        settings = LLMSettings.get_settings()
+        settings = self._get_cached_settings()
 
         if not memories:
             return {

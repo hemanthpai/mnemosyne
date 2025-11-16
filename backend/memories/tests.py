@@ -752,5 +752,177 @@ class ImporterErrorHandlingTests(TestCase):
             os.unlink(temp_db.name)
 
 
+class SettingsCacheTests(TestCase):
+    """Tests for SVC-P1-08: Settings caching to avoid DB queries in hot path"""
+
+    def setUp(self):
+        from backend.memories.memory_search_service import MemorySearchService
+        self.service = MemorySearchService()
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_settings_cached_across_calls(self, mock_llm_settings_class):
+        """Test that settings are cached and not fetched on every call"""
+        mock_settings = Mock()
+        mock_settings.search_threshold_direct = 0.8
+        mock_settings.search_threshold_semantic = 0.6
+        mock_settings.search_threshold_experiential = 0.7
+        mock_settings.search_threshold_contextual = 0.5
+        mock_settings.search_threshold_interest = 0.65
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        # Call method that uses cached settings multiple times
+        for _ in range(10):
+            threshold = self.service._get_threshold_for_search_type("direct")
+            self.assertEqual(threshold, 0.8)
+
+        # Settings should only be fetched once (first call)
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 1)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_settings_cache_expires_after_ttl(self, mock_llm_settings_class):
+        """Test that settings cache expires after TTL"""
+        mock_settings_v1 = Mock()
+        mock_settings_v1.search_threshold_direct = 0.8
+
+        mock_settings_v2 = Mock()
+        mock_settings_v2.search_threshold_direct = 0.9
+
+        mock_llm_settings_class.get_settings.side_effect = [mock_settings_v1, mock_settings_v2]
+
+        # Override TTL for testing
+        self.service._settings_cache_ttl = 0.1  # 100ms
+
+        # First call - should fetch from DB
+        threshold1 = self.service._get_threshold_for_search_type("direct")
+        self.assertEqual(threshold1, 0.8)
+
+        # Second call immediately - should use cache
+        threshold2 = self.service._get_threshold_for_search_type("direct")
+        self.assertEqual(threshold2, 0.8)
+
+        # Wait for cache to expire
+        import time
+        time.sleep(0.15)
+
+        # Third call - should fetch from DB again
+        threshold3 = self.service._get_threshold_for_search_type("direct")
+        self.assertEqual(threshold3, 0.9)
+
+        # Should have fetched settings twice
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 2)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_settings_cache_thread_safety(self, mock_llm_settings_class):
+        """Test that settings cache is thread-safe"""
+        mock_settings = Mock()
+        mock_settings.search_threshold_direct = 0.8
+        mock_settings.search_threshold_semantic = 0.6
+        mock_settings.search_threshold_experiential = 0.7
+        mock_settings.search_threshold_contextual = 0.5
+        mock_settings.search_threshold_interest = 0.65
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        errors = []
+        results = []
+
+        def access_settings():
+            try:
+                for _ in range(5):
+                    threshold = self.service._get_threshold_for_search_type("direct")
+                    results.append(threshold)
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads accessing settings cache
+        threads = [threading.Thread(target=access_settings) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should not have any errors
+        self.assertEqual(len(errors), 0, f"Thread safety errors: {errors}")
+
+        # All results should be identical
+        self.assertTrue(all(r == 0.8 for r in results))
+
+        # Settings should be fetched only once despite concurrent access
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 1)
+
+
+class ConfigurableCacheSizeTests(TestCase):
+    """Tests for SVC-P1-09: Configurable cache size to prevent unbounded growth"""
+
+    @patch('backend.memories.memory_search_service.settings')
+    def test_default_cache_size(self, mock_settings):
+        """Test that default cache size is 1000"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        # No EMBEDDING_CACHE_SIZE setting
+        del mock_settings.EMBEDDING_CACHE_SIZE
+        mock_settings.EMBEDDING_CACHE_SIZE = AttributeError()
+
+        service = MemorySearchService()
+        self.assertEqual(service._max_cache_size, 1000)
+
+    @patch('backend.memories.memory_search_service.settings')
+    def test_custom_cache_size(self, mock_settings):
+        """Test that custom cache size is respected"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        mock_settings.EMBEDDING_CACHE_SIZE = 500
+
+        service = MemorySearchService()
+        self.assertEqual(service._max_cache_size, 500)
+
+    @patch('backend.memories.memory_search_service.settings')
+    def test_large_cache_size_warning(self, mock_settings):
+        """Test that large cache sizes trigger warning"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        mock_settings.EMBEDDING_CACHE_SIZE = 15000
+
+        with self.assertLogs('backend.memories.memory_search_service', level='WARNING') as cm:
+            service = MemorySearchService()
+
+            # Should log warning about large cache
+            self.assertTrue(
+                any('Large embedding cache size' in msg for msg in cm.output),
+                "Should warn about large cache size"
+            )
+            self.assertTrue(
+                any('Redis' in msg for msg in cm.output),
+                "Should suggest Redis for large deployments"
+            )
+
+    @patch('backend.memories.memory_search_service.llm_service.get_embeddings')
+    @patch('backend.memories.memory_search_service.settings')
+    def test_cache_respects_max_size(self, mock_settings, mock_get_embeddings):
+        """Test that cache eviction respects configured max size"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        # Set small cache for testing
+        mock_settings.EMBEDDING_CACHE_SIZE = 3
+
+        mock_get_embeddings.return_value = {
+            'success': True,
+            'embeddings': [[1.0] * 1024],
+            'model': 'test'
+        }
+
+        service = MemorySearchService()
+
+        # Fill cache beyond max
+        for i in range(10):
+            service._get_cached_embedding(f"text_{i}")
+
+        # Cache size should not exceed max
+        self.assertLessEqual(len(service._embedding_cache), 3)
+        self.assertLessEqual(len(service._cache_order), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

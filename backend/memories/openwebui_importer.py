@@ -98,9 +98,14 @@ class OpenWebUIImporter:
 
     def __enter__(self):
         """Context manager entry"""
-        self.conn = sqlite3.connect(str(self.db_path))
-        self.conn.row_factory = sqlite3.Row
-        return self
+        try:
+            self.conn = sqlite3.connect(str(self.db_path))
+            self.conn.row_factory = sqlite3.Row
+            return self
+        except sqlite3.Error as e:
+            error_msg = f"Failed to connect to SQLite database at {self.db_path}: {e}"
+            logger.error(error_msg)
+            raise ConnectionError(error_msg) from e
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
@@ -172,6 +177,14 @@ class OpenWebUIImporter:
         Returns:
             List of user message contents
         """
+        # Set maximum JSON size to prevent memory exhaustion (10MB)
+        MAX_JSON_SIZE = 10 * 1024 * 1024  # 10 MB
+        if len(chat_json) > MAX_JSON_SIZE:
+            logger.warning(
+                f"Chat JSON too large ({len(chat_json)} bytes, max {MAX_JSON_SIZE}), skipping"
+            )
+            return []
+
         try:
             chat_data = json.loads(chat_json)
 
@@ -239,9 +252,13 @@ class OpenWebUIImporter:
             return 0, []
 
         # Enforce maximum length with truncation
+        was_truncated = False
         if len(conversation_text) > MAX_CONVERSATION_LENGTH:
+            was_truncated = True
+            truncated_chars = len(conversation_text) - MAX_CONVERSATION_LENGTH
             logger.warning(
-                f"Conversation text too long ({len(conversation_text)} chars), truncating to {MAX_CONVERSATION_LENGTH}"
+                f"Conversation text too long ({len(conversation_text)} chars), truncating {truncated_chars} chars. "
+                f"This may result in incomplete memory extraction. Consider processing in smaller batches."
             )
             conversation_text = conversation_text[:MAX_CONVERSATION_LENGTH]
 

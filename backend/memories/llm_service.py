@@ -93,6 +93,18 @@ class LLMService:
         self._settings = None
         self._settings_loaded = False
 
+    def __del__(self):
+        """
+        Cleanup method to properly close the requests session.
+        Prevents resource leaks in long-running processes.
+        """
+        try:
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+        except Exception:
+            # Silently ignore errors during cleanup
+            pass
+
     @property
     def settings(self):
         """Lazy load settings when first accessed"""
@@ -251,8 +263,8 @@ class LLMService:
                 import json
                 logger.info("Request data: %s", json.dumps(data, indent=2))
 
-                # Make the API call
-                response = requests.post(
+                # Make the API call using the persistent session
+                response = self.session.post(
                     endpoint,
                     json=data,
                     headers=headers,
@@ -558,7 +570,7 @@ class LLMService:
         for text in texts:
             payload = {"model": self.settings.embeddings_model, "prompt": text}
 
-            response = requests.post(
+            response = self.session.post(
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
@@ -609,7 +621,7 @@ class LLMService:
         payload = {"model": self.settings.embeddings_model, "input": texts}
         headers = {"Content-Type": "application/json"}
 
-        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response = self.session.post(url, json=payload, headers=headers, timeout=60)
         response.raise_for_status()
 
         result = response.json()

@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # Thread lock for progress access
 _progress_lock = threading.Lock()
 
+# Dictionary to track multiple concurrent imports by import_id
+_import_progresses: Dict[str, 'ImportProgress'] = {}
+
 
 def _log_with_thread(message: str, level: str = 'info'):
     """Helper to log with thread ID for consistency"""
@@ -74,10 +77,6 @@ class ImportProgress:
                 else 0
             ),
         }
-
-
-# Global progress tracker (in production, use Redis or database)
-_import_progress = ImportProgress()
 
 
 class OpenWebUIImporter:
@@ -351,6 +350,7 @@ class OpenWebUIImporter:
 
     def import_conversations(
         self,
+        import_id: str,
         target_user_id: Optional[str] = None,
         openwebui_user_id: Optional[str] = None,
         after_date: Optional[datetime] = None,
@@ -362,6 +362,7 @@ class OpenWebUIImporter:
         Import conversations and extract memories
 
         Args:
+            import_id: Unique identifier for this import session
             target_user_id: Mnemosyne user ID to assign all imported memories to
             openwebui_user_id: Filter by specific Open WebUI user
             after_date: Only import conversations after this date
@@ -372,7 +373,11 @@ class OpenWebUIImporter:
         Returns:
             Import statistics dictionary
         """
-        global _import_progress
+        # Get or create progress tracker for this import_id
+        with _progress_lock:
+            if import_id not in _import_progresses:
+                _import_progresses[import_id] = ImportProgress()
+            progress = _import_progresses[import_id]
 
         try:
             # Get conversations first (before touching global state)
@@ -383,14 +388,14 @@ class OpenWebUIImporter:
             # Update only the fields that weren't set by the view
             # DO NOT reset start_time, dry_run, or counters - they were already initialized
             with _progress_lock:
-                _import_progress.status = "running"
+                progress.status = "running"
                 # Keep the start_time from view initialization - don't reset it
-                # _import_progress.start_time is already set by the view
-                _import_progress.total_conversations = len(conversations)
+                # progress.start_time is already set by the view
+                progress.total_conversations = len(conversations)
                 # Keep counters at 0 (already set by view) - don't reset
                 # processed_conversations, extracted_memories, failed_conversations already 0
                 _log_with_thread(
-                    f"Found {len(conversations)} conversations to process (dry_run={dry_run}), Progress ID: {id(_import_progress)}", 'info'
+                    f"Found {len(conversations)} conversations to process (dry_run={dry_run}), Import ID: {import_id}", 'info'
                 )
 
             total_memories_extracted = 0
@@ -399,47 +404,43 @@ class OpenWebUIImporter:
 
             # Process in batches
             for i in range(0, len(conversations), batch_size):
-                # Check for cancellation at batch level (with lock)
+                # Check for cancellation at batch level (atomic check-and-act within lock)
                 with _progress_lock:
-                    current_status = _import_progress.status
-
-                logger.debug(f"Batch {i}: Checking cancellation, status={current_status}, ID={id(_import_progress)}")
-                if current_status == "cancelled":
-                    _log_with_thread("Import cancelled by user (batch level)", 'info')
-                    with _progress_lock:
-                        _import_progress.end_time = datetime.now()
-                    return {
-                        "success": False,
-                        "error": "Import cancelled by user",
-                        "total_conversations": len(conversations),
-                        "processed_conversations": _import_progress.processed_conversations,
-                        "total_memories_extracted": total_memories_extracted,
-                        "failed_conversations": failed_conversations,
-                    }
-
-                batch = conversations[i : i + batch_size]
-
-                for conv in batch:
-                    # Check if import was cancelled (with lock)
-                    with _progress_lock:
-                        current_status = _import_progress.status
-
-                    logger.debug(f"Conv {conv['id']}: Checking cancellation, status={current_status}")
-                    if current_status == "cancelled":
-                        _log_with_thread("Import cancelled by user (conversation level)", 'info')
-                        with _progress_lock:
-                            _import_progress.end_time = datetime.now()
+                    logger.debug(f"Batch {i}: Checking cancellation, status={progress.status}, Import ID: {import_id}")
+                    if progress.status == "cancelled":
+                        _log_with_thread("Import cancelled by user (batch level)", 'info')
+                        progress.end_time = datetime.now()
+                        # Build return dict while holding lock to ensure consistent snapshot
                         return {
                             "success": False,
                             "error": "Import cancelled by user",
                             "total_conversations": len(conversations),
-                            "processed_conversations": _import_progress.processed_conversations,
+                            "processed_conversations": progress.processed_conversations,
                             "total_memories_extracted": total_memories_extracted,
                             "failed_conversations": failed_conversations,
                         }
 
+                batch = conversations[i : i + batch_size]
+
+                for conv in batch:
+                    # Check if import was cancelled (atomic check-and-act within lock)
                     with _progress_lock:
-                        _import_progress.current_conversation_id = conv["id"]
+                        logger.debug(f"Conv {conv['id']}: Checking cancellation, status={progress.status}")
+                        if progress.status == "cancelled":
+                            _log_with_thread("Import cancelled by user (conversation level)", 'info')
+                            progress.end_time = datetime.now()
+                            # Build return dict while holding lock to ensure consistent snapshot
+                            return {
+                                "success": False,
+                                "error": "Import cancelled by user",
+                                "total_conversations": len(conversations),
+                                "processed_conversations": progress.processed_conversations,
+                                "total_memories_extracted": total_memories_extracted,
+                                "failed_conversations": failed_conversations,
+                            }
+
+                        # Set current conversation while we have the lock
+                        progress.current_conversation_id = conv["id"]
 
                     try:
                         # Extract user messages
@@ -450,7 +451,7 @@ class OpenWebUIImporter:
                                 f"No user messages in conversation {conv['id']}"
                             )
                             with _progress_lock:
-                                _import_progress.processed_conversations += 1
+                                progress.processed_conversations += 1
                             continue
 
                         # Format conversation
@@ -477,8 +478,8 @@ class OpenWebUIImporter:
 
                         # Update progress with lock (grouped related updates)
                         with _progress_lock:
-                            _import_progress.extracted_memories = total_memories_extracted
-                            _import_progress.processed_conversations += 1
+                            progress.extracted_memories = total_memories_extracted
+                            progress.processed_conversations += 1
 
                         conversation_details.append(
                             {
@@ -502,51 +503,72 @@ class OpenWebUIImporter:
 
                         # Update failure counts with lock
                         with _progress_lock:
-                            _import_progress.failed_conversations = failed_conversations
-                            _import_progress.processed_conversations += 1
+                            progress.failed_conversations = failed_conversations
+                            progress.processed_conversations += 1
 
             # Mark as completed with lock
             with _progress_lock:
-                _import_progress.status = "completed"
-                _import_progress.end_time = datetime.now()
+                progress.status = "completed"
+                progress.end_time = datetime.now()
 
             return {
                 "success": True,
                 "total_conversations": len(conversations),
-                "processed_conversations": _import_progress.processed_conversations,
+                "processed_conversations": progress.processed_conversations,
                 "total_memories_extracted": total_memories_extracted,
                 "failed_conversations": failed_conversations,
                 "dry_run": dry_run,
                 "conversation_details": conversation_details,
                 "elapsed_seconds": (
-                    _import_progress.end_time - _import_progress.start_time
+                    progress.end_time - progress.start_time
                 ).total_seconds(),
             }
 
         except Exception as e:
             # Mark as failed with lock
             with _progress_lock:
-                _import_progress.status = "failed"
-                _import_progress.error_message = str(e)
-                _import_progress.end_time = datetime.now()
+                progress.status = "failed"
+                progress.error_message = str(e)
+                progress.end_time = datetime.now()
             logger.error(f"Import failed: {e}")
             raise
 
     @staticmethod
-    def get_progress() -> Dict[str, Any]:
-        """Get current import progress"""
+    def get_progress(import_id: str) -> Dict[str, Any]:
+        """
+        Get import progress for a specific import session
+
+        Args:
+            import_id: Unique identifier for the import session
+
+        Returns:
+            Progress dictionary or empty dict if import_id not found
+        """
         with _progress_lock:
-            return _import_progress.to_dict()
+            if import_id in _import_progresses:
+                return _import_progresses[import_id].to_dict()
+            else:
+                return {"error": "Import session not found"}
 
     @staticmethod
-    def cancel_import():
-        """Cancel ongoing import (sets status flag)"""
-        global _import_progress
+    def cancel_import(import_id: str):
+        """
+        Cancel ongoing import (sets status flag)
+
+        Args:
+            import_id: Unique identifier for the import session to cancel
+        """
         with _progress_lock:
-            logger.info(f"Cancel requested. Current status: {_import_progress.status}, ID: {id(_import_progress)}, Total convs: {_import_progress.total_conversations}, Processed: {_import_progress.processed_conversations}")
-            if _import_progress.status == "running":
-                _import_progress.status = "cancelled"
+            if import_id not in _import_progresses:
+                logger.warning(f"Cannot cancel - import_id '{import_id}' not found")
+                return
+
+            progress = _import_progresses[import_id]
+            logger.info(f"Cancel requested for import {import_id}. Current status: {progress.status}, Total convs: {progress.total_conversations}, Processed: {progress.processed_conversations}")
+
+            if progress.status == "running":
+                progress.status = "cancelled"
                 # Don't set end_time here - let the import loop set it when it exits
-                logger.info(f"Import status set to cancelled. ID: {id(_import_progress)}")
+                logger.info(f"Import {import_id} status set to cancelled")
             else:
-                logger.warning(f"Cannot cancel - status is '{_import_progress.status}'. Import may have already completed or not started.")
+                logger.warning(f"Cannot cancel import {import_id} - status is '{progress.status}'. Import may have already completed or not started.")

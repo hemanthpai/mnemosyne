@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from typing import Any, Dict, List
 
@@ -22,10 +23,17 @@ class VectorService:
 
     def __init__(self):
         self.collection_name = getattr(settings, "QDRANT_COLLECTION_NAME", "memories")
-        self._connect()
+        self.client = None
+        self._connected = False
+        self._connection_attempts = 0
+        self._last_connection_attempt = 0
 
     def _connect(self):
-        """Initialize Qdrant client connection"""
+        """
+        Initialize Qdrant client connection.
+        Returns True if successful, False otherwise.
+        Does not raise exceptions - allows graceful degradation.
+        """
         try:
             host = getattr(settings, "QDRANT_HOST", "localhost")
             port = getattr(settings, "QDRANT_PORT", 6333)
@@ -38,10 +46,60 @@ class VectorService:
 
             logger.info("Connected to Qdrant at %s:%s", host, port)
             self._ensure_collection()
+            self._connected = True
+            return True
 
         except Exception as e:
-            logger.error("Failed to connect to Qdrant: %s", e)
-            raise
+            logger.warning("Failed to connect to Qdrant: %s", e)
+            self._connected = False
+            return False
+
+    def _ensure_connection(self, max_retries: int = 3, retry_delay: float = 1.0):
+        """
+        Ensure connection to Qdrant is established with retry logic.
+
+        Args:
+            max_retries: Maximum number of connection attempts
+            retry_delay: Delay between retries in seconds
+
+        Returns:
+            True if connected, False otherwise
+
+        Raises:
+            Exception if connection cannot be established after retries
+        """
+        # Already connected
+        if self._connected and self.client is not None:
+            return True
+
+        # Avoid hammering the server with connection attempts
+        current_time = time.time()
+        if current_time - self._last_connection_attempt < 5:
+            # Less than 5 seconds since last attempt
+            if not self._connected:
+                raise Exception("Qdrant connection unavailable (recent connection attempt failed)")
+            return False
+
+        self._last_connection_attempt = current_time
+
+        # Try to connect with retries
+        for attempt in range(max_retries):
+            if attempt > 0:
+                sleep_time = retry_delay * (2 ** (attempt - 1))
+                logger.info("Retrying Qdrant connection in %.2f seconds...", sleep_time)
+                time.sleep(sleep_time)
+
+            logger.info("Attempting to connect to Qdrant (attempt %d/%d)", attempt + 1, max_retries)
+            if self._connect():
+                self._connection_attempts = 0
+                return True
+
+            self._connection_attempts += 1
+
+        # All retries failed
+        error_msg = f"Failed to connect to Qdrant after {max_retries} attempts"
+        logger.error(error_msg)
+        raise Exception(error_msg)
 
     def _ensure_collection(self):
         """Create collection if it doesn't exist"""
@@ -85,6 +143,8 @@ class VectorService:
         Returns:
             Vector ID (UUID string)
         """
+        self._ensure_connection()
+
         try:
             vector_id = str(uuid.uuid4())
 
@@ -129,6 +189,8 @@ class VectorService:
         Returns:
             List of search results with memory_id, score, and payload
         """
+        self._ensure_connection()
+
         logger.info(
             "Searching for similar embeddings for user %s with limit %d",
             user_id,
@@ -179,6 +241,8 @@ class VectorService:
 
     def delete_embedding(self, vector_id: str) -> bool:
         """Delete embedding by vector ID"""
+        self._ensure_connection()
+
         try:
             self.client.delete(
                 collection_name=self.collection_name, points_selector=[vector_id]
@@ -192,6 +256,8 @@ class VectorService:
 
     def delete_user_embeddings(self, user_id: str) -> bool:
         """Delete all embeddings for a user"""
+        self._ensure_connection()
+
         try:
             self.client.delete(
                 collection_name=self.collection_name,
@@ -210,6 +276,8 @@ class VectorService:
 
     def get_collection_info(self) -> Dict[str, Any]:
         """Get information about the collection"""
+        self._ensure_connection()
+
         try:
             collection_info = self.client.get_collection(self.collection_name)
             return {
@@ -225,6 +293,8 @@ class VectorService:
 
     def health_check(self) -> bool:
         """Check if Qdrant is healthy"""
+        self._ensure_connection()
+
         try:
             collections = self.client.get_collections()
             logger.info("Qdrant health check passed, collections: %s", collections)
@@ -235,6 +305,8 @@ class VectorService:
 
     def delete_memories(self, memory_ids: List[str], user_id: str) -> Dict[str, Any]:
         """Delete specific memories from vector database"""
+        self._ensure_connection()
+
         try:
             # Delete points by memory IDs
             self.client.delete(
@@ -256,6 +328,8 @@ class VectorService:
 
     def clear_all_memories(self) -> Dict[str, Any]:
         """Clear ALL memories from vector database (admin operation)"""
+        self._ensure_connection()
+
         try:
             # Get collection info to check if it exists
             try:
@@ -285,6 +359,8 @@ class VectorService:
 
     def delete_user_memories(self, user_id: str) -> Dict[str, Any]:
         """Delete all memories for a specific user from vector database"""
+        self._ensure_connection()
+
         try:
             # Delete all points for this user
             self.client.delete(

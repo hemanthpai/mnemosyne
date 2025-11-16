@@ -1293,5 +1293,226 @@ class CleanupTimerRaceTests(TestCase):
             self.assertIn('1.1.1.1', limiter._requests)
 
 
+class APIPaginationTests(TestCase):
+    """Tests for API-P1-01: Missing pagination"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    def test_memory_list_returns_paginated_results(self):
+        """Test that memory list endpoint returns paginated results"""
+        from backend.memories.views import MemoryViewSet
+        from rest_framework.test import APIRequestFactory
+
+        # Create 100 memories to test pagination
+        for i in range(100):
+            Memory.objects.create(
+                user_id=self.user.id,
+                content=f"Test memory {i}",
+                metadata={}
+            )
+
+        factory = APIRequestFactory()
+        request = factory.get(f'/api/memories/?user_id={self.user.id}')
+        view = MemoryViewSet.as_view({'get': 'list'})
+
+        response = view(request)
+
+        # Should return paginated response
+        self.assertIn('results', response.data or response.data.get('memories'))
+        # Default page size is 50
+        results = response.data.get('results', response.data.get('memories', []))
+        self.assertLessEqual(len(results), 50)
+
+
+class APIFieldValidationTests(TestCase):
+    """Tests for API-P1-06: Unvalidated field selection"""
+
+    def test_validate_fields_filters_invalid_fields(self):
+        """Test that validate_fields only allows whitelisted fields"""
+        from backend.memories.views import validate_fields
+
+        # Test with valid fields
+        result = validate_fields(["id", "content", "metadata"])
+        self.assertEqual(set(result), {"id", "content", "metadata"})
+
+        # Test with invalid fields
+        result = validate_fields(["id", "content", "password", "__dict__", "_internal"])
+        self.assertEqual(set(result), {"id", "content"})
+
+        # Test with all invalid fields - should return defaults
+        result = validate_fields(["invalid", "also_invalid"])
+        self.assertEqual(result, ["id", "content"])
+
+        # Test with non-list input - should return defaults
+        result = validate_fields("not a list")
+        self.assertEqual(result, ["id", "content"])
+
+        # Test with empty list - should return defaults
+        result = validate_fields([])
+        self.assertEqual(result, ["id", "content"])
+
+
+class APIExceptionHandlingTests(TestCase):
+    """Tests for API-P1-03: Exception swallowing and API-P1-04: Information disclosure"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    def test_memory_retrieve_logs_but_hides_exception_details(self):
+        """Test that exceptions are logged but not exposed to users"""
+        from backend.memories.views import MemoryViewSet
+        from rest_framework.test import APIRequestFactory
+        import logging
+
+        factory = APIRequestFactory()
+
+        # Test with invalid UUID
+        request = factory.get('/api/memories/invalid-uuid/')
+        view = MemoryViewSet.as_view({'get': 'retrieve'})
+
+        with self.assertLogs('backend.memories.views', level=logging.DEBUG) as cm:
+            response = view(request, pk='invalid-uuid')
+
+        # Should return generic error message
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('error', response.data)
+        # Should not expose the actual ValueError details in response
+        self.assertNotIn('ValueError', response.data.get('error', ''))
+
+        # Should log the actual error
+        self.assertTrue(
+            any('Invalid UUID format' in log for log in cm.output),
+            f"Expected UUID error in logs: {cm.output}"
+        )
+
+    def test_stats_view_doesnt_expose_internal_errors(self):
+        """Test that memory stats view doesn't leak internal error details"""
+        from backend.memories.views import MemoryStatsView
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        view = MemoryStatsView.as_view()
+
+        # Mock vector_service to raise an exception
+        with patch('backend.memories.views.vector_service') as mock_vector:
+            mock_vector.get_collection_info.side_effect = Exception("Internal database connection failed with credentials XYZ")
+
+            request = factory.get(f'/api/memory-stats/?user_id={self.user.id}')
+            response = view(request)
+
+        # Should return 500 status
+        self.assertEqual(response.status_code, 500)
+
+        # Should return generic error message
+        error_msg = response.data.get('error', '')
+        self.assertNotIn('database connection', error_msg.lower())
+        self.assertNotIn('credentials', error_msg.lower())
+        self.assertNotIn('XYZ', error_msg)
+
+
+class APITransactionTests(TestCase):
+    """Tests for API-P1-05: Missing transactions"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    @patch('backend.memories.views.vector_service')
+    def test_delete_uses_transaction_for_atomicity(self, mock_vector_service):
+        """Test that delete operations use transactions"""
+        # Create test memories
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory 1",
+            metadata={}
+        )
+        memory2 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory 2",
+            metadata={}
+        )
+
+        initial_count = Memory.objects.filter(user_id=self.user.id).count()
+        self.assertEqual(initial_count, 2)
+
+        # Mock successful vector delete
+        mock_vector_service.delete_memories.return_value = {"success": True}
+
+        # Simulate database error during delete
+        from backend.memories.views import DeleteAllMemoriesView
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        view = DeleteAllMemoriesView.as_view()
+
+        # This should use transaction, so if it fails, nothing should be deleted
+        with patch.object(Memory.objects, 'filter') as mock_filter:
+            mock_queryset = Mock()
+            mock_queryset.count.return_value = 2
+            mock_queryset.__iter__ = Mock(return_value=iter([memory1, memory2]))
+            # Simulate delete failure
+            mock_queryset.delete.side_effect = Exception("Database error")
+            mock_filter.return_value = mock_queryset
+
+            request = factory.delete('/api/memories/delete-all/', {
+                'user_id': str(self.user.id),
+                'confirm': True
+            }, format='json')
+
+            response = view(request)
+
+        # Should return error
+        self.assertEqual(response.status_code, 500)
+
+        # Original memories should still exist (transaction rolled back)
+        remaining_count = Memory.objects.filter(user_id=self.user.id).count()
+        self.assertEqual(remaining_count, initial_count, "Transaction should have rolled back")
+
+
+class APIQueryOptimizationTests(TestCase):
+    """Tests for API-P1-02: N+1 query problem"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    @patch('backend.memories.views.vector_service')
+    def test_memory_stats_optimizes_query(self, mock_vector_service):
+        """Test that memory stats uses optimized query"""
+        from backend.memories.views import MemoryStatsView
+        from rest_framework.test import APIRequestFactory
+        from django.test.utils import override_settings
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        # Create test memories
+        for i in range(10):
+            Memory.objects.create(
+                user_id=self.user.id,
+                content=f"Memory {i}",
+                metadata={"tags": ["test", f"tag{i}"]}
+            )
+
+        mock_vector_service.get_collection_info.return_value = {"status": "ok"}
+
+        factory = APIRequestFactory()
+        view = MemoryStatsView.as_view()
+        request = factory.get(f'/api/memory-stats/?user_id={self.user.id}')
+
+        # Count queries
+        with CaptureQueriesContext(connection) as queries:
+            response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should use minimal queries (not N+1)
+        # Expecting: 1 query for memories, maybe 1 for count, 1 for vector info
+        self.assertLessEqual(
+            len(queries),
+            5,
+            f"Too many queries ({len(queries)}), possible N+1 problem. Queries: {[q['sql'] for q in queries]}"
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

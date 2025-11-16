@@ -3,7 +3,9 @@ import logging
 import uuid
 from datetime import datetime
 
+from django.db import transaction
 from rest_framework import parsers, status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from settings_app.models import LLMSettings
@@ -18,13 +20,52 @@ from .vector_service import vector_service
 logger = logging.getLogger(__name__)
 
 
+class MemoryPagination(PageNumberPagination):
+    """
+    API-P1-01 fix: Pagination for memory list endpoint.
+
+    Prevents performance issues with large datasets by limiting
+    results per page and providing navigation links.
+    """
+    page_size = 50  # Default page size
+    page_size_query_param = 'page_size'  # Allow client to override
+    max_page_size = 1000  # Maximum allowed page size
+
+
+# API-P1-06 fix: Whitelist of allowed fields for field selection
+ALLOWED_MEMORY_FIELDS = {"id", "content", "metadata", "created_at", "updated_at"}
+
+
+def validate_fields(requested_fields):
+    """
+    Validate requested fields against whitelist.
+
+    API-P1-06 fix: Prevents users from requesting invalid fields
+    that could cause errors or expose internal data.
+
+    Returns:
+        list: Validated fields (only allowed ones)
+    """
+    if not isinstance(requested_fields, list):
+        return ["id", "content"]  # Default safe fields
+
+    # Filter to only allowed fields
+    validated = [field for field in requested_fields if field in ALLOWED_MEMORY_FIELDS]
+
+    # If no valid fields requested, return defaults
+    return validated if validated else ["id", "content"]
+
+
 class MemoryViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for CRUD operations on memories
+    ViewSet for CRUD operations on memories with pagination support.
+
+    API-P1-01: Implements pagination to prevent performance issues.
     """
 
     serializer_class = MemorySerializer
     queryset = Memory.objects.all()
+    pagination_class = MemoryPagination
 
     def get_queryset(self):
         """Filter memories by user_id if provided in query params"""
@@ -40,29 +81,57 @@ class MemoryViewSet(viewsets.ModelViewSet):
         return Memory.objects.all().order_by("-created_at")
 
     def retrieve(self, request, *args, pk=None, **kwargs):
-        """Get a specific memory by ID"""
+        """
+        Get a specific memory by ID.
+
+        API-P1-03/04: Improved exception handling with logging.
+        """
         try:
             # Validate UUID format
             uuid.UUID(pk)
             memory = self.get_object()
             serializer = self.get_serializer(memory)
             return Response(serializer.data)
-        except ValueError:
+        except ValueError as e:
+            # API-P1-03: Log specific error but return generic message
+            logger.debug(f"Invalid UUID format for memory retrieval: {pk} - {e}")
             return Response(
                 {"success": False, "error": "Invalid memory ID format"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        except Exception:
+        except Memory.DoesNotExist as e:
+            # API-P1-03: Log specific error
+            logger.debug(f"Memory not found: {pk} - {e}")
             return Response(
                 {"success": False, "error": "Memory not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except Exception as e:
+            # API-P1-03: Log unexpected errors but don't expose details to user
+            # API-P1-04: Prevent information disclosure
+            logger.error(f"Unexpected error retrieving memory {pk}: {e}", exc_info=True)
+            return Response(
+                {"success": False, "error": "An error occurred while retrieving the memory"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def list(self, request, *args, **kwargs):
-        """List memories with optional user_id filtering"""
-        queryset = self.get_queryset()
-        serializer = self.get_serializer(queryset, many=True)
+        """
+        List memories with optional user_id filtering and pagination.
 
+        API-P1-01: Returns paginated results with navigation links.
+        """
+        queryset = self.get_queryset()
+
+        # Paginate the queryset
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            # get_paginated_response adds 'count', 'next', 'previous' links
+            return self.get_paginated_response(serializer.data)
+
+        # Fallback if pagination is disabled
+        serializer = self.get_serializer(queryset, many=True)
         return Response(
             {
                 "success": True,
@@ -173,11 +242,13 @@ class ExtractMemoriesView(APIView):
             )
 
             if not llm_result["success"]:
-                logger.error("LLM extraction failed: %s", llm_result["error"])
+                # API-P1-03: Log detailed error
+                # API-P1-04: Don't expose internal LLM error details to user
+                logger.error("LLM extraction failed: %s", llm_result.get("error", "Unknown error"))
                 return Response(
                     {
                         "success": False,
-                        "error": f"Memory extraction failed: {llm_result['error']}",
+                        "error": "Memory extraction failed. Please check if the LLM service is available and try again.",
                         "memories_extracted": 0,
                     },
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -235,9 +306,11 @@ class ExtractMemoriesView(APIView):
                 )
 
                 # Format memory based on requested fields (default to minimal for efficiency)
-                fields = request.data.get("fields", ["id", "content"])
+                # API-P1-06: Validate fields against whitelist
+                requested_fields = request.data.get("fields", ["id", "content"])
+                fields = validate_fields(requested_fields)
                 memory_data = {}
-                
+
                 if "id" in fields:
                     memory_data["id"] = str(memory.id)
                 if "content" in fields:
@@ -248,7 +321,7 @@ class ExtractMemoriesView(APIView):
                     memory_data["created_at"] = memory.created_at.isoformat()
                 if "updated_at" in fields:
                     memory_data["updated_at"] = memory.updated_at.isoformat()
-                
+
                 stored_memories.append(memory_data)
 
             logger.info(
@@ -265,13 +338,14 @@ class ExtractMemoriesView(APIView):
             )
 
         except Exception as e:
-            logger.error("Unexpected error during memory extraction: %s", e)
+            # API-P1-03: Log full exception with stack trace
+            # API-P1-04: Return generic error message to prevent information disclosure
+            logger.error("Unexpected error during memory extraction: %s", e, exc_info=True)
             return Response(
                 {
                     "success": False,
-                    "error": "Failed to extract memories. This could be due to an LLM service issue, database problem, or vector storage failure.",
+                    "error": "An unexpected error occurred during memory extraction. Please try again later.",
                     "memories_extracted": 0,
-                    "suggestion": "Check if your LLM service (Ollama) and vector database (Qdrant) are running properly."
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -404,13 +478,15 @@ class RetrieveMemoriesView(APIView):
             )
 
             if not llm_result["success"]:
+                # API-P1-03: Log detailed error
+                # API-P1-04: Don't expose internal LLM error details to user
                 logger.error(
-                    "Failed to generate search queries: %s", llm_result["error"]
+                    "Failed to generate search queries: %s", llm_result.get("error", "Unknown error")
                 )
                 return Response(
                     {
                         "success": False,
-                        "error": f"Search query generation failed: {llm_result['error']}",
+                        "error": "Search query generation failed. Please check if the LLM service is available and try again.",
                         "memories": [],
                     },
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -474,9 +550,11 @@ class RetrieveMemoriesView(APIView):
 
             # Step 6: Format memories for response with field selection
             # Default to minimal fields for efficiency - can reduce response size by 60-80%
-            fields = request.data.get("fields", ["id", "content"])  
+            # API-P1-06: Validate fields against whitelist
+            requested_fields = request.data.get("fields", ["id", "content"])
+            fields = validate_fields(requested_fields)
             include_search_metadata = request.data.get("include_search_metadata", False)
-            
+
             formatted_memories = []
             for memory in relevant_memories:
                 memory_data = self._format_memory(memory, fields, include_search_metadata)
@@ -505,13 +583,14 @@ class RetrieveMemoriesView(APIView):
             )
 
         except Exception as e:
-            logger.error("Unexpected error during memory retrieval: %s", e)
+            # API-P1-03: Log full exception with stack trace
+            # API-P1-04: Return generic error message to prevent information disclosure
+            logger.error("Unexpected error during memory retrieval: %s", e, exc_info=True)
             return Response(
                 {
                     "success": False,
-                    "error": "Failed to retrieve memories. This could be due to an LLM service issue, vector database problem, or database connectivity issue.",
+                    "error": "An unexpected error occurred during memory retrieval. Please try again later.",
                     "memories": [],
-                    "suggestion": "Check if your LLM service (Ollama) and vector database (Qdrant) are running and accessible."
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -585,7 +664,9 @@ class MemoryStatsView(APIView):
             )
 
         try:
-            memories = Memory.objects.filter(user_id=user_id)
+            # API-P1-02: Optimize query to fetch only needed field
+            # Use .only() to fetch only metadata field, reducing memory usage
+            memories = Memory.objects.filter(user_id=user_id).only('metadata')
 
             # Basic stats
             total_memories = memories.count()
@@ -626,9 +707,11 @@ class MemoryStatsView(APIView):
             )
 
         except Exception as e:
-            logger.error("Error getting memory stats: %s", e)
+            # API-P1-03: Log detailed error
+            # API-P1-04: Return generic error
+            logger.error("Error getting memory stats: %s", e, exc_info=True)
             return Response(
-                {"success": False, "error": "Failed to get memory statistics"},
+                {"success": False, "error": "An error occurred while retrieving memory statistics"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -677,29 +760,45 @@ class DeleteAllMemoriesView(APIView):
                 )
 
                 if not vector_delete_result["success"]:
+                    # API-P1-03/04: Log detailed error but return generic message
                     logger.error(
-                        f"Failed to delete vectors for user {user_id}: {vector_delete_result['error']}"
+                        f"Failed to delete vectors for user {user_id}: {vector_delete_result.get('error', 'Unknown error')}"
                     )
                     return Response(
                         {
                             "success": False,
-                            "error": f"Failed to delete from vector database: {vector_delete_result['error']}",
+                            "error": "Failed to delete memories from vector database.",
                         },
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
-                # Delete from main database
-                memories_to_delete.delete()
+                # API-P1-05: Use transaction for database delete
+                # If this fails, at least the failure is atomic
+                try:
+                    with transaction.atomic():
+                        # Delete from main database within transaction
+                        memories_to_delete.delete()
 
-                logger.info(f"Deleted {count} memories for user {user_id}")
-                return Response(
-                    {
-                        "success": True,
-                        "message": f"Successfully deleted {count} memories for user {user_id}",
-                        "deleted_count": count,
-                        "user_id": user_id,
-                    }
-                )
+                    logger.info(f"Deleted {count} memories for user {user_id}")
+                    return Response(
+                        {
+                            "success": True,
+                            "message": f"Successfully deleted {count} memories for user {user_id}",
+                            "deleted_count": count,
+                            "user_id": user_id,
+                        }
+                    )
+                except Exception as e:
+                    # API-P1-03: Log detailed error
+                    # API-P1-04: Return generic error
+                    logger.error(f"Failed to delete memories from database for user {user_id}: {e}", exc_info=True)
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to delete memories from database. Vector database may have orphaned entries.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
             else:
                 # Delete ALL memories (admin operation)
                 total_count = Memory.objects.count()
@@ -717,35 +816,52 @@ class DeleteAllMemoriesView(APIView):
                 vector_clear_result = vector_service.clear_all_memories()
 
                 if not vector_clear_result["success"]:
+                    # API-P1-03/04: Log detailed error but return generic message
                     logger.error(
-                        f"Failed to clear vector database: {vector_clear_result['error']}"
+                        f"Failed to clear vector database: {vector_clear_result.get('error', 'Unknown error')}"
                     )
                     return Response(
                         {
                             "success": False,
-                            "error": f"Failed to clear vector database: {vector_clear_result['error']}",
+                            "error": "Failed to clear vector database.",
                         },
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
-                # Delete all memories from main database
-                Memory.objects.all().delete()
+                # API-P1-05: Use transaction for database delete
+                try:
+                    with transaction.atomic():
+                        # Delete all memories from main database within transaction
+                        Memory.objects.all().delete()
 
-                logger.warning(
-                    f"ADMIN ACTION: Deleted ALL {total_count} memories from database"
-                )
-                return Response(
-                    {
-                        "success": True,
-                        "message": f"Successfully deleted ALL {total_count} memories",
-                        "deleted_count": total_count,
-                    }
-                )
+                    logger.warning(
+                        f"ADMIN ACTION: Deleted ALL {total_count} memories from database"
+                    )
+                    return Response(
+                        {
+                            "success": True,
+                            "message": f"Successfully deleted ALL {total_count} memories",
+                            "deleted_count": total_count,
+                        }
+                    )
+                except Exception as e:
+                    # API-P1-03: Log detailed error
+                    # API-P1-04: Return generic error
+                    logger.error(f"Failed to delete all memories from database: {e}", exc_info=True)
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to delete memories from database. Vector database may have orphaned entries.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
 
         except Exception as e:
-            logger.error(f"Error deleting memories: {e}")
+            # API-P1-03: Log detailed error with stack trace
+            # API-P1-04: Return generic error to prevent information disclosure
+            logger.error(f"Error deleting memories: {e}", exc_info=True)
             return Response(
-                {"success": False, "error": "An unexpected error occurred"},
+                {"success": False, "error": "An unexpected error occurred while deleting memories"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

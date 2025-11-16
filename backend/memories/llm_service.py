@@ -153,13 +153,14 @@ class LLMService:
             # Create a fallback settings object from environment variables
             from types import SimpleNamespace
 
+            # SVC-P2-09 fix: Use safe type conversions for environment variables
             self._settings = SimpleNamespace(
                 base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
                 model=os.getenv("LLM_MODEL", "llama3.1:8b"),
                 embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
-                temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
-                max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4000")),
-                timeout=int(os.getenv("LLM_TIMEOUT", "120")),
+                temperature=self._safe_float(os.getenv("LLM_TEMPERATURE", "0.7"), 0.7, "LLM_TEMPERATURE"),
+                max_tokens=self._safe_int(os.getenv("LLM_MAX_TOKENS", "4000"), 4000, "LLM_MAX_TOKENS"),
+                timeout=self._safe_int(os.getenv("LLM_TIMEOUT", "120"), 120, "LLM_TIMEOUT"),
             )
             self._settings_loaded = True
 
@@ -172,6 +173,46 @@ class LLMService:
         with self._settings_lock:
             self._settings_loaded = False  # Force reload
             self._load_settings()
+
+    def _safe_int(self, value: Any, default: int, name: str) -> int:
+        """
+        Safely convert value to int with error handling.
+
+        SVC-P2-09 fix: Helper method for safe type conversion.
+
+        Args:
+            value: Value to convert
+            default: Default value if conversion fails
+            name: Name of the setting (for logging)
+
+        Returns:
+            Converted int or default value
+        """
+        try:
+            return int(value)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning("Invalid %s setting: %s. Using default %d", name, e, default)
+            return default
+
+    def _safe_float(self, value: Any, default: float, name: str) -> float:
+        """
+        Safely convert value to float with error handling.
+
+        SVC-P2-09 fix: Helper method for safe type conversion.
+
+        Args:
+            value: Value to convert
+            default: Default value if conversion fails
+            name: Name of the setting (for logging)
+
+        Returns:
+            Converted float or default value
+        """
+        try:
+            return float(value)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning("Invalid %s setting: %s. Using default %.2f", name, e, default)
+            return default
 
     def get_formatted_datetime(self):
         """Get current datetime with timezone"""
@@ -198,10 +239,20 @@ class LLMService:
             }
 
         # Use settings values if not provided
+        # SVC-P2-09 fix: Add error handling for type conversions
         if temperature is None or not isinstance(temperature, (float, int)):
-            temperature = float(self.settings.llm_temperature)
+            try:
+                temperature = float(self.settings.llm_temperature)
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning("Invalid temperature setting: %s. Using default 0.7", e)
+                temperature = 0.7
+
         if max_tokens is None or not isinstance(max_tokens, int):
-            max_tokens = int(self.settings.llm_max_tokens)
+            try:
+                max_tokens = int(self.settings.llm_max_tokens)
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning("Invalid max_tokens setting: %s. Using default 4000", e)
+                max_tokens = 4000
 
         provider_type = self.settings.extraction_provider_type
         model = self.settings.extraction_model
@@ -417,8 +468,9 @@ class LLMService:
             ],
             "options": {
                 "temperature": temperature,
-                "top_p": float(self.settings.llm_top_p),
-                "top_k": int(self.settings.llm_top_k),
+                # SVC-P2-09 fix: Add error handling for type conversions
+                "top_p": self._safe_float(self.settings.llm_top_p, 0.9, "llm_top_p"),
+                "top_k": self._safe_int(self.settings.llm_top_k, 40, "llm_top_k"),
                 "num_predict": max_tokens,
                 "num_ctx": required_context,  # Set context size dynamically
             },
@@ -456,7 +508,8 @@ class LLMService:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
-            "top_p": float(self.settings.llm_top_p),
+            # SVC-P2-09 fix: Add error handling for type conversion
+            "top_p": self._safe_float(self.settings.llm_top_p, 0.9, "llm_top_p"),
             # Note: top_k is not supported by OpenAI API, only by Ollama
             "stream": False,
         }

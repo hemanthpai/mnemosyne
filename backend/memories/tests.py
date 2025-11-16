@@ -2144,6 +2144,121 @@ class APIP2HTTPMethodTests(TestCase):
                 self.assertEqual(response.data.get('error'), 'Confirmation required')
 
 
+class SVCP2ValueErrorHandlingTests(TestCase):
+    """Tests for SVC-P2-09: No Error Handling for ValueError"""
+
+    def test_safe_int_with_valid_value(self):
+        """Verify _safe_int converts valid values correctly"""
+        from memories.llm_service import llm_service
+
+        # Test with integer
+        result = llm_service._safe_int(42, 10, "test")
+        self.assertEqual(result, 42)
+
+        # Test with string integer
+        result = llm_service._safe_int("100", 10, "test")
+        self.assertEqual(result, 100)
+
+        # Test with float (should truncate)
+        result = llm_service._safe_int(3.14, 10, "test")
+        self.assertEqual(result, 3)
+
+    def test_safe_int_with_invalid_value(self):
+        """Verify _safe_int returns default for invalid values"""
+        from memories.llm_service import llm_service
+
+        # Test with invalid string
+        result = llm_service._safe_int("not_a_number", 10, "test")
+        self.assertEqual(result, 10)
+
+        # Test with None
+        result = llm_service._safe_int(None, 10, "test")
+        self.assertEqual(result, 10)
+
+        # Test with object
+        result = llm_service._safe_int(object(), 10, "test")
+        self.assertEqual(result, 10)
+
+    def test_safe_float_with_valid_value(self):
+        """Verify _safe_float converts valid values correctly"""
+        from memories.llm_service import llm_service
+
+        # Test with float
+        result = llm_service._safe_float(3.14, 1.0, "test")
+        self.assertAlmostEqual(result, 3.14)
+
+        # Test with integer
+        result = llm_service._safe_float(42, 1.0, "test")
+        self.assertAlmostEqual(result, 42.0)
+
+        # Test with string float
+        result = llm_service._safe_float("2.71", 1.0, "test")
+        self.assertAlmostEqual(result, 2.71)
+
+    def test_safe_float_with_invalid_value(self):
+        """Verify _safe_float returns default for invalid values"""
+        from memories.llm_service import llm_service
+
+        # Test with invalid string
+        result = llm_service._safe_float("not_a_number", 1.0, "test")
+        self.assertAlmostEqual(result, 1.0)
+
+        # Test with None
+        result = llm_service._safe_float(None, 1.0, "test")
+        self.assertAlmostEqual(result, 1.0)
+
+        # Test with object
+        result = llm_service._safe_float(object(), 1.0, "test")
+        self.assertAlmostEqual(result, 1.0)
+
+    @patch('memories.llm_service.LLMSettings.get_settings')
+    def test_query_llm_handles_invalid_temperature_setting(self, mock_settings):
+        """Verify query_llm handles invalid temperature settings gracefully"""
+        from memories.llm_service import llm_service
+
+        # Mock settings with invalid temperature
+        mock_settings.return_value = MagicMock()
+        mock_settings.return_value.llm_temperature = "invalid"
+        mock_settings.return_value.llm_max_tokens = 4000
+
+        # Should not crash, should use default temperature
+        llm_service._settings_loaded = False
+        _ = llm_service.settings  # Trigger settings load
+
+    @patch('memories.llm_service.LLMSettings.get_settings')
+    def test_query_llm_handles_invalid_max_tokens_setting(self, mock_settings):
+        """Verify query_llm handles invalid max_tokens settings gracefully"""
+        from memories.llm_service import llm_service
+
+        # Mock settings with invalid max_tokens
+        mock_settings.return_value = MagicMock()
+        mock_settings.return_value.llm_temperature = 0.7
+        mock_settings.return_value.llm_max_tokens = "invalid"
+
+        # Should not crash, should use default max_tokens
+        llm_service._settings_loaded = False
+        _ = llm_service.settings  # Trigger settings load
+
+    def test_prepare_ollama_request_handles_invalid_settings(self):
+        """Verify prepare_ollama_request handles invalid top_p and top_k settings"""
+        from memories.llm_service import llm_service
+        from types import SimpleNamespace
+
+        # Create settings with invalid values
+        llm_service._settings = SimpleNamespace(
+            llm_top_p="invalid_float",
+            llm_top_k="invalid_int",
+        )
+
+        # Should not crash when preparing request
+        # The _safe_float and _safe_int methods should handle the errors
+        result = llm_service._safe_float(llm_service.settings.llm_top_p, 0.9, "llm_top_p")
+        self.assertAlmostEqual(result, 0.9)
+
+        result = llm_service._safe_int(llm_service.settings.llm_top_k, 40, "llm_top_k")
+        self.assertEqual(result, 40)
+
+
 class SVCP2SettingsErrorHandlingTests(TestCase):
     """Tests for SVC-P2-12: No Error Handling for Settings"""
 

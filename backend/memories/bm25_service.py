@@ -27,26 +27,84 @@ class BM25Service:
     - Finds exact term matches
     - Accounts for term frequency and document length
     - Complements semantic search by catching specific keywords
+
+    Optimizations:
+    - Simple stemming for common suffixes (ing, ed, s, es)
+    - Expanded stopword list
+    - Preservation of technical terms (C++, Node.js, etc.)
     """
 
     def __init__(self):
         """Initialize BM25 service"""
+        # Expanded stopword list
         self.stopwords = set([
-            'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
-            'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
-            'that', 'the', 'to', 'was', 'will', 'with', 'the', 'this'
+            'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+            'has', 'he', 'she', 'in', 'is', 'it', 'its', 'of', 'on', 'that',
+            'the', 'to', 'was', 'will', 'with', 'this', 'these', 'those',
+            'would', 'should', 'could', 'been', 'have', 'had', 'were', 'their',
+            'there', 'they', 'them', 'then', 'than', 'but', 'not', 'or'
         ])
+
+        # Pattern to identify technical terms that should be preserved
+        # Matches: C++, C#, Node.js, React.js, dark-mode, etc.
+        self.tech_term_pattern = re.compile(
+            r'[a-zA-Z]+\+\+|'  # C++, C++
+            r'[a-zA-Z]+#|'     # C#, F#
+            r'[a-zA-Z]+\.js|'  # Node.js, React.js
+            r'[a-zA-Z]+-[a-zA-Z]+|'  # dark-mode, front-end
+            r'\.net'           # .NET
+        , re.IGNORECASE)
+
+    def simple_stem(self, word: str) -> str:
+        """
+        Simple suffix-stripping stemmer for common English endings
+
+        Handles: -ing, -ed, -s, -es, -er, -est, -ly, -tion, -ment
+
+        Args:
+            word: Word to stem
+
+        Returns:
+            Stemmed word
+        """
+        # Don't stem very short words
+        if len(word) <= 3:
+            return word
+
+        # Preserve minimum stem length of 3
+        min_stem_len = 3
+
+        # Remove common suffixes (order matters for longer suffixes first)
+        if word.endswith('tion') and len(word) - 4 >= min_stem_len:
+            return word[:-4]
+        if word.endswith('ment') and len(word) - 4 >= min_stem_len:
+            return word[:-4]
+        if word.endswith('ing') and len(word) - 3 >= min_stem_len:
+            return word[:-3]
+        if word.endswith('est') and len(word) - 3 >= min_stem_len:
+            return word[:-3]
+        if word.endswith('ed') and len(word) - 2 >= min_stem_len:
+            return word[:-2]
+        if word.endswith('er') and len(word) - 2 >= min_stem_len:
+            return word[:-2]
+        if word.endswith('ly') and len(word) - 2 >= min_stem_len:
+            return word[:-2]
+        if word.endswith('es') and len(word) - 2 >= min_stem_len:
+            return word[:-2]
+        if word.endswith('s') and len(word) - 1 >= min_stem_len and not word.endswith('ss'):
+            return word[:-1]
+
+        return word
 
     def tokenize(self, text: str) -> List[str]:
         """
-        Tokenize text for BM25 indexing
+        Tokenize text for BM25 indexing (optimized)
 
-        Simple tokenization:
-        - Lowercase
-        - Remove punctuation
-        - Split on whitespace
-        - Remove stopwords
-        - Filter short tokens
+        Improvements:
+        - Preserves technical terms (C++, Node.js, dark-mode, etc.)
+        - Simple stemming for common suffixes
+        - Expanded stopword list
+        - Better handling of punctuation
 
         Args:
             text: Text to tokenize
@@ -54,15 +112,36 @@ class BM25Service:
         Returns:
             List of tokens
         """
-        # Lowercase and remove punctuation
+        # Extract technical terms first (before lowercasing)
+        tech_terms = []
+        for match in self.tech_term_pattern.finditer(text):
+            tech_terms.append(match.group().lower())
+
+        # Lowercase
         text = text.lower()
-        text = re.sub(r'[^\w\s]', ' ', text)
+
+        # Remove punctuation but preserve hyphens, dots, and plus signs in certain contexts
+        # This regex keeps alphanumeric + whitespace + hyphen + dot + plus
+        text = re.sub(r'[^\w\s\-\.\+]', ' ', text)
 
         # Split and filter
-        tokens = [
-            token for token in text.split()
-            if len(token) > 2 and token not in self.stopwords
-        ]
+        tokens = []
+        for token in text.split():
+            # Skip if too short or is stopword
+            if len(token) <= 2 or token in self.stopwords:
+                continue
+
+            # If it's a technical term, keep as-is
+            if token in tech_terms:
+                tokens.append(token)
+            else:
+                # Strip trailing punctuation that leaked through
+                token = token.strip('.-+')
+
+                if len(token) > 2:
+                    # Apply simple stemming
+                    stemmed = self.simple_stem(token)
+                    tokens.append(stemmed)
 
         return tokens
 

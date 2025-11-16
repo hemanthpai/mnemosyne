@@ -198,9 +198,17 @@ class AMEMService:
 
     def _concatenate_attributes(self, note) -> str:
         """
-        Concatenate note attributes following A-MEM Equation 3
+        Concatenate note attributes following A-MEM Equation 3 (optimized)
 
-        Format: concat(content, keywords, tags, contextual_description)
+        Format: content [repeated for emphasis] keywords tags contextual_description
+
+        Optimizations:
+        - Content repeated for 2x weight (most important for matching)
+        - Keywords limited to top 3 (most discriminative)
+        - Tags limited to top 3 (avoid noise)
+        - Context truncated to 100 chars (avoid dilution)
+        - No literal "Keywords:", "Tags:" strings (save embedding space)
+        - Space-separated (not newline) for better semantic cohesion
 
         Args:
             note: AtomicNote with A-MEM attributes
@@ -210,28 +218,34 @@ class AMEMService:
         """
         parts = []
 
-        # Content (ci) - The core atomic fact
+        # Content (ci) - The core atomic fact (BOOSTED by repetition)
         if note.content:
             parts.append(note.content)
+            parts.append(note.content)  # Repeat for 2x weight
 
-        # Keywords (Ki) - Specific terms capturing key concepts
+        # Keywords (Ki) - Specific terms capturing key concepts (TOP 3 ONLY)
         if note.keywords:
-            parts.append("Keywords: " + ", ".join(note.keywords))
+            top_keywords = note.keywords[:3]
+            parts.append(" ".join(top_keywords))
 
-        # Tags (Gi) - Broad categorical labels
+        # Tags (Gi) - Broad categorical labels (TOP 3 ONLY)
         if note.llm_tags:
-            parts.append("Tags: " + ", ".join(note.llm_tags))
+            top_tags = note.llm_tags[:3]
+            parts.append(" ".join(top_tags))
 
-        # Contextual Description (Xi) - Rich semantic summary
+        # Contextual Description (Xi) - Rich semantic summary (TRUNCATED)
         if note.contextual_description:
-            parts.append("Context: " + note.contextual_description)
+            # Limit to 100 chars to avoid diluting content semantics
+            context_short = note.contextual_description[:100]
+            parts.append(context_short)
 
-        # Join with newlines for readability
-        combined = "\n".join(parts)
+        # Join with spaces (not newlines) for better semantic cohesion
+        combined = " ".join(parts)
 
         logger.debug(
             f"Concatenated attributes for note {note.id} "
-            f"(length={len(combined)}): {combined[:150]}..."
+            f"(length={len(combined)}, content_weight=2x, keywords={len(note.keywords or [])}→{len(note.keywords[:3] if note.keywords else [])}): "
+            f"{combined[:150]}..."
         )
 
         return combined

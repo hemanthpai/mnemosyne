@@ -24,18 +24,34 @@ from .bm25_service import get_bm25_service, reciprocal_rank_fusion
 
 logger = logging.getLogger(__name__)
 
-QUERY_EXPANSION_PROMPT = """Expand this search query into 3-5 concrete variations that capture different aspects.
+QUERY_EXPANSION_PROMPT = """Expand this search query into 3-5 concrete variations optimized for finding relevant personal facts and preferences.
 
 Query: "{query}"
 
-Generate variations that:
-- Use specific, concrete language (avoid abstract terms)
-- Cover different facets of the query topic
-- Are suitable for matching against factual statements about a person
-- Include both direct terms and related concepts
-- Consider different ways people might express the same information
+Generate variations by:
+1. Rephrasing with different vocabulary (synonyms, related terms, specific examples)
+2. Making abstract queries more specific with concrete examples
+3. Expanding acronyms and implicit terms
+4. Considering different facets (preferences, skills, experiences, opinions, habits)
+5. Using terms that would appear in actual user statements
 
-Return ONLY a JSON array of strings (no other text or explanation):
+Each variation must be meaningfully different from the original and other variations.
+
+Examples:
+
+Query: "music preferences"
+Variations: ["favorite musical artists and bands", "music genres they enjoy listening to", "concert attendance and live music", "musical instruments they play or want to learn"]
+
+Query: "programming skills"
+Variations: ["programming languages they know and use", "software frameworks libraries tools", "years of coding experience", "types of projects they have built"]
+
+Query: "work habits"
+Variations: ["daily work schedule and routine", "preferred working hours and environment", "productivity tools and methods", "work-life balance approach"]
+
+Query: "coffee"
+Variations: ["coffee drinking preferences and habits", "favorite coffee shops or brands", "how they take their coffee", "coffee brewing methods they use"]
+
+Now expand this query. Return ONLY a JSON array of 3-5 distinct, concrete variations:
 ["variation1", "variation2", "variation3"]"""
 
 
@@ -86,26 +102,41 @@ class GraphService:
             notes = AtomicNote.objects.filter(id__in=note_ids)
             notes_by_id = {str(n.id): n for n in notes}
 
-            # Combine results
+            # Combine results with importance score boosting
             results = []
             for result in note_results:
                 note_id = result['metadata']['note_id']
                 if note_id in notes_by_id:
                     note = notes_by_id[note_id]
+
+                    # Get importance score (default to 0.5 if not set)
+                    importance = note.importance_score if note.importance_score is not None else 0.5
+
+                    # Boost vector similarity score by importance
+                    # Importance ranges from 0-1, we use it as a multiplier (0.5-1.5x)
+                    # Formula: boosted_score = vector_score * (0.5 + importance)
+                    # This gives: low importance (0.0) → 0.5x, medium (0.5) → 1.0x, high (1.0) → 1.5x
+                    vector_score = result['score']
+                    boosted_score = vector_score * (0.5 + importance)
+
                     results.append({
                         'id': str(note.id),
                         'content': note.content,
                         'note_type': note.note_type,
                         'context': note.context,
                         'confidence': note.confidence,
-                        'importance_score': note.importance_score,
+                        'importance_score': importance,
                         'tags': note.tags,
                         'created_at': note.created_at.isoformat(),
-                        'score': result['score'],
+                        'vector_score': vector_score,  # Original vector similarity score
+                        'score': boosted_score,  # Importance-boosted score (used for ranking)
                         'source': 'atomic_note'
                     })
 
-            logger.info(f"Found {len(results)} atomic notes for query: {query[:50]}...")
+            # Re-sort by boosted score (importance-weighted)
+            results.sort(key=lambda x: x['score'], reverse=True)
+
+            logger.info(f"Found {len(results)} atomic notes for query: {query[:50]}... (importance-weighted)")
             return results
 
         except Exception as e:
@@ -164,10 +195,48 @@ class GraphService:
                 logger.warning(f"Invalid query expansion result. Using original query only.")
                 return [query]
 
-            # Always include original query + variations
-            all_queries = [query] + [str(v) for v in variations if v and str(v) != query]
+            # Deduplicate and validate variations
+            unique_variations = []
+            query_lower = query.lower()
 
-            logger.info(f"Expanded query '{query[:50]}...' into {len(all_queries)} variations")
+            for v in variations:
+                v_str = str(v).strip()
+                if not v_str or len(v_str) < 3:
+                    continue
+
+                v_lower = v_str.lower()
+
+                # Skip if identical to original query
+                if v_lower == query_lower:
+                    continue
+
+                # Skip if too similar to original (>80% word overlap)
+                query_words = set(query_lower.split())
+                v_words = set(v_lower.split())
+                if query_words and v_words:
+                    overlap = len(query_words & v_words) / len(query_words | v_words)
+                    if overlap > 0.8:
+                        logger.debug(f"Skipping variation (too similar to original): '{v_str}'")
+                        continue
+
+                # Skip if too similar to existing variations
+                is_duplicate = False
+                for existing in unique_variations:
+                    existing_words = set(existing.lower().split())
+                    if v_words and existing_words:
+                        overlap = len(v_words & existing_words) / len(v_words | existing_words)
+                        if overlap > 0.7:
+                            is_duplicate = True
+                            logger.debug(f"Skipping variation (duplicate): '{v_str}'")
+                            break
+
+                if not is_duplicate:
+                    unique_variations.append(v_str)
+
+            # Always include original query first
+            all_queries = [query] + unique_variations
+
+            logger.info(f"Expanded query '{query[:50]}...' into {len(all_queries)} variations ({len(unique_variations)} unique)")
             return all_queries[:6]  # Cap at 6 total (original + 5 variations)
 
         except Exception as e:

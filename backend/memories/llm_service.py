@@ -613,15 +613,19 @@ class LLMService:
 
             all_embeddings.append(embedding)
 
+        # SVC-P2-03 fix: Safe dimension check to prevent IndexError
+        dimension = 0
+        if all_embeddings:
+            if all_embeddings[0]:  # Check first embedding exists and is not empty
+                dimension = len(all_embeddings[0])
+
         return {
             "success": True,
             "embeddings": all_embeddings,
             "model": self.settings.embeddings_model,
             "metadata": {
                 "count": len(all_embeddings),
-                "dimension": len(all_embeddings[0])
-                if all_embeddings and all_embeddings[0]
-                else 0,
+                "dimension": dimension,
             },
         }
 

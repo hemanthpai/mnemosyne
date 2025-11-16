@@ -342,11 +342,13 @@ class VectorService:
                 ),
             )
 
-            logger.info(f"Deleted {len(memory_ids)} vectors for user {user_id}")
+            # SVC-P2-06 fix: Use lazy % formatting instead of f-strings in logger
+            logger.info("Deleted %d vectors for user %s", len(memory_ids), user_id)
             return {"success": True, "deleted_count": len(memory_ids)}
 
         except Exception as e:
-            logger.error(f"Error deleting vectors: {e}")
+            # SVC-P2-06 fix: Use lazy % formatting instead of f-strings in logger
+            logger.error("Error deleting vectors: %s", e)
             return {"success": False, "error": str(e)}
 
     def clear_all_memories(self) -> Dict[str, Any]:
@@ -371,13 +373,15 @@ class VectorService:
             self.client.delete_collection(self.collection_name)
             self._ensure_collection()
 
+            # SVC-P2-06 fix: Use lazy % formatting instead of f-strings in logger
             logger.warning(
-                f"ADMIN ACTION: Cleared ALL {point_count} vectors from database"
+                "ADMIN ACTION: Cleared ALL %d vectors from database", point_count
             )
             return {"success": True, "cleared_count": point_count}
 
         except Exception as e:
-            logger.error(f"Error clearing vector database: {e}")
+            # SVC-P2-06 fix: Use lazy % formatting instead of f-strings in logger
+            logger.error("Error clearing vector database: %s", e)
             return {"success": False, "error": str(e)}
 
     def delete_user_memories(self, user_id: str) -> Dict[str, Any]:
@@ -395,11 +399,13 @@ class VectorService:
                 ),
             )
 
-            logger.info(f"Deleted all vectors for user {user_id}")
+            # SVC-P2-06 fix: Use lazy % formatting instead of f-strings in logger
+            logger.info("Deleted all vectors for user %s", user_id)
             return {"success": True}
 
         except Exception as e:
-            logger.error(f"Error deleting user vectors: {e}")
+            # SVC-P2-06 fix: Use lazy % formatting instead of f-strings in logger
+            logger.error("Error deleting user vectors: %s", e)
             return {"success": False, "error": str(e)}
 
 

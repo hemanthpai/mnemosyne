@@ -427,19 +427,23 @@ class RetrieveMemoriesView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate limit and threshold
+        # API-P2-14 fix: Validate limit and threshold with logging
         try:
             limit = int(limit)
             if limit <= 0 or limit > 100:
+                logger.warning(f"Invalid limit value {limit}, clamping to default 10")
                 limit = 10
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid limit format: {e}, using default 10")
             limit = 10
 
         try:
             threshold = float(threshold)
             if threshold < 0.0 or threshold > 1.0:
+                logger.warning(f"Invalid threshold value {threshold}, clamping to default 0.7")
                 threshold = 0.7
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid threshold format: {e}, using default 0.7")
             threshold = 0.7
 
         try:
@@ -750,10 +754,15 @@ class DeleteAllMemoriesView(APIView):
                         }
                     )
 
-                # Delete from vector database first
-                memory_ids = [str(memory.id) for memory in memories_to_delete]
+                # API-P2-01 fix: Use values_list to fetch only IDs, not full objects
+                # This is much more efficient for large datasets
+                memory_ids = list(
+                    memories_to_delete.values_list('id', flat=True)
+                )
+                memory_ids_str = [str(mid) for mid in memory_ids]
+
                 vector_delete_result = vector_service.delete_memories(
-                    memory_ids, user_id
+                    memory_ids_str, user_id
                 )
 
                 if not vector_delete_result["success"]:

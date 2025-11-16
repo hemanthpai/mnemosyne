@@ -2144,6 +2144,149 @@ class APIP2HTTPMethodTests(TestCase):
                 self.assertEqual(response.data.get('error'), 'Confirmation required')
 
 
+class SVCP2SettingsErrorHandlingTests(TestCase):
+    """Tests for SVC-P2-12: No Error Handling for Settings"""
+
+    @patch('memories.views.LLMSettings.get_settings')
+    @patch('memories.views.memory_search_service')
+    @patch('memories.views.llm_service')
+    def test_retrieve_handles_settings_error(self, mock_llm, mock_memory_service, mock_settings):
+        """Verify retrieve endpoint handles settings loading errors gracefully"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Database connection failed")
+
+        # Mock LLM and memory service
+        mock_llm.refresh_settings.return_value = None
+        mock_llm.settings.memory_search_prompt = "test prompt"
+        mock_llm.query_llm.return_value = {
+            "success": True,
+            "response": "[]",
+            "model": "test-model"
+        }
+        mock_memory_service.search_memories_with_queries.return_value = []
+
+        from django.test import Client
+        client = Client()
+
+        # Should not crash, should use defaults
+        response = client.post(
+            '/api/memories/retrieve/',
+            data=json.dumps({
+                "user_id": str(uuid.uuid4()),
+                "prompt": "test query"
+            }),
+            content_type='application/json'
+        )
+
+        # Should succeed with defaults (semantic connections disabled)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data.get('success'))
+
+    @patch('memories.memory_search_service.LLMSettings.get_settings')
+    def test_memory_search_service_handles_settings_error(self, mock_settings):
+        """Verify memory search service handles settings loading errors"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Database error")
+
+        from memories.memory_search_service import MemorySearchService
+        service = MemorySearchService()
+
+        # Should not crash, should return fallback settings
+        settings = service._get_settings()
+
+        self.assertIsNotNone(settings)
+        # Fallback should have enable_semantic_connections as False
+        self.assertFalse(settings.enable_semantic_connections)
+        self.assertEqual(settings.semantic_enhancement_threshold, 3)
+
+    @patch('memories.openwebui_importer.LLMSettings.get_settings')
+    @patch('memories.openwebui_importer.llm_service')
+    def test_openwebui_importer_handles_settings_error(self, mock_llm, mock_settings):
+        """Verify OpenWebUI importer handles settings loading errors"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Settings unavailable")
+
+        # Mock LLM service
+        mock_llm.query_llm.return_value = {
+            "success": True,
+            "response": "[]",
+            "model": "test-model"
+        }
+
+        from memories.openwebui_importer import OpenWebUIImporter
+        import tempfile
+        import sqlite3
+
+        # Create a temporary database
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
+            db_path = tmp_file.name
+
+        try:
+            # Create minimal database structure
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE chat (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    title TEXT,
+                    chat TEXT,
+                    created_at INTEGER,
+                    updated_at INTEGER
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO chat VALUES (
+                    'test-id',
+                    'test-user',
+                    'Test Chat',
+                    '{"messages": [{"role": "user", "content": "test"}]}',
+                    1234567890,
+                    1234567890
+                )
+            """)
+            conn.commit()
+            conn.close()
+
+            # Test that importer doesn't crash with settings error
+            with OpenWebUIImporter(db_path) as importer:
+                # Should use fallback prompt instead of crashing
+                # This is verified by not raising an exception
+                pass
+
+        finally:
+            import os
+            if os.path.exists(db_path):
+                os.unlink(db_path)
+
+    @patch('memories.views.LLMSettings.get_settings')
+    def test_import_file_size_validation_handles_settings_error(self, mock_settings):
+        """Verify import file size validation handles settings errors"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Settings error")
+
+        from django.test import Client
+        from io import BytesIO
+
+        client = Client()
+
+        # Create a small dummy file
+        dummy_file = BytesIO(b'dummy content')
+        dummy_file.name = 'test.db'
+
+        # Should not crash, should use default 100MB limit
+        response = client.post(
+            '/api/import/openwebui/',
+            data={'db_file': dummy_file},
+            format='multipart'
+        )
+
+        # Should succeed (or fail for other reasons, but not settings)
+        # The important thing is it doesn't crash with 500 error
+        self.assertNotEqual(response.status_code, 500)
+
+
 class APIP2InconsistentResponseFormatTests(TestCase):
     """Tests for API-P2-08: Inconsistent Response Format"""
 

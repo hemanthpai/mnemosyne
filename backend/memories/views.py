@@ -570,11 +570,20 @@ class RetrieveMemoriesView(APIView):
             )
 
             # Step 4: Find additional semantic connections if enabled and we have enough results
-            settings = LLMSettings.get_settings()
+            # SVC-P2-12 fix: Add error handling for settings access
+            try:
+                settings = LLMSettings.get_settings()
+                enable_semantic = settings.enable_semantic_connections
+                semantic_threshold = settings.semantic_enhancement_threshold
+            except Exception as e:
+                logger.warning("Failed to load LLM settings for semantic connections: %s. Using defaults.", e)
+                enable_semantic = False
+                semantic_threshold = 3
+
             if (
-                settings.enable_semantic_connections
+                enable_semantic
                 and relevant_memories
-                and len(relevant_memories) >= settings.semantic_enhancement_threshold
+                and len(relevant_memories) >= semantic_threshold
             ):
                 logger.info("Finding additional semantic connections...")
                 relevant_memories = memory_search_service.find_semantic_connections(
@@ -589,9 +598,9 @@ class RetrieveMemoriesView(APIView):
             else:
                 logger.info(
                     "Skipping semantic connections: enabled=%s, memories=%d, threshold=%d",
-                    settings.enable_semantic_connections,
+                    enable_semantic,
                     len(relevant_memories),
-                    settings.semantic_enhancement_threshold,
+                    semantic_threshold,
                 )
 
             # Step 5: Generate memory summary for AI assistance (optional)
@@ -972,16 +981,23 @@ class ImportOpenWebUIHistoryView(APIView):
                 )
 
             # Validate file size
-            settings = LLMSettings.get_settings()
-            max_size_bytes = settings.max_import_file_size_mb * 1024 * 1024
+            # SVC-P2-12 fix: Add error handling for settings access
+            try:
+                settings = LLMSettings.get_settings()
+                max_size_mb = settings.max_import_file_size_mb
+            except Exception as e:
+                logger.warning("Failed to load LLM settings for import file size: %s. Using default 100MB.", e)
+                max_size_mb = 100  # Default 100MB limit
+
+            max_size_bytes = max_size_mb * 1024 * 1024
 
             if db_file.size > max_size_bytes:
                 return Response(
                     {
                         "success": False,
-                        "error": f"Database file too large. Maximum size is {settings.max_import_file_size_mb}MB",
+                        "error": f"Database file too large. Maximum size is {max_size_mb}MB",
                         "file_size_mb": round(db_file.size / (1024 * 1024), 2),
-                        "max_size_mb": settings.max_import_file_size_mb
+                        "max_size_mb": max_size_mb
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )

@@ -271,8 +271,13 @@ class OpenWebUIImporter:
         try:
             # Use the existing LLM service to extract memories
             # SVC-P2-01 fix: Import moved to top level
-            settings = LLMSettings.get_settings()
-            system_prompt = settings.memory_extraction_prompt
+            # SVC-P2-12 fix: Add error handling for settings access
+            try:
+                settings = LLMSettings.get_settings()
+                system_prompt = settings.memory_extraction_prompt
+            except Exception as e:
+                logger.warning("Failed to load LLM settings for memory extraction: %s. Using default prompt.", e)
+                system_prompt = "Extract meaningful facts, preferences, and information from the conversation."
 
             # Add timestamp for context
             now = datetime.now()

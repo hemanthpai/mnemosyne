@@ -108,11 +108,22 @@ class MemorySearchService:
                 return self._settings_cache
 
             # Cache expired or not set, fetch from DB
+            # SVC-P2-12 fix: Add error handling for settings access
             from settings_app.models import LLMSettings
-            self._settings_cache = LLMSettings.get_settings()
-            self._settings_cache_time = current_time
+            try:
+                self._settings_cache = LLMSettings.get_settings()
+                self._settings_cache_time = current_time
+                logger.debug("Refreshed LLM settings cache")
+            except Exception as e:
+                logger.warning("Failed to load LLM settings: %s. Using fallback defaults.", e)
+                # Create fallback settings object
+                from types import SimpleNamespace
+                self._settings_cache = SimpleNamespace(
+                    enable_semantic_connections=False,
+                    semantic_enhancement_threshold=3,
+                )
+                self._settings_cache_time = current_time
 
-            logger.debug("Refreshed LLM settings cache")
             return self._settings_cache
 
     def store_memory_with_embedding(

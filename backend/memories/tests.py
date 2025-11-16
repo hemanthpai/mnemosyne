@@ -1180,5 +1180,118 @@ class ListModificationTests(TestCase):
         self.assertEqual(result, original_memories)
 
 
+class CleanupTimerRaceTests(TestCase):
+    """Tests for SVC-P1-12: Cleanup timer race condition"""
+
+    def test_cleanup_executes_only_once_with_concurrent_calls(self):
+        """Test that cleanup timestamp prevents redundant cleanup work"""
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        import time
+
+        limiter = SimpleRateLimiter()
+        limiter.CLEANUP_INTERVAL = 1  # 1 second for testing
+
+        # Add some test data
+        with limiter._lock:
+            limiter._requests['1.1.1.1'].append(time.time() - 100)  # Old entry
+            limiter._requests['2.2.2.2'].append(time.time() - 100)
+            limiter._requests['3.3.3.3'].append(time.time() - 100)
+            limiter._last_cleanup = time.time() - 2  # Last cleanup was 2 seconds ago
+
+        cleanup_executions = []
+
+        def track_cleanup():
+            """Call cleanup and track if it actually did work"""
+            initial_time = limiter._last_cleanup
+            limiter._cleanup_old_entries()
+            final_time = limiter._last_cleanup
+
+            # If timestamp changed, cleanup was executed
+            if final_time != initial_time:
+                cleanup_executions.append(threading.current_thread().name)
+
+        # Create 10 threads that all try to cleanup simultaneously
+        threads = [
+            threading.Thread(target=track_cleanup, name=f"Thread-{i}")
+            for i in range(10)
+        ]
+
+        # Start all threads at once
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Only ONE thread should have executed cleanup
+        # (the first one to acquire the lock after the interval passed)
+        self.assertEqual(
+            len(cleanup_executions), 1,
+            f"Expected 1 cleanup execution, got {len(cleanup_executions)}: {cleanup_executions}"
+        )
+
+    def test_cleanup_timestamp_updated_before_work(self):
+        """Test that timestamp is updated immediately, not after cleanup work"""
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        import time
+
+        limiter = SimpleRateLimiter()
+        limiter.CLEANUP_INTERVAL = 1  # 1 second for testing
+
+        # Set last cleanup to old time
+        initial_time = time.time() - 2
+        limiter._last_cleanup = initial_time
+
+        # Add many entries to make cleanup take some time
+        with limiter._lock:
+            for i in range(100):
+                limiter._requests[f'ip_{i}'].append(time.time() - 100)
+
+        # Execute cleanup
+        limiter._cleanup_old_entries()
+
+        # Timestamp should be updated (not equal to initial_time)
+        self.assertNotEqual(
+            limiter._last_cleanup, initial_time,
+            "Cleanup timestamp should be updated"
+        )
+
+        # Old entries should be cleaned
+        with limiter._lock:
+            self.assertEqual(
+                len(limiter._requests), 0,
+                "All old entries should be cleaned up"
+            )
+
+    def test_cleanup_interval_prevents_frequent_cleanup(self):
+        """Test that cleanup interval is respected"""
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        import time
+
+        limiter = SimpleRateLimiter()
+        limiter.CLEANUP_INTERVAL = 300  # 5 minutes
+
+        # Do cleanup now
+        limiter._cleanup_old_entries()
+        first_cleanup_time = limiter._last_cleanup
+
+        # Add old entry
+        with limiter._lock:
+            limiter._requests['1.1.1.1'].append(time.time() - 100)
+
+        # Try cleanup again immediately
+        limiter._cleanup_old_entries()
+        second_cleanup_time = limiter._last_cleanup
+
+        # Timestamp should be the same (cleanup skipped)
+        self.assertEqual(
+            first_cleanup_time, second_cleanup_time,
+            "Cleanup should be skipped when called within interval"
+        )
+
+        # Old entry should still exist (cleanup was skipped)
+        with limiter._lock:
+            self.assertIn('1.1.1.1', limiter._requests)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -66,6 +66,8 @@ class SimpleRateLimiter:
         Remove old entries to prevent memory leaks.
 
         Thread-safe: Protected by lock to prevent concurrent cleanup.
+        SVC-P1-12 fix: Update timestamp immediately to prevent multiple
+        threads from queuing up to do redundant cleanup.
         """
         with self._lock:
             current_time = time.time()
@@ -73,6 +75,11 @@ class SimpleRateLimiter:
             # Only cleanup periodically (check inside lock to avoid race)
             if current_time - self._last_cleanup < self.CLEANUP_INTERVAL:
                 return
+
+            # SVC-P1-12 fix: Update timestamp BEFORE cleanup work
+            # This prevents "thundering herd" where multiple threads queue up
+            # and all execute cleanup sequentially when only first one is needed
+            self._last_cleanup = current_time
 
             cutoff_time = current_time - self.WINDOW_SIZE
 
@@ -85,8 +92,6 @@ class SimpleRateLimiter:
                 # Remove IP entry if no recent requests
                 if not self._requests[ip]:
                     del self._requests[ip]
-
-            self._last_cleanup = current_time
     
     def _is_rate_limited(self, ip: str, limit: int) -> Tuple[bool, int]:
         """

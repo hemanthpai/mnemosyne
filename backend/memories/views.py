@@ -1003,6 +1003,10 @@ class ImportOpenWebUIHistoryView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
+            # API-P2-13 fix: Generate unique import_id BEFORE starting thread
+            # to prevent race condition in progress initialization
+            import_id = str(uuid.uuid4())
+
             # API-P2-12 fix: Only create temp file AFTER all validations pass
             # This prevents file leaks from early returns during validation
             with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp_file:
@@ -1022,6 +1026,7 @@ class ImportOpenWebUIHistoryView(APIView):
                     try:
                         with OpenWebUIImporter(tmp_path) as importer:
                             result = importer.import_conversations(
+                                import_id=import_id,  # API-P2-13 fix: Pass import_id
                                 target_user_id=target_user_id,
                                 openwebui_user_id=openwebui_user_id,
                                 after_date=after_date,
@@ -1042,19 +1047,23 @@ class ImportOpenWebUIHistoryView(APIView):
                             logger.error(f"[Thread {import_thread_id}] Failed to delete temp file: {e}")
                     logger.info(f"[Thread {import_thread_id}] Background import thread exiting")
 
-            # Initialize progress state BEFORE starting thread to prevent race condition
-            from .openwebui_importer import _import_progress, _progress_lock
+            # API-P2-13 fix: Initialize progress state BEFORE starting thread
+            # to prevent race condition. Use _import_progresses dict with import_id.
+            from .openwebui_importer import ImportProgress, _import_progresses, _progress_lock
             with _progress_lock:
-                _import_progress.status = "initializing"
-                _import_progress.start_time = datetime.now()
-                _import_progress.end_time = None
-                _import_progress.dry_run = dry_run
-                _import_progress.error_message = None
-                _import_progress.current_conversation_id = None
-                _import_progress.total_conversations = 0
-                _import_progress.processed_conversations = 0
-                _import_progress.extracted_memories = 0
-                _import_progress.failed_conversations = 0
+                if import_id not in _import_progresses:
+                    _import_progresses[import_id] = ImportProgress()
+                progress = _import_progresses[import_id]
+                progress.status = "initializing"
+                progress.start_time = datetime.now()
+                progress.end_time = None
+                progress.dry_run = dry_run
+                progress.error_message = None
+                progress.current_conversation_id = None
+                progress.total_conversations = 0
+                progress.processed_conversations = 0
+                progress.extracted_memories = 0
+                progress.failed_conversations = 0
 
             # Start import thread
             import_thread = threading.Thread(target=run_import, daemon=True)
@@ -1064,6 +1073,7 @@ class ImportOpenWebUIHistoryView(APIView):
                 {
                     "success": True,
                     "message": "Import started successfully",
+                    "import_id": import_id,  # API-P2-13 fix: Return import_id for progress tracking
                     "dry_run": dry_run,
                 }
             )

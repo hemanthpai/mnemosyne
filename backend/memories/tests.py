@@ -1951,5 +1951,85 @@ class SVCP2NamespaceUUIDTests(TestCase):
         self.assertNotEqual(user_id1, user_id3)
 
 
+class APIP2ProgressRaceTests(TestCase):
+    """Tests for API-P2-13: Race Condition in Progress Initialization"""
+
+    @patch('memories.views.OpenWebUIImporter')
+    @patch('memories.views.LLMSettings')
+    def test_import_id_generated_and_progress_initialized_before_thread(
+        self, mock_settings_class, mock_importer_class
+    ):
+        """
+        Test that import_id is generated and progress is initialized before background thread starts.
+        API-P2-13: Prevents race condition where thread might start before progress is tracked.
+        """
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ImportOpenWebUIHistoryView
+        from backend.memories.openwebui_importer import _import_progresses, _progress_lock
+        import io
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='testpass')
+
+        # Mock settings
+        mock_settings = MagicMock()
+        mock_settings.max_import_file_size_mb = 100
+        mock_settings_class.get_settings.return_value = mock_settings
+
+        # Mock importer to prevent actual import
+        mock_importer_instance = MagicMock()
+        mock_importer_class.return_value.__enter__.return_value = mock_importer_instance
+
+        # Mock import_conversations to simulate slow start (testing race condition)
+        import time
+        def slow_import(*args, **kwargs):
+            time.sleep(0.1)  # Simulate delay
+            return {"success": True, "total_conversations": 0}
+
+        mock_importer_instance.import_conversations.side_effect = slow_import
+
+        factory = APIRequestFactory()
+
+        # Create a fake database file
+        db_file = io.BytesIO(b"fake database content")
+        db_file.name = 'test.db'
+        db_file.size = 1000
+
+        # Clear any existing progress
+        with _progress_lock:
+            _import_progresses.clear()
+
+        request = factory.post(
+            '/api/import/',
+            {'db_file': db_file, 'dry_run': 'false'},
+            format='multipart'
+        )
+        request.user = user
+        request.FILES['db_file'] = db_file
+
+        view = ImportOpenWebUIHistoryView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should return import_id
+        self.assertIn('import_id', response.data)
+        import_id = response.data['import_id']
+        self.assertIsNotNone(import_id)
+
+        # Progress should exist immediately (before thread even starts work)
+        with _progress_lock:
+            self.assertIn(import_id, _import_progresses)
+            progress = _import_progresses[import_id]
+            self.assertIn(progress.status, ['initializing', 'running'])
+            self.assertIsNotNone(progress.start_time)
+
+        # Clean up
+        with _progress_lock:
+            _import_progresses.clear()
+
+
 if __name__ == '__main__':
     unittest.main()

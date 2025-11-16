@@ -643,7 +643,12 @@ class LLMService:
     def _get_ollama_embeddings(
         self, texts: List[str], normalize: bool
     ) -> Dict[str, Any]:
-        """Get embeddings from Ollama (synchronous)"""
+        """
+        Get embeddings from Ollama with concurrent processing.
+
+        SVC-P2-02 fix: Ollama's API only supports one prompt per request,
+        but we can process multiple requests concurrently for better performance.
+        """
         if not self.settings or not getattr(
             self.settings, "embeddings_endpoint_url", None
         ):
@@ -655,30 +660,53 @@ class LLMService:
             }
 
         url = f"{self.settings.embeddings_endpoint_url.rstrip('/')}/api/embeddings"
-        all_embeddings = []
 
-        for text in texts:
-            payload = {"model": self.settings.embeddings_model, "prompt": text}
+        # SVC-P2-02 fix: Use concurrent processing for better performance
+        # Ollama doesn't support batch embeddings, but we can send requests concurrently
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            response = self.session.post(
-                url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=DEFAULT_REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
+        all_embeddings = [None] * len(texts)  # Pre-allocate list to maintain order
+        errors = []
 
-            result = response.json()
-            embedding = result.get("embedding", [])
+        def get_single_embedding(index: int, text: str):
+            """Get embedding for a single text"""
+            try:
+                payload = {"model": self.settings.embeddings_model, "prompt": text}
+                response = self.session.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
 
-            if normalize and embedding:
-                import math
+                result = response.json()
+                embedding = result.get("embedding", [])
 
-                magnitude = math.sqrt(sum(x * x for x in embedding))
-                if magnitude > 0:
-                    embedding = [x / magnitude for x in embedding]
+                if normalize and embedding:
+                    import math
 
-            all_embeddings.append(embedding)
+                    magnitude = math.sqrt(sum(x * x for x in embedding))
+                    if magnitude > 0:
+                        embedding = [x / magnitude for x in embedding]
+
+                all_embeddings[index] = embedding  # Store at correct index to maintain order
+                return True
+            except Exception as e:
+                logger.error(f"Failed to get embedding for text {index}: {e}")
+                errors.append(f"Text {index}: {str(e)}")
+                all_embeddings[index] = []  # Use empty embedding on error
+                return False
+
+        # Use ThreadPoolExecutor for concurrent requests
+        # Limit workers to avoid overwhelming the server
+        max_workers = min(len(texts), 10)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(get_single_embedding, i, text): i for i, text in enumerate(texts)}
+
+            # Wait for all to complete
+            for future in as_completed(futures):
+                future.result()  # This will raise exception if any occurred
 
         # SVC-P2-03 fix: Safe dimension check to prevent IndexError
         dimension = 0

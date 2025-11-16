@@ -428,6 +428,9 @@ class OpenWebUIImporter:
             failed_conversations = 0
             conversation_details = []
 
+            # SVC-P2-13 fix: Process conversations concurrently for better performance
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
             # Process in batches
             for i in range(0, len(conversations), batch_size):
                 # Check for cancellation at batch level (atomic check-and-act within lock)
@@ -448,14 +451,72 @@ class OpenWebUIImporter:
 
                 batch = conversations[i : i + batch_size]
 
-                for conv in batch:
-                    # Check if import was cancelled (atomic check-and-act within lock)
+                # SVC-P2-13 fix: Process batch conversations concurrently
+                # Define worker function for concurrent processing
+                def process_conversation(conv):
+                    """Process a single conversation and return results"""
+                    # Check if import was cancelled
                     with _progress_lock:
                         logger.debug(f"Conv {conv['id']}: Checking cancellation, status={progress.status}")
                         if progress.status == "cancelled":
+                            return {"cancelled": True, "conv_id": conv["id"]}
+                        # Set current conversation while we have the lock
+                        progress.current_conversation_id = conv["id"]
+
+                    try:
+                        # Extract user messages
+                        user_messages = self.extract_user_messages(conv["chat"])
+
+                        if not user_messages:
+                            logger.debug(f"No user messages in conversation {conv['id']}")
+                            return {"success": True, "conv_id": conv["id"], "memories_count": 0, "skipped": True}
+
+                        # Format conversation
+                        conversation_text = self.format_conversation_text(user_messages)
+
+                        # Determine target user ID
+                        if target_user_id:
+                            mnemosyne_user_id = target_user_id
+                        else:
+                            mnemosyne_user_id = self.map_openwebui_user_to_mnemosyne(conv["user_id"])
+
+                        # Extract memories
+                        memories_count, memories = self.extract_memories_from_conversation(
+                            conversation_text, mnemosyne_user_id, dry_run
+                        )
+
+                        logger.info(f"Processed conversation {conv['id']}: {memories_count} memories extracted")
+
+                        return {
+                            "success": True,
+                            "conv_id": conv["id"],
+                            "memories_count": memories_count,
+                            "detail": {
+                                "conversation_id": conv["id"],
+                                "title": conv.get("title", "Untitled"),
+                                "user_messages_count": len(user_messages),
+                                "memories_extracted": memories_count,
+                                "mnemosyne_user_id": mnemosyne_user_id,
+                            }
+                        }
+
+                    except Exception as e:
+                        logger.error(f"Failed to process conversation {conv['id']}: {e}")
+                        return {"success": False, "conv_id": conv["id"], "error": str(e)}
+
+                # Process conversations in batch concurrently (limit to 3 workers to avoid overwhelming LLM)
+                max_workers = min(len(batch), 3)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(process_conversation, conv): conv for conv in batch}
+
+                    for future in as_completed(futures):
+                        result = future.result()
+
+                        # Handle cancellation
+                        if result.get("cancelled"):
                             _log_with_thread("Import cancelled by user (conversation level)", 'info')
-                            progress.end_time = datetime.now()
-                            # Build return dict while holding lock to ensure consistent snapshot
+                            with _progress_lock:
+                                progress.end_time = datetime.now()
                             return {
                                 "success": False,
                                 "error": "Import cancelled by user",
@@ -465,72 +526,21 @@ class OpenWebUIImporter:
                                 "failed_conversations": failed_conversations,
                             }
 
-                        # Set current conversation while we have the lock
-                        progress.current_conversation_id = conv["id"]
+                        # Update counters based on result
+                        if result.get("success"):
+                            if not result.get("skipped"):
+                                total_memories_extracted += result["memories_count"]
+                                if "detail" in result:
+                                    conversation_details.append(result["detail"])
 
-                    try:
-                        # Extract user messages
-                        user_messages = self.extract_user_messages(conv["chat"])
-
-                        if not user_messages:
-                            logger.debug(
-                                f"No user messages in conversation {conv['id']}"
-                            )
                             with _progress_lock:
+                                progress.extracted_memories = total_memories_extracted
                                 progress.processed_conversations += 1
-                            continue
-
-                        # Format conversation
-                        conversation_text = self.format_conversation_text(
-                            user_messages
-                        )
-
-                        # Determine target user ID
-                        if target_user_id:
-                            mnemosyne_user_id = target_user_id
                         else:
-                            mnemosyne_user_id = self.map_openwebui_user_to_mnemosyne(
-                                conv["user_id"]
-                            )
-
-                        # Extract memories
-                        memories_count, memories = (
-                            self.extract_memories_from_conversation(
-                                conversation_text, mnemosyne_user_id, dry_run
-                            )
-                        )
-
-                        total_memories_extracted += memories_count
-
-                        # Update progress with lock (grouped related updates)
-                        with _progress_lock:
-                            progress.extracted_memories = total_memories_extracted
-                            progress.processed_conversations += 1
-
-                        conversation_details.append(
-                            {
-                                "conversation_id": conv["id"],
-                                "title": conv.get("title", "Untitled"),
-                                "user_messages_count": len(user_messages),
-                                "memories_extracted": memories_count,
-                                "mnemosyne_user_id": mnemosyne_user_id,
-                            }
-                        )
-
-                        logger.info(
-                            f"Processed conversation {conv['id']}: {memories_count} memories extracted"
-                        )
-
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to process conversation {conv['id']}: {e}"
-                        )
-                        failed_conversations += 1
-
-                        # Update failure counts with lock
-                        with _progress_lock:
-                            progress.failed_conversations = failed_conversations
-                            progress.processed_conversations += 1
+                            failed_conversations += 1
+                            with _progress_lock:
+                                progress.failed_conversations = failed_conversations
+                                progress.processed_conversations += 1
 
             # Mark as completed with lock
             with _progress_lock:

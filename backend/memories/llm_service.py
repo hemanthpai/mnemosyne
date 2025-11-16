@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional, Union  # Add Tuple import
 
@@ -92,6 +93,8 @@ class LLMService:
         self.session = requests.Session()
         self._settings = None
         self._settings_loaded = False
+        # SVC-P1-04 fix: Thread-safe settings loading
+        self._settings_lock = threading.RLock()
 
     def __del__(self):
         """
@@ -107,10 +110,15 @@ class LLMService:
 
     @property
     def settings(self):
-        """Lazy load settings when first accessed"""
-        if not self._settings_loaded:
-            self._load_settings()
-        return self._settings
+        """
+        Lazy load settings when first accessed.
+
+        Thread-safe: Uses lock to prevent race conditions during settings load.
+        """
+        with self._settings_lock:
+            if not self._settings_loaded:
+                self._load_settings()
+            return self._settings
 
     def _load_settings(self):
         """Load settings from database with proper error handling"""
@@ -149,9 +157,14 @@ class LLMService:
             self._settings_loaded = True
 
     def refresh_settings(self):
-        """Refresh settings from database"""
-        self._settings_loaded = False  # Force reload
-        self._load_settings()
+        """
+        Refresh settings from database.
+
+        Thread-safe: Uses lock to prevent race conditions.
+        """
+        with self._settings_lock:
+            self._settings_loaded = False  # Force reload
+            self._load_settings()
 
     def get_formatted_datetime(self):
         """Get current datetime with timezone"""

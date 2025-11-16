@@ -924,5 +924,124 @@ class ConfigurableCacheSizeTests(TestCase):
         self.assertLessEqual(len(service._cache_order), 3)
 
 
+class GlobalSingletonThreadSafetyTests(TestCase):
+    """Tests for SVC-P1-04: Global singleton thread safety"""
+
+    @patch('backend.memories.llm_service.LLMSettings')
+    def test_concurrent_settings_access(self, mock_llm_settings_class):
+        """Test that concurrent access to settings doesn't cause race conditions"""
+        from backend.memories.llm_service import LLMService
+
+        mock_settings = Mock()
+        mock_settings.extraction_provider_type = 'ollama'
+        mock_settings.extraction_model = 'test-model'
+        mock_settings.extraction_endpoint_url = 'http://localhost:11434'
+        mock_settings.extraction_timeout = 60
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        service = LLMService()
+        errors = []
+        results = []
+
+        def access_settings():
+            try:
+                for _ in range(10):
+                    settings = service.settings
+                    results.append(settings.extraction_model)
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads accessing settings
+        threads = [threading.Thread(target=access_settings) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors should occur
+        self.assertEqual(len(errors), 0, f"Thread safety errors: {errors}")
+
+        # All results should be identical
+        self.assertTrue(all(r == 'test-model' for r in results))
+
+        # Settings should only be loaded once despite concurrent access
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 1)
+
+    @patch('backend.memories.llm_service.LLMSettings')
+    def test_concurrent_refresh_settings(self, mock_llm_settings_class):
+        """Test that concurrent refresh_settings calls are thread-safe"""
+        from backend.memories.llm_service import LLMService
+
+        mock_settings = Mock()
+        mock_settings.extraction_provider_type = 'ollama'
+        mock_settings.extraction_model = 'test-model'
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        service = LLMService()
+
+        # Access settings once to initialize
+        _ = service.settings
+
+        errors = []
+
+        def refresh_and_access():
+            try:
+                for _ in range(5):
+                    service.refresh_settings()
+                    _ = service.settings
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads refreshing settings
+        threads = [threading.Thread(target=refresh_and_access) for _ in range(3)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors should occur
+        self.assertEqual(len(errors), 0, f"Thread safety errors during refresh: {errors}")
+
+    @patch('backend.memories.llm_service.LLMSettings')
+    def test_settings_loaded_flag_consistency(self, mock_llm_settings_class):
+        """Test that _settings_loaded flag remains consistent under concurrent load"""
+        from backend.memories.llm_service import LLMService
+
+        load_count = [0]
+
+        def mock_get_settings():
+            load_count[0] += 1
+            import time
+            time.sleep(0.01)  # Simulate slow DB query
+            mock_settings = Mock()
+            mock_settings.extraction_provider_type = 'ollama'
+            return mock_settings
+
+        mock_llm_settings_class.get_settings.side_effect = mock_get_settings
+
+        service = LLMService()
+        results = []
+
+        def access_settings():
+            for _ in range(3):
+                settings = service.settings
+                results.append(settings)
+
+        # Create threads that all try to access settings simultaneously
+        threads = [threading.Thread(target=access_settings) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Settings should only be loaded once, not 15 times
+        self.assertEqual(load_count[0], 1, "Settings should be loaded exactly once")
+
+
 if __name__ == '__main__':
     unittest.main()

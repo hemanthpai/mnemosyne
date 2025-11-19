@@ -2,12 +2,7 @@
 OpenWebUI History Importer
 
 This module handles importing historical conversations from Open WebUI's SQLite database
-and storing them as conversation turns.
-
-Features:
-- Parses conversations into individual turns (user + assistant pairs)
-- Stores using conversation_service.store_turn()
-- Automatic atomic note extraction and relationship building via background tasks
+and extracting memories from them using mnemosyne's existing extraction pipeline.
 """
 
 import json
@@ -20,14 +15,24 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import transaction
+from settings_app.models import LLMSettings
 
-from .conversation_service import conversation_service
-from .models import ConversationTurn
+# SVC-P2-01 fix: Move imports to top level (was inside loop-called function)
+from .llm_service import MEMORY_EXTRACTION_FORMAT, llm_service
+from .memory_search_service import memory_search_service
+from .models import Memory
 
 logger = logging.getLogger(__name__)
 
+# SVC-P2-14 fix: Extract namespace UUID as named constant
+# Standard DNS namespace UUID from RFC 4122
+UUID_NAMESPACE_DNS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
 # Thread lock for progress access
 _progress_lock = threading.Lock()
+
+# Dictionary to track multiple concurrent imports by import_id
+_import_progresses: Dict[str, 'ImportProgress'] = {}
 
 
 def _log_with_thread(message: str, level: str = 'info'):
@@ -42,7 +47,7 @@ class ImportProgress:
     def __init__(self):
         self.total_conversations = 0
         self.processed_conversations = 0
-        self.stored_turns = 0  # Track conversation turns
+        self.extracted_memories = 0
         self.failed_conversations = 0
         self.current_conversation_id = None
         self.status = "idle"  # idle, running, completed, failed, cancelled
@@ -61,8 +66,7 @@ class ImportProgress:
         return {
             "total_conversations": self.total_conversations,
             "processed_conversations": self.processed_conversations,
-            "stored_turns": self.stored_turns,  # Report turns
-            "extracted_memories": self.stored_turns,  # Backward compatibility
+            "extracted_memories": self.extracted_memories,
             "failed_conversations": self.failed_conversations,
             "current_conversation_id": self.current_conversation_id,
             "status": self.status,
@@ -79,10 +83,6 @@ class ImportProgress:
                 else 0
             ),
         }
-
-
-# Global progress tracker (in production, use Redis or database)
-_import_progress = ImportProgress()
 
 
 class OpenWebUIImporter:
@@ -104,9 +104,14 @@ class OpenWebUIImporter:
 
     def __enter__(self):
         """Context manager entry"""
-        self.conn = sqlite3.connect(str(self.db_path))
-        self.conn.row_factory = sqlite3.Row
-        return self
+        try:
+            self.conn = sqlite3.connect(str(self.db_path))
+            self.conn.row_factory = sqlite3.Row
+            return self
+        except sqlite3.Error as e:
+            error_msg = f"Failed to connect to SQLite database at {self.db_path}: {e}"
+            logger.error(error_msg)
+            raise ConnectionError(error_msg) from e
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
@@ -168,16 +173,24 @@ class OpenWebUIImporter:
 
         return conversations
 
-    def parse_chat_messages(self, chat_json: str) -> List[Dict[str, Any]]:
+    def extract_user_messages(self, chat_json: str) -> List[str]:
         """
-        Parse chat JSON into messages
+        Extract user messages from chat JSON
 
         Args:
             chat_json: JSON string containing chat messages
 
         Returns:
-            List of message dictionaries with 'role' and 'content'
+            List of user message contents
         """
+        # Set maximum JSON size to prevent memory exhaustion (10MB)
+        MAX_JSON_SIZE = 10 * 1024 * 1024  # 10 MB
+        if len(chat_json) > MAX_JSON_SIZE:
+            logger.warning(
+                f"Chat JSON too large ({len(chat_json)} bytes, max {MAX_JSON_SIZE}), skipping"
+            )
+            return []
+
         try:
             chat_data = json.loads(chat_json)
 
@@ -193,139 +206,148 @@ class OpenWebUIImporter:
             elif isinstance(chat_data, list):
                 messages = chat_data
 
-            # Extract and normalize messages
-            parsed_messages = []
+            # Extract user messages
+            user_messages = []
             for msg in messages:
-                if isinstance(msg, dict):
-                    role = msg.get("role", "")
+                if isinstance(msg, dict) and msg.get("role") == "user":
                     content = msg.get("content", "")
+                    if content and isinstance(content, str):
+                        user_messages.append(content.strip())
 
-                    if role in ["user", "assistant"] and content and isinstance(content, str):
-                        parsed_messages.append({
-                            "role": role,
-                            "content": content.strip()
-                        })
-
-            return parsed_messages
+            return user_messages
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Failed to parse chat JSON: {e}")
             return []
 
-    def create_conversation_turns(self, messages: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    def format_conversation_text(self, user_messages: List[str]) -> str:
         """
-        Create conversation turns from messages (user + assistant pairs)
+        Format user messages into conversation text for extraction
 
         Args:
-            messages: List of message dicts with 'role' and 'content'
+            user_messages: List of user message strings
 
         Returns:
-            List of (user_message, assistant_message) tuples
+            Formatted conversation text
         """
-        turns = []
-        i = 0
+        if not user_messages:
+            return ""
 
-        while i < len(messages):
-            # Look for user message
-            if messages[i]["role"] == "user":
-                user_msg = messages[i]["content"]
+        # Join messages with clear separation
+        conversation_parts = [f"User: {msg}" for msg in user_messages]
+        return "\n\n".join(conversation_parts)
 
-                # Look for next assistant message
-                assistant_msg = ""
-                if i + 1 < len(messages) and messages[i + 1]["role"] == "assistant":
-                    assistant_msg = messages[i + 1]["content"]
-                    i += 2  # Skip both user and assistant
-                else:
-                    # User message without assistant response (skip it)
-                    i += 1
-                    continue
-
-                # Only add complete turns (both user and assistant)
-                if user_msg and assistant_msg:
-                    turns.append((user_msg, assistant_msg))
-            else:
-                # Skip orphaned assistant messages
-                i += 1
-
-        return turns
-
-    def store_conversation_turns(
-        self, turns: List[Tuple[str, str]], mnemosyne_user_id: str,
-        session_id: str, dry_run: bool = False
+    def extract_memories_from_conversation(
+        self, conversation_text: str, mnemosyne_user_id: str, dry_run: bool = False
     ) -> Tuple[int, List[Dict[str, Any]]]:
         """
-        Store conversation turns
-
-        Stores turns as ConversationTurn objects, which automatically:
-        - Generate embeddings
-        - Cache in working memory
-        - Schedule background extraction of atomic notes
-        - Schedule relationship building
+        Extract memories from conversation using existing extraction pipeline
 
         Args:
-            turns: List of (user_message, assistant_message) tuples
+            conversation_text: Formatted conversation text
             mnemosyne_user_id: Mnemosyne user ID (UUID)
-            session_id: Session identifier for this conversation
-            dry_run: If True, don't actually store turns
+            dry_run: If True, don't actually store memories
 
         Returns:
-            Tuple of (turns_stored_count, stored_turn_details_list)
+            Tuple of (memories_extracted_count, extracted_memories_list)
         """
-        if not turns:
+        # Maximum conversation length (consistent with ExtractMemoriesView limit)
+        MAX_CONVERSATION_LENGTH = 50000
+
+        if not conversation_text or len(conversation_text.strip()) < 10:
             return 0, []
 
+        # Enforce maximum length with truncation
+        was_truncated = False
+        if len(conversation_text) > MAX_CONVERSATION_LENGTH:
+            was_truncated = True
+            truncated_chars = len(conversation_text) - MAX_CONVERSATION_LENGTH
+            logger.warning(
+                f"Conversation text too long ({len(conversation_text)} chars), truncating {truncated_chars} chars. "
+                f"This may result in incomplete memory extraction. Consider processing in smaller batches."
+            )
+            conversation_text = conversation_text[:MAX_CONVERSATION_LENGTH]
+
         try:
-            stored_turns = []
+            # Use the existing LLM service to extract memories
+            # SVC-P2-01 fix: Import moved to top level
+            # SVC-P2-12 fix: Add error handling for settings access
+            try:
+                settings = LLMSettings.get_settings()
+                system_prompt = settings.memory_extraction_prompt
+            except Exception as e:
+                logger.warning("Failed to load LLM settings for memory extraction: %s. Using default prompt.", e)
+                system_prompt = "Extract meaningful facts, preferences, and information from the conversation."
 
-            for user_msg, assistant_msg in turns:
-                # Truncate if needed
-                MAX_MESSAGE_LENGTH = 10000
-                if len(user_msg) > MAX_MESSAGE_LENGTH:
-                    logger.warning(f"User message too long ({len(user_msg)} chars), truncating")
-                    user_msg = user_msg[:MAX_MESSAGE_LENGTH]
+            # Add timestamp for context
+            now = datetime.now()
+            system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
 
-                if len(assistant_msg) > MAX_MESSAGE_LENGTH:
-                    logger.warning(f"Assistant message too long ({len(assistant_msg)} chars), truncating")
-                    assistant_msg = assistant_msg[:MAX_MESSAGE_LENGTH]
+            # Query LLM for memory extraction
+            # SVC-P2-01 fix: Import moved to top level
+            llm_result = llm_service.query_llm(
+                system_prompt=system_prompt_with_date,
+                prompt=conversation_text,
+                response_format=MEMORY_EXTRACTION_FORMAT,
+                max_tokens=16384,
+            )
+
+            if not llm_result["success"]:
+                logger.error(
+                    f"LLM extraction failed: {llm_result.get('error', 'Unknown error')}"
+                )
+                return 0, []
+
+            # Parse extraction results
+            try:
+                memories_data = json.loads(llm_result["response"].strip())
+                if not isinstance(memories_data, list):
+                    logger.error("LLM response is not a list")
+                    return 0, []
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse LLM response: {e}")
+                return 0, []
+
+            # Store memories
+            stored_memories = []
+            for memory_data in memories_data:
+                if not isinstance(memory_data, dict):
+                    continue
+
+                content = memory_data.get("content", "")
+                if not content:
+                    continue
+
+                # Prepare metadata with historical import tag
+                metadata = {
+                    "tags": memory_data.get("tags", []),
+                    "extraction_source": "openwebui_historical_import",
+                    "model_used": llm_result.get("model", "unknown"),
+                    "import_date": datetime.now().isoformat(),
+                }
 
                 if dry_run:
                     # Don't actually store, just return what would be stored
-                    stored_turns.append({
-                        "user_message": user_msg,
-                        "assistant_message": assistant_msg,
-                        "session_id": session_id,
-                        "dry_run": True
-                    })
+                    stored_memories.append(
+                        {"content": content, "metadata": metadata}
+                    )
                 else:
-                    # Store using conversation_service
-                    # This will automatically:
-                    # 1. Generate embeddings
-                    # 2. Cache in working memory
-                    # 3. Schedule extraction task (immediate via Django-Q)
-                    # 4. Extraction will schedule relationship building
-                    turn = conversation_service.store_turn(
-                        user_id=mnemosyne_user_id,
-                        session_id=session_id,
-                        user_message=user_msg,
-                        assistant_message=assistant_msg
+                    # Store using existing service
+                    memory = memory_search_service.store_memory_with_embedding(
+                        content=content, user_id=mnemosyne_user_id, metadata=metadata
+                    )
+                    stored_memories.append(
+                        {
+                            "id": str(memory.id),
+                            "content": memory.content,
+                            "metadata": memory.metadata,
+                        }
                     )
 
-                    stored_turns.append({
-                        "id": str(turn.id),
-                        "turn_number": turn.turn_number,
-                        "user_message": user_msg[:100] + "..." if len(user_msg) > 100 else user_msg,
-                        "assistant_message": assistant_msg[:100] + "..." if len(assistant_msg) > 100 else assistant_msg,
-                        "session_id": session_id,
-                        "extracted": turn.extracted
-                    })
-
-                    logger.debug(f"Stored turn {turn.turn_number} for session {session_id}")
-
-            logger.info(f"Stored {len(stored_turns)} turns for user {mnemosyne_user_id}")
-            return len(stored_turns), stored_turns
+            return len(stored_memories), stored_memories
 
         except Exception as e:
-            logger.error(f"Unexpected error storing conversation turns: {e}", exc_info=True)
+            logger.error(f"Unexpected error during memory extraction: {e}")
             return 0, []
 
     def map_openwebui_user_to_mnemosyne(
@@ -348,12 +370,13 @@ class OpenWebUIImporter:
             uuid.UUID(openwebui_user_id)
             return openwebui_user_id
         except ValueError:
-            # Generate deterministic UUID from user ID
-            namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # DNS namespace
-            return str(uuid.uuid5(namespace, openwebui_user_id))
+            # Generate deterministic UUID from user ID using DNS namespace
+            # SVC-P2-14 fix: Use named constant instead of hardcoded UUID
+            return str(uuid.uuid5(UUID_NAMESPACE_DNS, openwebui_user_id))
 
     def import_conversations(
         self,
+        import_id: str,
         target_user_id: Optional[str] = None,
         openwebui_user_id: Optional[str] = None,
         after_date: Optional[datetime] = None,
@@ -365,6 +388,7 @@ class OpenWebUIImporter:
         Import conversations and extract memories
 
         Args:
+            import_id: Unique identifier for this import session
             target_user_id: Mnemosyne user ID to assign all imported memories to
             openwebui_user_id: Filter by specific Open WebUI user
             after_date: Only import conversations after this date
@@ -375,7 +399,11 @@ class OpenWebUIImporter:
         Returns:
             Import statistics dictionary
         """
-        global _import_progress
+        # Get or create progress tracker for this import_id
+        with _progress_lock:
+            if import_id not in _import_progresses:
+                _import_progresses[import_id] = ImportProgress()
+            progress = _import_progresses[import_id]
 
         try:
             # Get conversations first (before touching global state)
@@ -386,181 +414,197 @@ class OpenWebUIImporter:
             # Update only the fields that weren't set by the view
             # DO NOT reset start_time, dry_run, or counters - they were already initialized
             with _progress_lock:
-                _import_progress.status = "running"
+                progress.status = "running"
                 # Keep the start_time from view initialization - don't reset it
-                # _import_progress.start_time is already set by the view
-                _import_progress.total_conversations = len(conversations)
+                # progress.start_time is already set by the view
+                progress.total_conversations = len(conversations)
                 # Keep counters at 0 (already set by view) - don't reset
                 # processed_conversations, extracted_memories, failed_conversations already 0
                 _log_with_thread(
-                    f"Found {len(conversations)} conversations to process (dry_run={dry_run}), Progress ID: {id(_import_progress)}", 'info'
+                    f"Found {len(conversations)} conversations to process (dry_run={dry_run}), Import ID: {import_id}", 'info'
                 )
 
             total_memories_extracted = 0
             failed_conversations = 0
             conversation_details = []
 
+            # SVC-P2-13 fix: Process conversations concurrently for better performance
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
             # Process in batches
             for i in range(0, len(conversations), batch_size):
-                # Check for cancellation at batch level (with lock)
+                # Check for cancellation at batch level (atomic check-and-act within lock)
                 with _progress_lock:
-                    current_status = _import_progress.status
-
-                logger.debug(f"Batch {i}: Checking cancellation, status={current_status}, ID={id(_import_progress)}")
-                if current_status == "cancelled":
-                    _log_with_thread("Import cancelled by user (batch level)", 'info')
-                    with _progress_lock:
-                        _import_progress.end_time = datetime.now()
-                    return {
-                        "success": False,
-                        "error": "Import cancelled by user",
-                        "total_conversations": len(conversations),
-                        "processed_conversations": _import_progress.processed_conversations,
-                        "total_memories_extracted": total_memories_extracted,
-                        "failed_conversations": failed_conversations,
-                    }
-
-                batch = conversations[i : i + batch_size]
-
-                for conv in batch:
-                    # Check if import was cancelled (with lock)
-                    with _progress_lock:
-                        current_status = _import_progress.status
-
-                    logger.debug(f"Conv {conv['id']}: Checking cancellation, status={current_status}")
-                    if current_status == "cancelled":
-                        _log_with_thread("Import cancelled by user (conversation level)", 'info')
-                        with _progress_lock:
-                            _import_progress.end_time = datetime.now()
+                    logger.debug(f"Batch {i}: Checking cancellation, status={progress.status}, Import ID: {import_id}")
+                    if progress.status == "cancelled":
+                        _log_with_thread("Import cancelled by user (batch level)", 'info')
+                        progress.end_time = datetime.now()
+                        # Build return dict while holding lock to ensure consistent snapshot
                         return {
                             "success": False,
                             "error": "Import cancelled by user",
                             "total_conversations": len(conversations),
-                            "processed_conversations": _import_progress.processed_conversations,
+                            "processed_conversations": progress.processed_conversations,
                             "total_memories_extracted": total_memories_extracted,
                             "failed_conversations": failed_conversations,
                         }
 
+                batch = conversations[i : i + batch_size]
+
+                # SVC-P2-13 fix: Process batch conversations concurrently
+                # Define worker function for concurrent processing
+                def process_conversation(conv):
+                    """Process a single conversation and return results"""
+                    # Check if import was cancelled
                     with _progress_lock:
-                        _import_progress.current_conversation_id = conv["id"]
+                        logger.debug(f"Conv {conv['id']}: Checking cancellation, status={progress.status}")
+                        if progress.status == "cancelled":
+                            return {"cancelled": True, "conv_id": conv["id"]}
+                        # Set current conversation while we have the lock
+                        progress.current_conversation_id = conv["id"]
 
                     try:
-                        # Parse chat into messages
-                        messages = self.parse_chat_messages(conv["chat"])
+                        # Extract user messages
+                        user_messages = self.extract_user_messages(conv["chat"])
 
-                        if not messages:
-                            logger.debug(
-                                f"No messages in conversation {conv['id']}"
-                            )
-                            with _progress_lock:
-                                _import_progress.processed_conversations += 1
-                            continue
+                        if not user_messages:
+                            logger.debug(f"No user messages in conversation {conv['id']}")
+                            return {"success": True, "conv_id": conv["id"], "memories_count": 0, "skipped": True}
 
-                        # Create conversation turns (user + assistant pairs)
-                        turns = self.create_conversation_turns(messages)
-
-                        if not turns:
-                            logger.debug(
-                                f"No complete turns in conversation {conv['id']}"
-                            )
-                            with _progress_lock:
-                                _import_progress.processed_conversations += 1
-                            continue
+                        # Format conversation
+                        conversation_text = self.format_conversation_text(user_messages)
 
                         # Determine target user ID
                         if target_user_id:
                             mnemosyne_user_id = target_user_id
                         else:
-                            mnemosyne_user_id = self.map_openwebui_user_to_mnemosyne(
-                                conv["user_id"]
-                            )
+                            mnemosyne_user_id = self.map_openwebui_user_to_mnemosyne(conv["user_id"])
 
-                        # Generate session ID for this conversation
-                        # Use OpenWebUI conversation ID as session ID
-                        session_id = f"openwebui-import-{conv['id']}"
-
-                        # Store conversation turns
-                        # This will automatically trigger extraction and relationship building
-                        turns_count, stored_turns = self.store_conversation_turns(
-                            turns, mnemosyne_user_id, session_id, dry_run
+                        # Extract memories
+                        memories_count, memories = self.extract_memories_from_conversation(
+                            conversation_text, mnemosyne_user_id, dry_run
                         )
 
-                        total_memories_extracted += turns_count
+                        logger.info(f"Processed conversation {conv['id']}: {memories_count} memories extracted")
 
-                        # Update progress with lock (grouped related updates)
-                        with _progress_lock:
-                            _import_progress.stored_turns = total_memories_extracted
-                            _import_progress.processed_conversations += 1
-
-                        conversation_details.append(
-                            {
+                        return {
+                            "success": True,
+                            "conv_id": conv["id"],
+                            "memories_count": memories_count,
+                            "detail": {
                                 "conversation_id": conv["id"],
                                 "title": conv.get("title", "Untitled"),
-                                "turns_count": len(turns),
-                                "turns_stored": turns_count,
+                                "user_messages_count": len(user_messages),
+                                "memories_extracted": memories_count,
                                 "mnemosyne_user_id": mnemosyne_user_id,
-                                "session_id": session_id
                             }
-                        )
-
-                        logger.info(
-                            f"Processed conversation {conv['id']}: {turns_count} turns stored"
-                        )
+                        }
 
                     except Exception as e:
-                        logger.error(
-                            f"Failed to process conversation {conv['id']}: {e}"
-                        )
-                        failed_conversations += 1
+                        logger.error(f"Failed to process conversation {conv['id']}: {e}")
+                        return {"success": False, "conv_id": conv["id"], "error": str(e)}
 
-                        # Update failure counts with lock
-                        with _progress_lock:
-                            _import_progress.failed_conversations = failed_conversations
-                            _import_progress.processed_conversations += 1
+                # Process conversations in batch concurrently (limit to 3 workers to avoid overwhelming LLM)
+                max_workers = min(len(batch), 3)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(process_conversation, conv): conv for conv in batch}
+
+                    for future in as_completed(futures):
+                        result = future.result()
+
+                        # Handle cancellation
+                        if result.get("cancelled"):
+                            _log_with_thread("Import cancelled by user (conversation level)", 'info')
+                            with _progress_lock:
+                                progress.end_time = datetime.now()
+                            return {
+                                "success": False,
+                                "error": "Import cancelled by user",
+                                "total_conversations": len(conversations),
+                                "processed_conversations": progress.processed_conversations,
+                                "total_memories_extracted": total_memories_extracted,
+                                "failed_conversations": failed_conversations,
+                            }
+
+                        # Update counters based on result
+                        if result.get("success"):
+                            if not result.get("skipped"):
+                                total_memories_extracted += result["memories_count"]
+                                if "detail" in result:
+                                    conversation_details.append(result["detail"])
+
+                            with _progress_lock:
+                                progress.extracted_memories = total_memories_extracted
+                                progress.processed_conversations += 1
+                        else:
+                            failed_conversations += 1
+                            with _progress_lock:
+                                progress.failed_conversations = failed_conversations
+                                progress.processed_conversations += 1
 
             # Mark as completed with lock
             with _progress_lock:
-                _import_progress.status = "completed"
-                _import_progress.end_time = datetime.now()
+                progress.status = "completed"
+                progress.end_time = datetime.now()
 
             return {
                 "success": True,
                 "total_conversations": len(conversations),
-                "processed_conversations": _import_progress.processed_conversations,
-                "total_turns_stored": total_memories_extracted,  # Turns stored
-                "total_memories_extracted": total_memories_extracted,  # Backward compatibility
+                "processed_conversations": progress.processed_conversations,
+                "total_memories_extracted": total_memories_extracted,
                 "failed_conversations": failed_conversations,
                 "dry_run": dry_run,
                 "conversation_details": conversation_details,
                 "elapsed_seconds": (
-                    _import_progress.end_time - _import_progress.start_time
+                    progress.end_time - progress.start_time
                 ).total_seconds(),
             }
 
         except Exception as e:
             # Mark as failed with lock
             with _progress_lock:
-                _import_progress.status = "failed"
-                _import_progress.error_message = str(e)
-                _import_progress.end_time = datetime.now()
+                progress.status = "failed"
+                progress.error_message = str(e)
+                progress.end_time = datetime.now()
             logger.error(f"Import failed: {e}")
             raise
 
     @staticmethod
-    def get_progress() -> Dict[str, Any]:
-        """Get current import progress"""
+    def get_progress(import_id: str) -> Dict[str, Any]:
+        """
+        Get import progress for a specific import session
+
+        Args:
+            import_id: Unique identifier for the import session
+
+        Returns:
+            Progress dictionary or empty dict if import_id not found
+        """
         with _progress_lock:
-            return _import_progress.to_dict()
+            if import_id in _import_progresses:
+                return _import_progresses[import_id].to_dict()
+            else:
+                return {"error": "Import session not found"}
 
     @staticmethod
-    def cancel_import():
-        """Cancel ongoing import (sets status flag)"""
-        global _import_progress
+    def cancel_import(import_id: str):
+        """
+        Cancel ongoing import (sets status flag)
+
+        Args:
+            import_id: Unique identifier for the import session to cancel
+        """
         with _progress_lock:
-            logger.info(f"Cancel requested. Current status: {_import_progress.status}, ID: {id(_import_progress)}, Total convs: {_import_progress.total_conversations}, Processed: {_import_progress.processed_conversations}")
-            if _import_progress.status == "running":
-                _import_progress.status = "cancelled"
+            if import_id not in _import_progresses:
+                logger.warning(f"Cannot cancel - import_id '{import_id}' not found")
+                return
+
+            progress = _import_progresses[import_id]
+            logger.info(f"Cancel requested for import {import_id}. Current status: {progress.status}, Total convs: {progress.total_conversations}, Processed: {progress.processed_conversations}")
+
+            if progress.status == "running":
+                progress.status = "cancelled"
                 # Don't set end_time here - let the import loop set it when it exits
-                logger.info(f"Import status set to cancelled. ID: {id(_import_progress)}")
+                logger.info(f"Import {import_id} status set to cancelled")
             else:
-                logger.warning(f"Cannot cancel - status is '{_import_progress.status}'. Import may have already completed or not started.")
+                logger.warning(f"Cannot cancel import {import_id} - status is '{progress.status}'. Import may have already completed or not started.")

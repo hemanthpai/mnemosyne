@@ -1,308 +1,836 @@
 import logging
-import math
-from typing import List, Dict, Any
+import os
+import threading
+import time
+from typing import Any, Dict, List, Optional, Union  # Add Tuple import
 
 import requests
-from django.conf import settings
+from django.utils import timezone
+
+from .token_utils import TokenCounter  # Add this import
 
 logger = logging.getLogger(__name__)
 
+# SVC-P2-04 fix: Extract timeout as named constant
+DEFAULT_REQUEST_TIMEOUT = 60  # Default timeout for LLM API requests in seconds
 
-def normalize_vector(vector: List[float]) -> List[float]:
-    """Normalize a vector to unit length for cosine similarity"""
-    magnitude = math.sqrt(sum(x * x for x in vector))
-    if magnitude == 0:
-        return vector
-    return [x / magnitude for x in vector]
+# SVC-P2-08 fix: Extract magic numbers as named constants
+LOG_CONTENT_TRUNCATE_LENGTH = 500  # Truncate log content for readability
+TOKEN_SAFETY_MARGIN = 512  # Extra token margin for response generation
+
+# Define format schemas - optimized for efficiency
+MEMORY_EXTRACTION_FORMAT = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string"},
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["content", "tags"],
+    },
+}
+
+MEMORY_SEARCH_FORMAT = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "search_query": {"type": "string"},
+            "search_type": {
+                "type": "string",
+                "enum": [
+                    "direct",
+                    "semantic",
+                    "experiential",
+                    "contextual",
+                    "interest",
+                ],
+            },
+        },
+        "required": ["search_query", "search_type"],
+    },
+}
+
+SEMANTIC_CONNECTION_FORMAT = {
+    "type": "object",
+    "properties": {
+        "has_connections": {"type": "boolean"},
+        "additional_searches": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "search_query": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["search_query", "rationale", "confidence"],
+            },
+        },
+        "reasoning": {"type": "string"},
+    },
+    "required": ["has_connections", "additional_searches", "reasoning"],
+}
+
+MEMORY_SUMMARY_FORMAT = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "relevant_count": {"type": "integer"},
+        "total_provided": {"type": "integer"},
+        "key_insights": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    },
+    "required": ["summary", "relevant_count", "total_provided", "key_insights"],
+}
 
 
 class LLMService:
-    """Service for LLM operations: embeddings and text generation"""
+    """
+    Service class for making calls to LLM and embedding APIs
+    """
 
     def __init__(self):
         self.session = requests.Session()
+        self._settings = None
+        self._settings_loaded = False
+        # SVC-P1-04 fix: Thread-safe settings loading
+        self._settings_lock = threading.RLock()
 
-    def _get_generation_config(self) -> Dict[str, Any]:
+    def __del__(self):
         """
-        Get generation configuration from Settings (with environment fallback)
-
-        Returns:
-            Dict with generation configuration
+        Cleanup method to properly close the requests session.
+        Prevents resource leaks in long-running processes.
         """
         try:
-            from .settings_model import Settings
-            db_settings = Settings.get_settings()
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+        except Exception:
+            # Silently ignore errors during cleanup
+            pass
 
-            return {
-                'provider': db_settings.generation_provider or db_settings.embeddings_provider,
-                'endpoint_url': db_settings.generation_endpoint_url or db_settings.embeddings_endpoint_url,
-                'model': db_settings.generation_model or db_settings.embeddings_model,
-                'api_key': db_settings.generation_api_key or db_settings.embeddings_api_key,
-                'temperature': db_settings.generation_temperature,
-                'max_tokens': db_settings.generation_max_tokens,
-                'timeout': db_settings.generation_timeout,
-                'top_p': db_settings.generation_top_p,
-                'top_k': db_settings.generation_top_k,
-                'min_p': db_settings.generation_min_p,
-            }
-        except Exception as e:
-            # Fallback to environment variables
-            logger.warning(f"Failed to get Settings from database, using environment: {e}")
-            return {
-                'provider': settings.EMBEDDINGS_PROVIDER,
-                'endpoint_url': settings.EMBEDDINGS_ENDPOINT_URL,
-                'model': getattr(settings, 'GENERATION_MODEL', settings.EMBEDDINGS_MODEL),
-                'api_key': settings.EMBEDDINGS_API_KEY,
-                'temperature': 0.3,
-                'max_tokens': 1000,
-                'timeout': settings.EMBEDDINGS_TIMEOUT * 2,
-                'top_p': 0.8,
-                'top_k': 20,
-                'min_p': 0.0,
-            }
-
-    def generate_text(
-        self,
-        prompt: str,
-        temperature: float = None,
-        max_tokens: int = None
-    ) -> Dict[str, Any]:
+    @property
+    def settings(self):
         """
-        Generate text using LLM (for extraction, analysis, etc.)
+        Lazy load settings when first accessed.
+
+        Thread-safe: Uses lock to prevent race conditions during settings load.
+        """
+        with self._settings_lock:
+            if not self._settings_loaded:
+                self._load_settings()
+            return self._settings
+
+    def _load_settings(self):
+        """Load settings from database with proper error handling"""
+        try:
+            from django.db import connection
+
+            # Check if we can connect to database
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+
+            # Check if the table exists
+            from django.db import transaction
+
+            with transaction.atomic():
+                from settings_app.models import LLMSettings
+
+                self._settings = LLMSettings.get_settings()
+                self._settings_loaded = True
+                logger.info("LLM settings loaded from database")
+
+        except Exception as e:
+            logger.warning("Could not load LLM settings from database: %s", e)
+            logger.info("Using environment variables and defaults")
+
+            # Create a fallback settings object from environment variables
+            from types import SimpleNamespace
+
+            # SVC-P2-09 fix: Use safe type conversions for environment variables
+            self._settings = SimpleNamespace(
+                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                model=os.getenv("LLM_MODEL", "llama3.1:8b"),
+                embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
+                temperature=self._safe_float(os.getenv("LLM_TEMPERATURE", "0.7"), 0.7, "LLM_TEMPERATURE"),
+                max_tokens=self._safe_int(os.getenv("LLM_MAX_TOKENS", "4000"), 4000, "LLM_MAX_TOKENS"),
+                timeout=self._safe_int(os.getenv("LLM_TIMEOUT", "120"), 120, "LLM_TIMEOUT"),
+            )
+            self._settings_loaded = True
+
+    def refresh_settings(self):
+        """
+        Refresh settings from database.
+
+        Thread-safe: Uses lock to prevent race conditions.
+        """
+        with self._settings_lock:
+            self._settings_loaded = False  # Force reload
+            self._load_settings()
+
+    def _safe_int(self, value: Any, default: int, name: str) -> int:
+        """
+        Safely convert value to int with error handling.
+
+        SVC-P2-09 fix: Helper method for safe type conversion.
 
         Args:
-            prompt: The prompt to send to the LLM
-            temperature: Sampling temperature (0.0-1.0), uses config default if None
-            max_tokens: Maximum tokens to generate, uses config default if None
+            value: Value to convert
+            default: Default value if conversion fails
+            name: Name of the setting (for logging)
 
         Returns:
-            Dict with 'success', 'text' (generated text), 'error' (if failed)
+            Converted int or default value
         """
         try:
-            config = self._get_generation_config()
-            provider = config['provider'].lower()
+            return int(value)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning("Invalid %s setting: %s. Using default %d", name, e, default)
+            return default
 
-            # Use config defaults if not provided
-            if temperature is None:
-                temperature = config['temperature']
-            if max_tokens is None:
-                max_tokens = config['max_tokens']
-
-            if provider == "ollama":
-                return self._generate_text_ollama(prompt, temperature, max_tokens, config)
-            elif provider in ["openai", "openai_compatible"]:
-                return self._generate_text_openai(prompt, temperature, max_tokens, config)
-            else:
-                return {
-                    "success": False,
-                    "error": f"Unsupported provider: {provider}"
-                }
-
-        except Exception as e:
-            logger.error(f"Failed to generate text: {e}")
-            return {"success": False, "error": str(e)}
-
-    def _generate_text_ollama(
-        self,
-        prompt: str,
-        temperature: float,
-        max_tokens: int,
-        config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Generate text using Ollama with JSON mode for structured output"""
-        endpoint = f"{config['endpoint_url']}/api/generate"
-        model = config['model']
-
-        try:
-            options = {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "top_p": config['top_p'],
-                "top_k": config['top_k'],
-            }
-            # Only add min_p if it's non-zero (Ollama may not support it on all models)
-            if config['min_p'] > 0.0:
-                options["min_p"] = config['min_p']
-
-            response = self.session.post(
-                endpoint,
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",  # Enable JSON mode for constrained generation
-                    "options": options
-                },
-                timeout=config['timeout']
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            return {
-                "success": True,
-                "text": data["response"],
-                "model": model
-            }
-
-        except Exception as e:
-            logger.error(f"Ollama text generation failed: {e}")
-            return {"success": False, "error": str(e)}
-
-    def _generate_text_openai(
-        self,
-        prompt: str,
-        temperature: float,
-        max_tokens: int,
-        config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Generate text using OpenAI or compatible API with JSON mode"""
-        endpoint = f"{config['endpoint_url']}/v1/chat/completions"
-        model = config['model']
-
-        headers = {}
-        if config['api_key']:
-            headers["Authorization"] = f"Bearer {config['api_key']}"
-
-        try:
-            # Note: response_format removed for compatibility
-            # The prompt already requests JSON format
-            request_body = {
-                "model": model,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "top_p": config['top_p'],
-            }
-            # OpenAI-compatible APIs may support additional parameters
-            # Only add min_p if non-zero (not standard OpenAI, but some compatible APIs support it)
-            if config['min_p'] > 0.0:
-                request_body["min_p"] = config['min_p']
-
-            response = self.session.post(
-                endpoint,
-                json=request_body,
-                headers=headers,
-                timeout=config['timeout']
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            return {
-                "success": True,
-                "text": data["choices"][0]["message"]["content"],
-                "model": data.get("model", model)
-            }
-
-        except requests.exceptions.HTTPError as e:
-            error_detail = ""
-            try:
-                error_detail = e.response.json() if e.response else {}
-            except:
-                error_detail = e.response.text if e.response else ""
-            logger.error(f"OpenAI text generation failed: {e}. Response: {error_detail}")
-            return {"success": False, "error": f"{str(e)}. Response: {error_detail}"}
-        except Exception as e:
-            logger.error(f"OpenAI text generation failed: {e}")
-            return {"success": False, "error": str(e)}
-
-    def get_embeddings(self, texts: List[str]) -> Dict[str, Any]:
+    def _safe_float(self, value: Any, default: float, name: str) -> float:
         """
-        Generate embeddings for a list of texts
+        Safely convert value to float with error handling.
+
+        SVC-P2-09 fix: Helper method for safe type conversion.
 
         Args:
-            texts: List of text strings to embed
+            value: Value to convert
+            default: Default value if conversion fails
+            name: Name of the setting (for logging)
 
         Returns:
-            Dict with 'success', 'embeddings' (list of vectors), 'error' (if failed)
+            Converted float or default value
         """
-        if not texts:
-            return {"success": False, "error": "No texts provided"}
-
         try:
-            provider = settings.EMBEDDINGS_PROVIDER.lower()
+            return float(value)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning("Invalid %s setting: %s. Using default %.2f", name, e, default)
+            return default
 
-            if provider == "ollama":
-                return self._get_embeddings_ollama(texts)
-            elif provider in ["openai", "openai_compatible"]:
-                return self._get_embeddings_openai(texts)
-            else:
-                return {
-                    "success": False,
-                    "error": f"Unsupported provider: {provider}"
-                }
+    def get_formatted_datetime(self):
+        """Get current datetime with timezone"""
+        return timezone.now()
 
-        except Exception as e:
-            logger.error(f"Failed to generate embeddings: {e}")
-            return {"success": False, "error": str(e)}
+    def query_llm(
+        self,
+        prompt: str,
+        user_input: str = "",
+        system_prompt: str = "",
+        response_format: Union[str, Dict[str, Any], None] = None,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        temperature: Optional[float] = None,  # Make optional
+        max_tokens: Optional[int] = None,  # Make optional
+    ) -> Dict[str, Any]:
+        """Query LLM with settings from database"""
+        if not self.settings:
+            return {
+                "success": False,
+                "error": "LLM settings not loaded",
+                "response": "",
+                "model": "unknown",
+            }
 
-    def _get_embeddings_ollama(self, texts: List[str]) -> Dict[str, Any]:
-        """Get embeddings from Ollama"""
-        endpoint = f"{settings.EMBEDDINGS_ENDPOINT_URL}/api/embeddings"
-
-        embeddings = []
-        for text in texts:
+        # Use settings values if not provided
+        # SVC-P2-09 fix: Add error handling for type conversions
+        if temperature is None or not isinstance(temperature, (float, int)):
             try:
+                temperature = float(self.settings.llm_temperature)
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning("Invalid temperature setting: %s. Using default 0.7", e)
+                temperature = 0.7
+
+        if max_tokens is None or not isinstance(max_tokens, int):
+            try:
+                max_tokens = int(self.settings.llm_max_tokens)
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning("Invalid max_tokens setting: %s. Using default 4000", e)
+                max_tokens = 4000
+
+        provider_type = self.settings.extraction_provider_type
+        model = self.settings.extraction_model
+        api_url = self.settings.extraction_endpoint_url
+
+        logger.info(
+            "LLM Query: Provider=%s, Model=%s, URL=%s", provider_type, model, api_url
+        )
+
+        # Construct full prompt
+        full_prompt = prompt
+        if user_input:
+            full_prompt = f"User Input: {user_input}\n\nTask: {prompt}"
+
+        # Add current datetime to system prompt for time awareness
+        system_prompt_with_date = system_prompt
+        try:
+            now = self.get_formatted_datetime()
+            tzname = now.tzname() or "UTC"
+            system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')} {tzname}"
+        except Exception as e:
+            logger.warning("Could not add date to system prompt: %s", e)
+
+        headers = {"Content-Type": "application/json"}
+
+        # Add API key if needed (for OpenAI-compatible APIs)
+        if provider_type == "openai_compatible":
+            if (
+                hasattr(self.settings, "extraction_endpoint_api_key")
+                and self.settings.extraction_endpoint_api_key
+            ):
+                headers["Authorization"] = (
+                    f"Bearer {self.settings.extraction_endpoint_api_key}"
+                )
+
+        for attempt in range(max_retries + 1):
+            logger.debug("LLM query attempt %d/%d", attempt + 1, max_retries + 1)
+
+            try:
+                # Prepare request data based on provider type
+                if provider_type == "ollama":
+                    data = self._prepare_ollama_request(
+                        model,
+                        system_prompt_with_date,
+                        full_prompt,
+                        temperature,
+                        max_tokens,
+                        response_format,  # Pass response_format instead of force_json
+                    )
+                    endpoint = f"{api_url.rstrip('/')}/api/chat"
+                elif provider_type in ["openai", "openai_compatible"]:
+                    data = self._prepare_openai_request(
+                        model,
+                        system_prompt_with_date,
+                        full_prompt,
+                        temperature,
+                        max_tokens,
+                        response_format,  # Pass response_format instead of force_json
+                    )
+                    endpoint = f"{api_url.rstrip('/')}/v1/chat/completions"
+                else:
+                    error_msg = f"Unsupported provider type: {provider_type}"
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "response": "",
+                        "model": model,
+                    }
+
+                logger.info(
+                    "Making API request to %s (attempt %d/%d)",
+                    endpoint,
+                    attempt + 1,
+                    max_retries + 1,
+                )
+
+                # Log request data for debugging (sanitize sensitive information)
+                import json
+                import copy
+                log_data = copy.deepcopy(data)
+                # Sanitize API keys and sensitive data from log output
+                if 'messages' in log_data:
+                    for msg in log_data['messages']:
+                        if isinstance(msg, dict) and 'content' in msg:
+                            # Truncate long content for readability
+                            content = msg['content']
+                            if isinstance(content, str) and len(content) > LOG_CONTENT_TRUNCATE_LENGTH:
+                                msg['content'] = content[:LOG_CONTENT_TRUNCATE_LENGTH] + f"... ({len(content)} chars total)"
+                logger.debug("Request data: %s", json.dumps(log_data, indent=2))
+
+                # Make the API call using the persistent session
                 response = self.session.post(
                     endpoint,
-                    json={
-                        "model": settings.EMBEDDINGS_MODEL,
-                        "prompt": text,
-                    },
-                    timeout=settings.EMBEDDINGS_TIMEOUT,
+                    json=data,
+                    headers=headers,
+                    timeout=self.settings.extraction_timeout,
+                )
+
+                logger.info("API response status: %s", response.status_code)
+
+                if response.status_code == 200:
+                    # Parse response based on provider type
+                    result = self._parse_response(response, provider_type)
+
+                    if result["success"]:
+                        return {
+                            "success": True,
+                            "response": result["content"],
+                            "model": model,
+                            "metadata": result.get("metadata", {}),
+                        }
+                    else:
+                        error_msg = result["error"]
+                        logger.error(error_msg)
+                        if attempt >= max_retries:
+                            return {
+                                "success": False,
+                                "error": error_msg,
+                                "response": "",
+                                "model": model,
+                            }
+                else:
+                    # Handle error response
+                    error_msg = f"LLM API ({provider_type}) returned {response.status_code}: {response.text}"
+                    logger.warning("API error: %s", error_msg)
+
+                    # Determine if we should retry
+                    is_retryable = response.status_code in [429, 500, 502, 503, 504]
+
+                    if is_retryable and attempt < max_retries:
+                        sleep_time = retry_delay * (2 ** attempt)
+                        logger.warning("Retrying in %.2f seconds...", sleep_time)
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "response": "",
+                            "model": model,
+                        }
+
+            except requests.exceptions.Timeout:
+                logger.warning("Attempt %d failed: LLM API request timed out", attempt + 1)
+                if attempt < max_retries:
+                    sleep_time = retry_delay * (2 ** attempt)
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "error": f"LLM API request timed out after {max_retries + 1} attempts. Check if your LLM service (e.g., Ollama) is running and responsive.",
+                        "response": "",
+                        "model": model,
+                    }
+            except Exception as e:
+                logger.error(
+                    "Attempt %d failed: Unexpected error during LLM query: %s",
+                    attempt + 1,
+                    e,
+                )
+                if attempt < max_retries:
+                    sleep_time = retry_delay * (2 ** attempt)
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Failed to connect to LLM service after {max_retries + 1} attempts: {str(e)}. Verify your LLM service URL and network connectivity.",
+                        "response": "",
+                        "model": model,
+                    }
+
+        return {
+            "success": False,
+            "error": f"LLM query failed after {max_retries + 1} attempts due to repeated errors",
+            "response": "",
+            "model": model,
+        }
+
+    def _prepare_ollama_request(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Union[str, Dict[str, Any], None] = None,
+    ) -> Dict[str, Any]:
+        """Prepare request data for Ollama API with settings"""
+
+        # Calculate required context size
+        required_context = TokenCounter.calculate_required_context(
+            prompt=system_prompt,
+            user_input=user_prompt,
+            model_name=model,
+            safety_margin=max_tokens + TOKEN_SAFETY_MARGIN,
+        )
+
+        logger.info(
+            "Token analysis - System prompt: %d tokens, User prompt: %d tokens, Required context: %d",
+            TokenCounter.estimate_tokens(system_prompt, model),
+            TokenCounter.estimate_tokens(user_prompt, model),
+            required_context,
+        )
+
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "options": {
+                "temperature": temperature,
+                # SVC-P2-09 fix: Add error handling for type conversions
+                "top_p": self._safe_float(self.settings.llm_top_p, 0.9, "llm_top_p"),
+                "top_k": self._safe_int(self.settings.llm_top_k, 40, "llm_top_k"),
+                "num_predict": max_tokens,
+                "num_ctx": required_context,  # Set context size dynamically
+            },
+            "stream": False,
+        }
+
+        # Handle response_format parameter
+        if response_format is not None:
+            if isinstance(response_format, dict):
+                data["format"] = response_format
+            elif response_format == "json":
+                data["format"] = {"type": "object"}
+
+        logger.info(
+            "Prepared Ollama request data with context size %d: %s",
+            required_context,
+            data,
+        )
+        return data
+
+    def _prepare_openai_request(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Union[str, Dict[str, Any], None],
+    ) -> Dict[str, Any]:
+        """Prepare request data for OpenAI-compatible API with settings"""
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            # SVC-P2-09 fix: Add error handling for type conversion
+            "top_p": self._safe_float(self.settings.llm_top_p, 0.9, "llm_top_p"),
+            # Note: top_k is not supported by OpenAI API, only by Ollama
+            "stream": False,
+        }
+
+        if max_tokens:
+            data["max_tokens"] = max_tokens
+
+        if response_format:
+            if isinstance(response_format, dict):
+                # For OpenAI API, wrap JSON schema in the proper format
+                # OpenAI requires root schema to be an object, so wrap arrays
+                schema = response_format
+                if response_format.get("type") == "array":
+                    schema = {
+                        "type": "object",
+                        "properties": {
+                            "data": response_format
+                        },
+                        "required": ["data"],
+                        "additionalProperties": False
+                    }
+                
+                data["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "response_schema",
+                        "strict": True,
+                        "schema": schema
+                    }
+                }
+            elif response_format == "json":
+                data["response_format"] = {"type": "json_object"}
+
+        return data
+
+    def _parse_response(self, response, provider_type: str) -> Dict[str, Any]:
+        """Parse API response based on provider type"""
+        try:
+            data = response.json()
+
+            logger.info("Raw response data: %s", data)
+
+            # Extract content based on provider type
+            content = None
+            metadata = {}
+
+            if provider_type in ["openai", "openai_compatible"]:
+                # SVC-P2-05 fix: Safe unwrapping of nested response structure
+                if (
+                    data.get("choices")
+                    and len(data["choices"]) > 0
+                    and data["choices"][0].get("message")
+                    and data["choices"][0]["message"].get("content")
+                ):
+                    # Safely unwrap nested structure
+                    choice = data["choices"][0]
+                    message = choice.get("message", {})
+                    content = message.get("content", "")
+
+                    # For structured outputs, unwrap arrays that were wrapped in objects
+                    try:
+                        import json
+                        parsed_content = json.loads(content)
+                        if isinstance(parsed_content, dict) and "data" in parsed_content and len(parsed_content) == 1:
+                            # This looks like a wrapped array, unwrap it
+                            content = json.dumps(parsed_content["data"])
+                    except (json.JSONDecodeError, TypeError):
+                        # If parsing fails, keep original content
+                        pass
+
+                    metadata = {
+                        "usage": data.get("usage", {}),
+                        "finish_reason": choice.get("finish_reason"),
+                    }
+            elif provider_type == "ollama":
+                # SVC-P2-05 fix: Safe unwrapping of nested response structure
+                message = data.get("message", {})
+                if message and message.get("content"):
+                    content = message.get("content", "")
+                    metadata = {
+                        "total_duration": data.get("total_duration"),
+                        "load_duration": data.get("load_duration"),
+                        "prompt_eval_count": data.get("prompt_eval_count"),
+                        "eval_count": data.get("eval_count"),
+                        "eval_duration": data.get("eval_duration"),
+                    }
+
+            if content:
+                return {"success": True, "content": content, "metadata": metadata}
+            else:
+                return {
+                    "success": False,
+                    "error": f"Could not extract content from {provider_type} response format",
+                }
+
+        except Exception as e:
+            return {"success": False, "error": f"Error parsing response: {str(e)}"}
+
+    def get_embeddings(
+        self, texts: List[str], normalize: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Get embeddings for the provided texts (synchronous)
+        """
+        if not self.settings:
+            return {
+                "success": False,
+                "error": "LLM settings not loaded",
+                "embeddings": [],
+                "model": "unknown",
+            }
+
+        try:
+            if self.settings.embeddings_provider_type == "ollama":
+                return self._get_ollama_embeddings(texts, normalize)
+            elif self.settings.embeddings_provider_type == "openai_compatible":
+                return self._get_openai_compatible_embeddings(texts, normalize)
+            else:
+                raise ValueError(
+                    f"Unsupported embeddings provider: {self.settings.embeddings_provider_type}"
+                )
+        except Exception as e:
+            logger.error("Error getting embeddings: %s", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "embeddings": [],
+                "model": self.settings.embeddings_model,
+            }
+
+    def _get_ollama_embeddings(
+        self, texts: List[str], normalize: bool
+    ) -> Dict[str, Any]:
+        """
+        Get embeddings from Ollama with concurrent processing.
+
+        SVC-P2-02 fix: Ollama's API only supports one prompt per request,
+        but we can process multiple requests concurrently for better performance.
+        """
+        if not self.settings or not getattr(
+            self.settings, "embeddings_endpoint_url", None
+        ):
+            return {
+                "success": False,
+                "error": "Embeddings settings not loaded or missing embeddings_endpoint_url",
+                "embeddings": [],
+                "model": getattr(self.settings, "embeddings_model", "unknown"),
+            }
+
+        url = f"{self.settings.embeddings_endpoint_url.rstrip('/')}/api/embeddings"
+
+        # SVC-P2-02 fix: Use concurrent processing for better performance
+        # Ollama doesn't support batch embeddings, but we can send requests concurrently
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        all_embeddings = [None] * len(texts)  # Pre-allocate list to maintain order
+        errors = []
+
+        def get_single_embedding(index: int, text: str):
+            """Get embedding for a single text"""
+            try:
+                payload = {"model": self.settings.embeddings_model, "prompt": text}
+                response = self.session.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=DEFAULT_REQUEST_TIMEOUT,
                 )
                 response.raise_for_status()
-                data = response.json()
-                # Normalize embedding for proper cosine similarity
-                raw_embedding = data["embedding"]
-                normalized_embedding = normalize_vector(raw_embedding)
-                embeddings.append(normalized_embedding)
 
+                result = response.json()
+                embedding = result.get("embedding", [])
+
+                if normalize and embedding:
+                    import math
+
+                    magnitude = math.sqrt(sum(x * x for x in embedding))
+                    if magnitude > 0:
+                        embedding = [x / magnitude for x in embedding]
+
+                all_embeddings[index] = embedding  # Store at correct index to maintain order
+                return True
             except Exception as e:
-                logger.error(f"Ollama embedding failed: {e}")
-                return {"success": False, "error": str(e)}
+                logger.error(f"Failed to get embedding for text {index}: {e}")
+                errors.append(f"Text {index}: {str(e)}")
+                all_embeddings[index] = []  # Use empty embedding on error
+                return False
+
+        # Use ThreadPoolExecutor for concurrent requests
+        # Limit workers to avoid overwhelming the server
+        max_workers = min(len(texts), 10)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(get_single_embedding, i, text): i for i, text in enumerate(texts)}
+
+            # Wait for all to complete
+            for future in as_completed(futures):
+                future.result()  # This will raise exception if any occurred
+
+        # SVC-P2-03 fix: Safe dimension check to prevent IndexError
+        dimension = 0
+        if all_embeddings:
+            if all_embeddings[0]:  # Check first embedding exists and is not empty
+                dimension = len(all_embeddings[0])
+
+        return {
+            "success": True,
+            "embeddings": all_embeddings,
+            "model": self.settings.embeddings_model,
+            "metadata": {
+                "count": len(all_embeddings),
+                "dimension": dimension,
+            },
+        }
+
+    def _get_openai_compatible_embeddings(
+        self, texts: List[str], normalize: bool
+    ) -> Dict[str, Any]:
+        """Get embeddings from OpenAI-compatible API (synchronous)"""
+        if not self.settings or not getattr(
+            self.settings, "embeddings_endpoint_url", None
+        ):
+            return {
+                "success": False,
+                "error": "Embeddings settings not loaded or missing embeddings_endpoint_url",
+                "embeddings": [],
+                "model": getattr(self.settings, "embeddings_model", "unknown"),
+            }
+
+        url = f"{self.settings.embeddings_endpoint_url.rstrip('/')}/v1/embeddings"
+
+        payload = {"model": self.settings.embeddings_model, "input": texts}
+        headers = {"Content-Type": "application/json"}
+
+        response = self.session.post(url, json=payload, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT)
+        response.raise_for_status()
+
+        result = response.json()
+
+        embeddings = []
+        for item in sorted(result["data"], key=lambda x: x["index"]):
+            embedding = item["embedding"]
+
+            if normalize:
+                import math
+
+                magnitude = math.sqrt(sum(x * x for x in embedding))
+                if magnitude > 0:
+                    embedding = [x / magnitude for x in embedding]
+
+            embeddings.append(embedding)
 
         return {
             "success": True,
             "embeddings": embeddings,
-            "model": settings.EMBEDDINGS_MODEL,
+            "model": self.settings.embeddings_model,
+            "metadata": {
+                "usage": result.get("usage", {}),
+                "count": len(embeddings),
+                "dimension": len(embeddings[0]) if embeddings else 0,
+            },
         }
 
-    def _get_embeddings_openai(self, texts: List[str]) -> Dict[str, Any]:
-        """Get embeddings from OpenAI or compatible API"""
-        endpoint = f"{settings.EMBEDDINGS_ENDPOINT_URL}/v1/embeddings"
+    def test_connection(self) -> Dict[str, Any]:
+        """Test connection to both LLM and embeddings endpoints"""
+        results = {
+            "llm_connection": False,
+            "embeddings_connection": False,
+            "llm_error": None,
+            "embeddings_error": None,
+        }
 
-        headers = {}
-        if settings.EMBEDDINGS_API_KEY:
-            headers["Authorization"] = f"Bearer {settings.EMBEDDINGS_API_KEY}"
-
+        # Test LLM connection
         try:
-            response = self.session.post(
-                endpoint,
-                json={
-                    "model": settings.EMBEDDINGS_MODEL,
-                    "input": texts,
-                },
-                headers=headers,
-                timeout=settings.EMBEDDINGS_TIMEOUT,
+            llm_result = self.query_llm(
+                prompt="Respond with just 'Hello' to test the connection.",
+                temperature=0.1,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            # Extract and normalize embeddings in order
-            raw_embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
-            embeddings = [normalize_vector(emb) for emb in raw_embeddings]
-
-            return {
-                "success": True,
-                "embeddings": embeddings,
-                "model": data.get("model", settings.EMBEDDINGS_MODEL),
-            }
-
+            results["llm_connection"] = llm_result.get("success", False)
+            if not results["llm_connection"]:
+                results["llm_error"] = llm_result.get("error", "Unknown error")
         except Exception as e:
-            logger.error(f"OpenAI embedding failed: {e}")
-            return {"success": False, "error": str(e)}
+            results["llm_error"] = str(e)
+
+        # Test embeddings connection
+        try:
+            embeddings_result = self.get_embeddings(["test connection"])
+            results["embeddings_connection"] = embeddings_result.get("success", False)
+            if not results["embeddings_connection"]:
+                results["embeddings_error"] = embeddings_result.get(
+                    "error", "Unknown error"
+                )
+        except Exception as e:
+            results["embeddings_error"] = str(e)
+
+        return results
+
+    def get_prompt_token_info(
+        self, prompt: str, user_input: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Get token information for a given prompt and user input.
+
+        Returns:
+            Dictionary containing token counts and context requirements
+        """
+        model_name = self.settings.extraction_model if self.settings else ""
+
+        prompt_tokens = TokenCounter.estimate_tokens(prompt, model_name)
+        input_tokens = TokenCounter.estimate_tokens(user_input, model_name)
+        total_tokens = prompt_tokens + input_tokens
+        required_context = TokenCounter.calculate_required_context(
+            prompt, user_input, model_name
+        )
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "input_tokens": input_tokens,
+            "total_input_tokens": total_tokens,
+            "required_context": required_context,
+            "model_family": TokenCounter._get_model_family(model_name.lower()),
+        }
 
 
 # Global instance

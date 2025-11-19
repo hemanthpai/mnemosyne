@@ -1,1757 +1,1196 @@
-import logging
-import time
-import uuid
 import json
+import logging
+import tempfile
+import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from io import StringIO
-import sys
+from typing import Any, Dict, List, Optional
 
-from django.conf import settings as django_settings
-from django.core.management import call_command
-from django.core.cache import cache
-from django.utils import timezone
-from rest_framework import status
-from rest_framework.views import APIView
+from django.db import transaction
+from django.db.models import QuerySet
+from rest_framework import parsers, status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
-from django_q.tasks import async_task, result, fetch
-from django_q.models import Task
+from rest_framework.views import APIView
+from settings_app.models import LLMSettings
 
-from .conversation_service import conversation_service
-from .models import ConversationTurn, AtomicNote, NoteRelationship
+from .llm_service import MEMORY_EXTRACTION_FORMAT, MEMORY_SEARCH_FORMAT, llm_service
+from .memory_search_service import memory_search_service
+from .models import Memory
+from .openwebui_importer import (
+    ImportProgress,
+    OpenWebUIImporter,
+    _import_progresses,
+    _progress_lock,
+)
+from .rate_limiter import rate_limit_extract, rate_limit_retrieve
+from .serializers import MemorySerializer
+from .vector_service import vector_service
 
 logger = logging.getLogger(__name__)
 
+# API-P2-05 fix: Extract magic numbers as named constants
+MAX_CONVERSATION_TEXT_LENGTH = 50000  # Maximum characters for extraction text (~50KB)
+MAX_PROMPT_LENGTH = 5000  # Maximum characters for search prompts (~5KB)
+EXTRACTION_MAX_TOKENS = 16384  # Token limit for LLM memory extraction
+ERROR_MESSAGE_TRUNCATE_LENGTH = 500  # Truncate error messages for logging
+DEFAULT_RETRIEVAL_LIMIT = 99  # Default number of memories to retrieve
+MAX_RETRIEVAL_LIMIT = 100  # Maximum allowed retrieval limit
+DEFAULT_CLAMPED_LIMIT = 10  # Default when invalid limit provided
+DEFAULT_IMPORT_BATCH_SIZE = 10  # Default batch size for imports
 
-class StoreConversationTurnView(APIView):
-    """Store a conversation turn"""
 
-    def post(self, request):
-        start_time = time.time()
+class MemoryPagination(PageNumberPagination):
+    """
+    API-P1-01 fix: Pagination for memory list endpoint.
 
-        # Validate input
-        user_id = request.data.get('user_id')
-        session_id = request.data.get('session_id')
-        user_message = request.data.get('user_message')
-        assistant_message = request.data.get('assistant_message')
+    Prevents performance issues with large datasets by limiting
+    results per page and providing navigation links.
+    """
+    page_size = 50  # Default page size
+    page_size_query_param = 'page_size'  # Allow client to override
+    max_page_size = 1000  # Maximum allowed page size
 
-        if not all([user_id, session_id, user_message, assistant_message]):
-            return Response(
-                {'success': False, 'error': 'Missing required fields: user_id, session_id, user_message, assistant_message'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
-        # Validate UUID
+# API-P1-06 fix: Whitelist of allowed fields for field selection
+ALLOWED_MEMORY_FIELDS = {"id", "content", "metadata", "created_at", "updated_at"}
+
+
+def validate_fields(requested_fields: Any) -> List[str]:
+    """
+    Validate requested fields against whitelist.
+
+    API-P1-06 fix: Prevents users from requesting invalid fields
+    that could cause errors or expose internal data.
+    API-P2-06 fix: Added type hints for better IDE support and type safety.
+
+    Args:
+        requested_fields: List of field names to validate (or any type, will be validated)
+
+    Returns:
+        list: Validated fields (only allowed ones)
+    """
+    if not isinstance(requested_fields, list):
+        return ["id", "content"]  # Default safe fields
+
+    # Filter to only allowed fields
+    validated = [field for field in requested_fields if field in ALLOWED_MEMORY_FIELDS]
+
+    # If no valid fields requested, return defaults
+    return validated if validated else ["id", "content"]
+
+
+class MemoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for CRUD operations on memories with pagination support.
+
+    API-P1-01: Implements pagination to prevent performance issues.
+    """
+
+    serializer_class = MemorySerializer
+    queryset = Memory.objects.all()
+    pagination_class = MemoryPagination
+
+    def get_queryset(self) -> QuerySet[Memory]:
+        """
+        Filter memories by user_id if provided in query params
+
+        API-P2-06 fix: Added type hints for better IDE support and type safety.
+
+        Returns:
+            QuerySet of Memory objects, filtered by user_id if provided
+        """
+        user_id = self.request.GET.get("user_id")
+        if user_id:
+            try:
+                uuid.UUID(user_id)  # Validate UUID format
+                return Memory.objects.filter(user_id=user_id).order_by("-created_at")
+            except ValueError:
+                logger.warning(f"Invalid user_id format: {user_id}")
+                return Memory.objects.none()
+        # Return all memories if no user_id filter provided
+        return Memory.objects.all().order_by("-created_at")
+
+    def retrieve(self, request, *args, pk=None, **kwargs):
+        """
+        Get a specific memory by ID.
+
+        API-P1-03/04: Improved exception handling with logging.
+        """
         try:
-            uuid.UUID(user_id)
-        except ValueError:
-            return Response(
-                {'success': False, 'error': 'Invalid user_id format (must be UUID)'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            turn = conversation_service.store_turn(
-                user_id=user_id,
-                session_id=session_id,
-                user_message=user_message,
-                assistant_message=assistant_message
-            )
-
-            latency = (time.time() - start_time) * 1000  # ms
-            logger.info(f"Stored turn in {latency:.0f}ms")
-
+            # Validate UUID format
+            uuid.UUID(pk)
+            memory = self.get_object()
+            serializer = self.get_serializer(memory)
+            # API-P2-08 fix: Return consistent response format with success field
             return Response({
-                'success': True,
-                'turn_id': str(turn.id),
-                'turn_number': turn.turn_number,
-                'latency_ms': round(latency, 2)
-            }, status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            latency = (time.time() - start_time) * 1000
-            logger.error(f"Failed to store turn after {latency:.0f}ms: {e}")
-            return Response(
-                {'success': False, 'error': str(e), 'latency_ms': round(latency, 2)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class SearchConversationsView(APIView):
-    """Search conversations - supports fast and deep modes"""
-
-    def post(self, request):
-        start_time = time.time()
-
-        # Validate input
-        query = request.data.get('query')
-        user_id = request.data.get('user_id')
-        limit = request.data.get('limit', 10)
-        threshold = request.data.get('threshold', 0.5)
-        mode = request.data.get('mode', 'fast')
-
-        if not all([query, user_id]):
-            return Response(
-                {'success': False, 'error': 'Missing required fields: query, user_id'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validate UUID
-        try:
-            uuid.UUID(user_id)
-        except ValueError:
-            return Response(
-                {'success': False, 'error': 'Invalid user_id format (must be UUID)'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validate numeric parameters
-        try:
-            limit = int(limit)
-            threshold = float(threshold)
-        except (ValueError, TypeError):
-            return Response(
-                {'success': False, 'error': 'Invalid limit or threshold format'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validate mode
-        if mode not in ['fast', 'deep']:
-            return Response(
-                {'success': False, 'error': 'Invalid mode. Must be "fast" or "deep"'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            # Call appropriate search method based on mode
-            if mode == 'deep':
-                results = conversation_service.search_deep(
-                    query=query,
-                    user_id=user_id,
-                    limit=limit,
-                    threshold=threshold
-                )
-            else:
-                results = conversation_service.search_fast(
-                    query=query,
-                    user_id=user_id,
-                    limit=limit,
-                    threshold=threshold
-                )
-
-            latency = (time.time() - start_time) * 1000  # ms
-            logger.info(f"Search ({mode} mode) completed in {latency:.0f}ms, found {len(results)} results")
-
-            return Response({
-                'success': True,
-                'count': len(results),
-                'results': results,
-                'mode': mode,
-                'latency_ms': round(latency, 2)
+                "success": True,
+                "memory": serializer.data
             })
-
-        except Exception as e:
-            latency = (time.time() - start_time) * 1000
-            logger.error(f"Search ({mode} mode) failed after {latency:.0f}ms: {e}")
+        except ValueError as e:
+            # API-P1-03: Log specific error but return generic message
+            logger.debug(f"Invalid UUID format for memory retrieval: {pk} - {e}")
             return Response(
-                {'success': False, 'error': str(e), 'latency_ms': round(latency, 2)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"success": False, "error": "Invalid memory ID format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Memory.DoesNotExist as e:
+            # API-P1-03: Log specific error
+            logger.debug(f"Memory not found: {pk} - {e}")
+            return Response(
+                {"success": False, "error": "Memory not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            # API-P1-03: Log unexpected errors but don't expose details to user
+            # API-P1-04: Prevent information disclosure
+            logger.error(f"Unexpected error retrieving memory {pk}: {e}", exc_info=True)
+            return Response(
+                {"success": False, "error": "An error occurred while retrieving the memory"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    def list(self, request, *args, **kwargs):
+        """
+        List memories with optional user_id filtering and pagination.
 
-class ListConversationsView(APIView):
-    """List recent conversations for a user"""
+        API-P1-01: Returns paginated results with navigation links.
+        """
+        queryset = self.get_queryset()
 
-    def get(self, request):
-        start_time = time.time()
+        # Paginate the queryset
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            # API-P2-08 fix: Add success field to paginated response for consistency
+            paginated_response = self.get_paginated_response(serializer.data)
+            # get_paginated_response adds 'count', 'next', 'previous' links
+            # Add success field to match API response format
+            paginated_response.data['success'] = True
+            return paginated_response
 
-        # Validate input
-        user_id = request.query_params.get('user_id')
-        limit = request.query_params.get('limit', 50)
+        # Fallback if pagination is disabled
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "success": True,
+                "count": len(serializer.data),
+                "memories": serializer.data,
+            }
+        )
+
+    def create(self, request, *args, **kwargs):
+        """Create a new memory"""
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            # Validate user_id
+            user_id = serializer.validated_data.get("user_id")
+            if user_id:
+                try:
+                    uuid.UUID(str(user_id))
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid user_id format"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            memory = serializer.save()
+            return Response(
+                {"success": True, "memory": self.get_serializer(memory).data},
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {"success": False, "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class ExtractMemoriesView(APIView):
+    """
+    API endpoint to extract memories from conversation text using LLM
+    
+    Supports field selection to optimize response size:
+    - fields: Array of field names to include in response (default: ["id", "content"])
+    
+    Available fields: id, content, metadata, created_at, updated_at
+    """
+
+    @rate_limit_extract
+    def post(self, request):
+        conversation_text = request.data.get("conversation_text", "")
+        user_id = request.data.get("user_id")
+
+        if not conversation_text:
+            return Response(
+                {"success": False, "error": "conversation_text is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Add reasonable content length limit for DIY systems
+        if len(conversation_text) > MAX_CONVERSATION_TEXT_LENGTH:
+            return Response(
+                {
+                    "success": False,
+                    "error": "Conversation text is too long. Please break it into smaller chunks.",
+                    "max_length": MAX_CONVERSATION_TEXT_LENGTH,
+                    "current_length": len(conversation_text)
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not user_id:
             return Response(
-                {'success': False, 'error': 'Missing required parameter: user_id'},
-                status=status.HTTP_400_BAD_REQUEST
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate UUID
+        # Validate user_id format
         try:
             uuid.UUID(user_id)
         except ValueError:
             return Response(
-                {'success': False, 'error': 'Invalid user_id format (must be UUID)'},
-                status=status.HTTP_400_BAD_REQUEST
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate limit
+        try:
+            # Refresh LLM settings to ensure we have the latest configuration
+            llm_service.refresh_settings()
+
+            # API-P2-02 fix: Use cached settings from llm_service instead of fetching again
+            system_prompt = llm_service.settings.memory_extraction_prompt
+
+            logger.info("Extracting memories for user %s", user_id)
+
+            # Add the current datetime to system prompt for time awareness
+            # Add current timestamp to system prompt for context
+            try:
+                now = datetime.now()
+                system_prompt_with_date = f"{system_prompt}\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+            except Exception as e:
+                logger.warning("Could not add date to system prompt: %s", e)
+                system_prompt_with_date = system_prompt
+
+            # Query LLM to extract memories with higher token limit
+            llm_result = llm_service.query_llm(
+                system_prompt=system_prompt_with_date,
+                prompt=conversation_text,
+                response_format=MEMORY_EXTRACTION_FORMAT,
+                max_tokens=EXTRACTION_MAX_TOKENS,
+            )
+
+            if not llm_result["success"]:
+                # API-P1-03: Log detailed error
+                # API-P1-04: Don't expose internal LLM error details to user
+                logger.error("LLM extraction failed: %s", llm_result.get("error", "Unknown error"))
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Memory extraction failed. Please check if the LLM service is available and try again.",
+                        "memories_extracted": 0,
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Parse the JSON response with robust error handling
+            try:
+                response_text = llm_result["response"].strip()
+                memories_data = json.loads(response_text)
+                if not isinstance(memories_data, list):
+                    raise ValueError("Expected a JSON array")
+
+            except (json.JSONDecodeError, ValueError) as e:
+                # API-P2-10 fix: Removed duplicate logging
+                logger.error("Failed to parse LLM response as JSON: %s", e)
+                logger.debug(
+                    "LLM response length: %d chars, preview: %s...",
+                    len(llm_result.get("response", "")),
+                    llm_result.get("response", "")[:ERROR_MESSAGE_TRUNCATE_LENGTH]
+                )
+
+                return Response(
+                    {
+                        "success": False,
+                        "error": "The AI model returned an invalid response format. This usually means the model is overloaded or the prompt was too complex. Please try again with a shorter message.",
+                        "memories_extracted": 0,
+                        "suggestion": "If this continues to happen, check your LLM service configuration or try a different model."
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Store extracted memories
+            stored_memories = []
+            for memory_data in memories_data:
+                if not isinstance(memory_data, dict):
+                    continue
+
+                content = memory_data.get("content", "")
+                if not content:
+                    continue
+
+                # Prepare metadata
+                metadata = {
+                    "tags": memory_data.get("tags", []),
+                    "extraction_source": "conversation",
+                    "model_used": llm_result.get("model", "unknown"),
+                }
+
+                memory = memory_search_service.store_memory_with_embedding(
+                    content=content, user_id=user_id, metadata=metadata
+                )
+
+                # Format memory based on requested fields (default to minimal for efficiency)
+                # API-P1-06: Validate fields against whitelist
+                requested_fields = request.data.get("fields", ["id", "content"])
+                fields = validate_fields(requested_fields)
+                # API-P2-03 fix: Rename to avoid shadowing loop variable
+                response_memory = {}
+
+                if "id" in fields:
+                    response_memory["id"] = str(memory.id)
+                if "content" in fields:
+                    response_memory["content"] = memory.content
+                if "metadata" in fields:
+                    response_memory["metadata"] = memory.metadata
+                if "created_at" in fields:
+                    response_memory["created_at"] = memory.created_at.isoformat()
+                if "updated_at" in fields:
+                    response_memory["updated_at"] = memory.updated_at.isoformat()
+
+                stored_memories.append(response_memory)
+
+            logger.info(
+                "Successfully extracted and stored %d memories", len(stored_memories)
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "memories_extracted": len(stored_memories),
+                    "memories": stored_memories,
+                    "model_used": llm_result.get("model", "unknown"),
+                }
+            )
+
+        except Exception as e:
+            # API-P1-03: Log full exception with stack trace
+            # API-P1-04: Return generic error message to prevent information disclosure
+            logger.error("Unexpected error during memory extraction: %s", e, exc_info=True)
+            return Response(
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during memory extraction. Please try again later.",
+                    "memories_extracted": 0,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class RetrieveMemoriesView(APIView):
+    """
+    API endpoint to retrieve relevant memories for a prompt using vector search
+    
+    Supports response optimization options:
+    - fields: Array of field names to include (default: ["id", "content"])  
+    - include_search_metadata: Whether to include search scoring info (default: false)
+    - include_summary: Whether to generate memory summary (default: false, saves LLM calls)
+    
+    Available fields: id, content, metadata, created_at, updated_at
+    """
+
+    def _format_memory(
+        self,
+        memory: Memory,
+        fields: List[str],
+        include_search_metadata: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Format a single memory with specified fields
+
+        API-P2-06 fix: Added type hints for better IDE support and type safety.
+
+        Args:
+            memory: Memory instance to format
+            fields: List of field names to include in response
+            include_search_metadata: Whether to include search scoring information
+
+        Returns:
+            dict: Formatted memory data with requested fields
+        """
+        memory_data = {}
+        
+        # Include only requested fields
+        if "id" in fields:
+            memory_data["id"] = str(memory.id)
+        if "content" in fields:
+            memory_data["content"] = memory.content
+        if "metadata" in fields:
+            memory_data["metadata"] = memory.metadata
+        if "created_at" in fields:
+            memory_data["created_at"] = memory.created_at.isoformat()
+        if "updated_at" in fields:
+            memory_data["updated_at"] = memory.updated_at.isoformat()
+        
+        # Add search metadata if requested and available
+        if include_search_metadata and hasattr(memory, '_search_score'):
+            memory_data["search_metadata"] = {
+                "search_score": round(memory._search_score, 3),
+                "search_type": memory._search_type,
+                "original_score": round(memory._original_score, 3),
+                "query_confidence": round(memory._query_confidence, 3),
+            }
+        
+        return memory_data
+
+    @rate_limit_retrieve
+    def post(self, request):
+        prompt = request.data.get("prompt", "")
+        user_id = request.data.get("user_id")
+        limit = request.data.get("limit", DEFAULT_RETRIEVAL_LIMIT)
+        threshold = request.data.get("threshold", 0.7)
+        boosted_threshold = request.data.get("boosted_threshold", 0.5)
+
+        if not prompt:
+            return Response(
+                {"success": False, "error": "prompt is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Add reasonable prompt length limit
+        if len(prompt) > MAX_PROMPT_LENGTH:
+            return Response(
+                {
+                    "success": False,
+                    "error": "Search prompt is too long. Please use a shorter, more focused query.",
+                    "max_length": MAX_PROMPT_LENGTH,
+                    "current_length": len(prompt)
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate user_id format
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # API-P2-14 fix: Validate limit and threshold with logging
         try:
             limit = int(limit)
+            if limit <= 0 or limit > MAX_RETRIEVAL_LIMIT:
+                logger.warning(f"Invalid limit value {limit}, clamping to default {DEFAULT_CLAMPED_LIMIT}")
+                limit = DEFAULT_CLAMPED_LIMIT
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid limit format: {e}, using default {DEFAULT_CLAMPED_LIMIT}")
+            limit = DEFAULT_CLAMPED_LIMIT
+
+        try:
+            threshold = float(threshold)
+            if threshold < 0.0 or threshold > 1.0:
+                logger.warning(f"Invalid threshold value {threshold}, clamping to default 0.7")
+                threshold = 0.7
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid threshold format: {e}, using default 0.7")
+            threshold = 0.7
+
+        try:
+            boosted_threshold = float(boosted_threshold)
+            if boosted_threshold < 0.0 or boosted_threshold > 1.0:
+                boosted_threshold = 0.5
         except (ValueError, TypeError):
-            return Response(
-                {'success': False, 'error': 'Invalid limit format'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            boosted_threshold = 0.5
 
         try:
-            turns = conversation_service.list_recent(
-                user_id=user_id,
-                limit=limit
+            # Refresh LLM settings to ensure we have the latest configuration
+            llm_service.refresh_settings()
+
+            # API-P2-02 fix: Use cached settings from llm_service instead of fetching again
+            search_prompt = llm_service.settings.memory_search_prompt
+
+            logger.info(
+                "Generating search queries for user %s with prompt: %s...",
+                user_id,
+                prompt,
             )
 
-            # Serialize turns
-            conversations = [{
-                'id': str(turn.id),
-                'user_id': str(turn.user_id),
-                'session_id': turn.session_id,
-                'turn_number': turn.turn_number,
-                'user_message': turn.user_message,
-                'assistant_message': turn.assistant_message,
-                'timestamp': turn.timestamp.isoformat(),
-                'extracted': turn.extracted
-            } for turn in turns]
-
-            latency = (time.time() - start_time) * 1000  # ms
-            logger.info(f"Listed {len(conversations)} conversations in {latency:.0f}ms")
-
-            return Response({
-                'success': True,
-                'count': len(conversations),
-                'conversations': conversations,
-                'latency_ms': round(latency, 2)
-            })
-
-        except Exception as e:
-            latency = (time.time() - start_time) * 1000
-            logger.error(f"List failed after {latency:.0f}ms: {e}")
-            return Response(
-                {'success': False, 'error': str(e), 'latency_ms': round(latency, 2)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Query LLM to generate search queries
+            logger.info("About to generate search queries with user prompt: %s", prompt)
+            logger.info("Using search system prompt length: %d characters", len(search_prompt))
+            
+            llm_result = llm_service.query_llm(
+                prompt=prompt,
+                system_prompt=search_prompt,
+                response_format=MEMORY_SEARCH_FORMAT,
             )
 
-
-class GetSettingsView(APIView):
-    """Get current settings (from database or environment fallback)"""
-
-    def get(self, request):
-        """Return current settings (API key masked for security)"""
-        try:
-            from .settings_model import Settings
-
-            # Get settings from database (with environment fallback)
-            settings = Settings.get_settings()
-            settings_dict = settings.to_dict(mask_api_key=True)
-
-            return Response({
-                'success': True,
-                'settings': settings_dict,
-                'source': 'database',
-                'note': 'Settings are editable via the UI. Changes take effect immediately.'
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to get settings: {e}")
-
-            # Fallback to environment variables
-            api_key = django_settings.EMBEDDINGS_API_KEY
-            api_key_masked = None
-            if api_key:
-                if len(api_key) > 8:
-                    api_key_masked = f"{api_key[:4]}...{api_key[-4:]}"
-                else:
-                    api_key_masked = "***"
-
-            return Response({
-                'success': True,
-                'settings': {
-                    'embeddings_provider': django_settings.EMBEDDINGS_PROVIDER,
-                    'embeddings_endpoint_url': django_settings.EMBEDDINGS_ENDPOINT_URL,
-                    'embeddings_model': django_settings.EMBEDDINGS_MODEL,
-                    'embeddings_api_key': api_key_masked,
-                    'embeddings_timeout': django_settings.EMBEDDINGS_TIMEOUT,
-                    'generation_model': getattr(django_settings, 'GENERATION_MODEL', django_settings.EMBEDDINGS_MODEL),
-                },
-                'source': 'environment',
-                'note': 'Using environment variables. Database settings not available.'
-            })
-
-
-class UpdateSettingsView(APIView):
-    """Update settings in database"""
-
-    def put(self, request):
-        """Update settings with provided values"""
-        try:
-            from .settings_model import Settings
-
-            # Get current settings
-            settings = Settings.get_settings()
-
-            # Update fields from request
-            updated_fields = []
-            for field in ['embeddings_provider', 'embeddings_endpoint_url', 'embeddings_model',
-                          'embeddings_api_key', 'embeddings_timeout', 'embeddings_dimension',
-                          'generation_provider', 'generation_endpoint_url', 'generation_model',
-                          'generation_api_key', 'generation_temperature', 'generation_max_tokens',
-                          'generation_timeout', 'generation_top_p', 'generation_top_k', 'generation_min_p',
-                          'extraction_prompt',
-                          'amem_enrichment_temperature', 'amem_enrichment_max_tokens',
-                          'amem_link_generation_temperature', 'amem_link_generation_max_tokens',
-                          'amem_link_generation_k', 'amem_evolution_temperature', 'amem_evolution_max_tokens',
-                          'enable_multipass_extraction', 'enable_query_expansion', 'enable_query_rewriting', 'enable_hybrid_search',
-                          'enable_reranking', 'reranking_provider', 'reranking_endpoint_url', 'reranking_model_name',
-                          'reranking_batch_size', 'reranking_device', 'ollama_reranking_base_url',
-                          'ollama_reranking_model', 'ollama_reranking_temperature', 'reranking_candidate_multiplier']:
-                if field in request.data:
-                    value = request.data[field]
-
-                    # Validation
-                    if field in ['embeddings_provider', 'generation_provider']:
-                        if value and value not in ['ollama', 'openai', 'openai_compatible', '']:
-                            return Response(
-                                {'success': False, 'error': f'Invalid provider: {value}'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'reranking_provider':
-                        if value not in ['remote', 'ollama', 'sentence_transformers']:
-                            return Response(
-                                {'success': False, 'error': f'Invalid reranking provider: {value}'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'reranking_batch_size':
-                        try:
-                            value = int(value)
-                            if value < 1 or value > 256:
-                                return Response(
-                                    {'success': False, 'error': 'Batch size must be between 1 and 256'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid batch size value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'reranking_candidate_multiplier':
-                        try:
-                            value = int(value)
-                            if value < 1 or value > 10:
-                                return Response(
-                                    {'success': False, 'error': 'Candidate multiplier must be between 1 and 10'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid candidate multiplier value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'ollama_reranking_temperature':
-                        try:
-                            value = float(value)
-                            if value < 0.0 or value > 1.0:
-                                return Response(
-                                    {'success': False, 'error': 'Ollama reranking temperature must be between 0.0 and 1.0'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid ollama_reranking_temperature value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field in ['embeddings_timeout', 'generation_timeout']:
-                        try:
-                            value = int(value)
-                            if value < 1 or value > 600:
-                                return Response(
-                                    {'success': False, 'error': 'Timeout must be between 1 and 600 seconds'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid timeout value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'embeddings_dimension':
-                        try:
-                            value = int(value)
-                            if value not in [384, 768, 1024, 1536, 2048, 3072, 4096, 8192]:
-                                return Response(
-                                    {'success': False, 'error': 'Dimension must be one of: 384, 768, 1024, 1536, 2048, 3072, 4096, 8192'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid dimension value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'generation_temperature':
-                        try:
-                            value = float(value)
-                            if value < 0.0 or value > 1.0:
-                                return Response(
-                                    {'success': False, 'error': 'Temperature must be between 0.0 and 1.0'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid temperature value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'generation_max_tokens':
-                        try:
-                            value = int(value)
-                            if value < 1 or value > 100000:
-                                return Response(
-                                    {'success': False, 'error': 'Max tokens must be between 1 and 100000'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid max_tokens value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field in ['generation_top_p', 'generation_min_p']:
-                        try:
-                            value = float(value)
-                            if value < 0.0 or value > 1.0:
-                                return Response(
-                                    {'success': False, 'error': f'{field} must be between 0.0 and 1.0'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': f'Invalid {field} value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field == 'generation_top_k':
-                        try:
-                            value = int(value)
-                            if value < 0 or value > 1000:
-                                return Response(
-                                    {'success': False, 'error': 'generation_top_k must be between 0 and 1000 (0 = disabled)'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid generation_top_k value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    elif field in ['embeddings_endpoint_url', 'embeddings_model']:
-                        if not value or not value.strip():
-                            return Response(
-                                {'success': False, 'error': f'{field} cannot be empty'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    # Validate A-MEM temperature fields
-                    elif field in ['amem_enrichment_temperature', 'amem_link_generation_temperature',
-                                   'amem_evolution_temperature']:
-                        try:
-                            value = float(value)
-                            if value < 0.0 or value > 1.0:
-                                return Response(
-                                    {'success': False, 'error': f'{field} must be between 0.0 and 1.0'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': f'Invalid {field} value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    # Validate A-MEM max_tokens fields
-                    elif field in ['amem_enrichment_max_tokens', 'amem_link_generation_max_tokens',
-                                   'amem_evolution_max_tokens']:
-                        try:
-                            value = int(value)
-                            if value < 50 or value > 8192:
-                                return Response(
-                                    {'success': False, 'error': f'{field} must be between 50 and 8192'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': f'Invalid {field} value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    # Validate A-MEM k parameter
-                    elif field == 'amem_link_generation_k':
-                        try:
-                            value = int(value)
-                            if value < 1 or value > 50:
-                                return Response(
-                                    {'success': False, 'error': 'amem_link_generation_k must be between 1 and 50'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                        except (ValueError, TypeError):
-                            return Response(
-                                {'success': False, 'error': 'Invalid amem_link_generation_k value'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    # Validate boolean fields
-                    elif field in ['enable_multipass_extraction', 'enable_query_expansion',
-                                   'enable_query_rewriting', 'enable_hybrid_search', 'enable_reranking']:
-                        if not isinstance(value, bool):
-                            return Response(
-                                {'success': False, 'error': f'{field} must be a boolean'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-
-                    setattr(settings, field, value)
-                    updated_fields.append(field)
-
-            # Save settings
-            settings.save()
-
-            logger.info(f"Settings updated: {', '.join(updated_fields)}")
-
-            return Response({
-                'success': True,
-                'message': f'Updated {len(updated_fields)} setting(s)',
-                'updated_fields': updated_fields,
-                'settings': settings.to_dict(mask_api_key=True)
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to update settings: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class ValidateEndpointView(APIView):
-    """Validate an LLM endpoint URL"""
-
-    def post(self, request):
-        """Test connection to an LLM endpoint"""
-        import requests
-
-        endpoint_url = request.data.get('endpoint_url')
-        provider = request.data.get('provider', 'ollama')
-        api_key = request.data.get('api_key', '')
-
-        if not endpoint_url:
-            return Response(
-                {'success': False, 'error': 'endpoint_url is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            # Different validation based on provider
-            if provider == 'ollama':
-                # For Ollama, try to fetch the version or tags endpoint
-                test_url = f"{endpoint_url.rstrip('/')}/api/tags"
-                response = requests.get(test_url, timeout=5)
-                response.raise_for_status()
-
-                return Response({
-                    'success': True,
-                    'message': 'Successfully connected to Ollama endpoint',
-                    'provider': 'ollama'
-                })
-
-            elif provider in ['openai', 'openai_compatible']:
-                # For OpenAI-compatible endpoints, try to list models
-                test_url = f"{endpoint_url.rstrip('/')}/v1/models"
-                headers = {}
-                if api_key:
-                    headers['Authorization'] = f'Bearer {api_key}'
-
-                response = requests.get(test_url, headers=headers, timeout=5)
-                response.raise_for_status()
-
-                return Response({
-                    'success': True,
-                    'message': 'Successfully connected to OpenAI-compatible endpoint',
-                    'provider': provider
-                })
-
-            else:
-                return Response(
-                    {'success': False, 'error': f'Unknown provider: {provider}'},
-                    status=status.HTTP_400_BAD_REQUEST
+            if not llm_result["success"]:
+                # API-P1-03: Log detailed error
+                # API-P1-04: Don't expose internal LLM error details to user
+                logger.error(
+                    "Failed to generate search queries: %s", llm_result.get("error", "Unknown error")
                 )
-
-        except requests.exceptions.Timeout:
-            return Response(
-                {'success': False, 'error': 'Connection timeout - endpoint did not respond within 5 seconds'},
-                status=status.HTTP_408_REQUEST_TIMEOUT
-            )
-        except requests.exceptions.ConnectionError:
-            return Response(
-                {'success': False, 'error': 'Connection failed - could not reach endpoint'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-        except requests.exceptions.HTTPError as e:
-            return Response(
-                {'success': False, 'error': f'HTTP error: {e.response.status_code} - {e.response.reason}'},
-                status=status.HTTP_502_BAD_GATEWAY
-            )
-        except Exception as e:
-            logger.error(f"Failed to validate endpoint: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class FetchModelsView(APIView):
-    """Fetch available models from an LLM endpoint"""
-
-    def post(self, request):
-        """Get list of available models from endpoint"""
-        import requests
-
-        endpoint_url = request.data.get('endpoint_url')
-        provider = request.data.get('provider', 'ollama')
-        api_key = request.data.get('api_key', '')
-
-        if not endpoint_url:
-            return Response(
-                {'success': False, 'error': 'endpoint_url is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            models = []
-
-            if provider == 'ollama':
-                # Ollama API endpoint
-                url = f"{endpoint_url.rstrip('/')}/api/tags"
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-
-                # Extract model names
-                if 'models' in data:
-                    models = [model['name'] for model in data['models']]
-
-            elif provider in ['openai', 'openai_compatible']:
-                # OpenAI-compatible API endpoint
-                url = f"{endpoint_url.rstrip('/')}/v1/models"
-                headers = {}
-                if api_key:
-                    headers['Authorization'] = f'Bearer {api_key}'
-
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-
-                # Extract model IDs
-                if 'data' in data:
-                    models = [model['id'] for model in data['data']]
-
-            else:
                 return Response(
-                    {'success': False, 'error': f'Unknown provider: {provider}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            return Response({
-                'success': True,
-                'models': sorted(models),
-                'count': len(models)
-            })
-
-        except requests.exceptions.Timeout:
-            return Response(
-                {'success': False, 'error': 'Connection timeout - endpoint did not respond within 10 seconds'},
-                status=status.HTTP_408_REQUEST_TIMEOUT
-            )
-        except requests.exceptions.ConnectionError:
-            return Response(
-                {'success': False, 'error': 'Connection failed - could not reach endpoint'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-        except requests.exceptions.HTTPError as e:
-            return Response(
-                {'success': False, 'error': f'HTTP error: {e.response.status_code} - {e.response.reason}'},
-                status=status.HTTP_502_BAD_GATEWAY
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch models: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class QueueStatusView(APIView):
-    """Get Django-Q queue status and worker metrics"""
-
-    def get(self, request):
-        """Return current queue statistics with detailed insights"""
-        try:
-            from django_q.models import OrmQ, Task
-            from django.utils import timezone
-            from datetime import timedelta
-            import pickle
-
-            # Queue depth (pending tasks)
-            queue_size = OrmQ.objects.count()
-
-            # Pending task details
-            pending_tasks_detail = []
-            oldest_waiting = None
-            pending_breakdown = {}
-
-            for q in OrmQ.objects.all()[:10]:  # Limit to first 10
-                try:
-                    # Handle both bytes and string payloads
-                    payload = q.payload
-                    if isinstance(payload, str):
-                        payload = payload.encode('latin-1')  # Django stores pickles as latin-1 strings
-
-                    task_data = pickle.loads(payload)
-                    func = task_data.get('func', 'unknown')
-                    task_name = task_data.get('name', 'unnamed')
-
-                    pending_tasks_detail.append({
-                        'name': task_name,
-                        'func': func,
-                        'lock': q.lock
-                    })
-
-                    # Count by function
-                    pending_breakdown[func] = pending_breakdown.get(func, 0) + 1
-
-                    # Track oldest (OrmQ doesn't have timestamps, use lock as proxy)
-                    if oldest_waiting is None or q.lock < oldest_waiting:
-                        oldest_waiting = q.lock
-                except Exception as e:
-                    logger.debug(f"Failed to parse pending task: {e}")
-
-            # Currently processing tasks (started but not stopped)
-            processing_tasks = Task.objects.filter(
-                started__isnull=False,
-                stopped__isnull=True
-            )
-            processing_count = processing_tasks.count()
-
-            processing_detail = [{
-                'name': task.name,
-                'func': task.func,
-                'started': task.started.isoformat() if task.started else None,
-                'duration_seconds': (timezone.now() - task.started).total_seconds() if task.started else 0
-            } for task in processing_tasks[:10]]
-
-            # Recent task statistics (last hour)
-            one_hour_ago = timezone.now() - timedelta(hours=1)
-            recent_tasks = Task.objects.filter(started__gte=one_hour_ago)
-
-            recent_total = recent_tasks.count()
-            recent_success = recent_tasks.filter(success=True).count()
-            recent_failed = recent_tasks.filter(success=False).count()
-
-            # Calculate success rate
-            success_rate = (recent_success / recent_total * 100) if recent_total > 0 else 0
-
-            # Last 5 minutes for throughput
-            five_min_ago = timezone.now() - timedelta(minutes=5)
-            last_5min = Task.objects.filter(started__gte=five_min_ago).count()
-            tasks_per_minute = last_5min / 5.0
-
-            # Recent failed tasks (for debugging)
-            failed_tasks = Task.objects.filter(
-                success=False,
-                started__gte=one_hour_ago
-            ).order_by('-started')[:5]
-
-            failed_task_info = [{
-                'name': task.name,
-                'func': task.func,
-                'started': task.started.isoformat() if task.started else None,
-                'stopped': task.stopped.isoformat() if task.stopped else None,
-                'attempt_count': task.attempt_count
-            } for task in failed_tasks]
-
-            # Get task breakdown by function (completed tasks)
-            from django.db.models import Count
-            task_breakdown = recent_tasks.values('func').annotate(
-                count=Count('id')
-            ).order_by('-count')[:10]
-
-            # Smarter health check:
-            # - Healthy if: recent successful tasks OR queue is empty
-            # - Unhealthy if: high failure rate (>10%) OR (queue stuck with no recent activity)
-            has_recent_activity = last_5min > 0
-            low_failure_rate = success_rate >= 90.0 or recent_failed == 0
-            worker_healthy = (queue_size == 0) or (has_recent_activity and low_failure_rate)
-
-            return Response({
-                'success': True,
-                'timestamp': timezone.now().isoformat(),
-                'queue': {
-                    'waiting_in_queue': queue_size,
-                    'currently_running': processing_count,
-                    # Legacy fields for backward compatibility
-                    'pending': queue_size,
-                    'processing': processing_count,
-                },
-                'queue_details': {
-                    'waiting_tasks': pending_tasks_detail,
-                    'waiting_breakdown': [
-                        {'func': func, 'count': count}
-                        for func, count in pending_breakdown.items()
-                    ],
-                    'running_tasks': processing_detail,
-                    'oldest_waiting_lock': oldest_waiting
-                },
-                'stats': {
-                    'last_hour': {
-                        'total': recent_total,
-                        'successful': recent_success,
-                        'failed': recent_failed,
-                        'success_rate': round(success_rate, 2)
+                    {
+                        "success": False,
+                        "error": "Search query generation failed. Please check if the LLM service is available and try again.",
+                        "memories": [],
                     },
-                    'throughput': {
-                        'tasks_per_minute': round(tasks_per_minute, 2),
-                        'last_5_minutes': last_5min
-                    }
-                },
-                'task_breakdown': list(task_breakdown),
-                'recent_failures': failed_task_info,
-                'worker_healthy': worker_healthy
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to get queue status: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class ClearStuckTasksView(APIView):
-    """Clear stuck tasks from the queue"""
-
-    def post(self, request):
-        """
-        Clear stuck tasks that haven't been processed
-        Returns count of cleared tasks
-        """
-        try:
-            from django_q.models import OrmQ
-            from django.utils import timezone
-            from datetime import timedelta
-
-            # Define "stuck" as tasks older than 30 minutes with past lock time
-            thirty_min_ago = timezone.now() - timedelta(minutes=30)
-            
-            # Find tasks with lock in the past (should be processing but aren't)
-            stuck_tasks = OrmQ.objects.filter(lock__lt=thirty_min_ago)
-            
-            count = stuck_tasks.count()
-            stuck_tasks.delete()
-            
-            logger.info(f"Cleared {count} stuck tasks from queue")
-            
-            return Response({
-                'success': True,
-                'cleared_count': count,
-                'message': f'Cleared {count} stuck task(s) from queue'
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to clear stuck tasks: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class QueueHealthDiagnosticsView(APIView):
-    """Get detailed diagnostics about queue health"""
-
-    def get(self, request):
-        """Return detailed health diagnostics with specific issues and actions"""
-        try:
-            from django_q.models import OrmQ, Task
-            from django.utils import timezone
-            from datetime import timedelta
-
-            now = timezone.now()
-            five_min_ago = now - timedelta(minutes=5)
-            thirty_min_ago = now - timedelta(minutes=30)
-            one_hour_ago = now - timedelta(hours=1)
-
-            # Analyze queue state
-            queue_size = OrmQ.objects.count()
-            stuck_count = OrmQ.objects.filter(lock__lt=thirty_min_ago).count()
-            
-            # Recent activity
-            recent_completions = Task.objects.filter(started__gte=five_min_ago).count()
-            recent_failures = Task.objects.filter(
-                started__gte=one_hour_ago, 
-                success=False
-            ).count()
-            
-            # Determine health status and specific issues
-            issues = []
-            health_status = 'healthy'
-            action_required = False
-            
-            # Check for stuck tasks
-            if stuck_count > 0:
-                health_status = 'degraded'
-                action_required = True
-                issues.append({
-                    'type': 'stuck_tasks',
-                    'severity': 'warning',
-                    'message': f'{stuck_count} task(s) stuck in queue for >30 minutes',
-                    'action': 'clear_stuck_tasks',
-                    'action_label': f'Clear {stuck_count} Stuck Task(s)'
-                })
-            
-            # Check for low activity when queue has tasks
-            if queue_size > 0 and recent_completions == 0 and stuck_count == 0:
-                health_status = 'degraded'
-                issues.append({
-                    'type': 'low_activity',
-                    'severity': 'info',
-                    'message': f'{queue_size} task(s) in queue but no completions in 5 minutes',
-                    'action': None,
-                    'action_label': 'Worker may be slow or idle'
-                })
-            
-            # Check for high failure rate
-            if recent_failures > 5:
-                health_status = 'unhealthy'
-                action_required = True
-                issues.append({
-                    'type': 'high_failures',
-                    'severity': 'error',
-                    'message': f'{recent_failures} task failures in last hour',
-                    'action': 'view_failures',
-                    'action_label': 'View Failed Tasks'
-                })
-            
-            # All good?
-            if len(issues) == 0:
-                health_status = 'healthy'
-                issues.append({
-                    'type': 'healthy',
-                    'severity': 'success',
-                    'message': 'Queue is operating normally',
-                    'action': None,
-                    'action_label': None
-                })
-
-            return Response({
-                'success': True,
-                'health_status': health_status,  # 'healthy', 'degraded', 'unhealthy'
-                'action_required': action_required,
-                'issues': issues,
-                'metrics': {
-                    'queue_size': queue_size,
-                    'stuck_tasks': stuck_count,
-                    'recent_completions': recent_completions,
-                    'recent_failures': recent_failures
-                }
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to get health diagnostics: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-# ============================================================================
-# Benchmark API Views
-# ============================================================================
-
-class RunBenchmarkView(APIView):
-    """Start a benchmark run"""
-
-    def post(self, request):
-        try:
-            test_type = request.data.get('test_type', 'all')
-            dataset = request.data.get('dataset', 'benchmark_dataset.json')
-
-            # Validate test type
-            if test_type not in ['extraction', 'search', 'evolution', 'all']:
-                return Response(
-                    {'success': False, 'error': 'Invalid test_type. Must be one of: extraction, search, evolution, all'},
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
-            # Generate a tracking ID for progress updates
-            # We use our own UUID instead of Django-Q's task ID because:
-            # 1. We need the ID before the task starts (for progress tracking)
-            # 2. Django-Q task ID isn't available inside the task function
-            import uuid
-            tracking_id = str(uuid.uuid4())
-
-            # Store metadata in group field for later retrieval
-            # Store metadata in cache (group field in django_q has 100 char limit)
-            metadata = {
-                'test_type': test_type,
-                'dataset': dataset,
-                'tracking_id': tracking_id
-            }
-            cache.set(f'benchmark_metadata_{tracking_id}', metadata, timeout=7200)  # 2 hours
-
-            logger.info(f"About to queue benchmark task (type={test_type}, dataset={dataset}, tracking_id={tracking_id})")
-
+            # Step 2: Parse the search queries JSON
             try:
-                # Pass tracking_id as first parameter so the task can use it for progress
-                logger.info(f"Calling async_task with tracking_id={tracking_id}, test_type={test_type}, dataset={dataset}")
+                search_queries = json.loads(llm_result["response"])
+                if not isinstance(search_queries, list):
+                    raise ValueError("Expected a JSON array of search queries")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error("Failed to parse search queries as JSON: %s", e)
+                logger.debug("LLM response: %s", llm_result["response"])
+                # Fallback: use original prompt as single search query
+                search_queries = [{"search_query": prompt, "search_type": "direct"}]
 
-                # Check Django-Q is available
-                from django_q.models import OrmQ
-                before_count = OrmQ.objects.count()
-                logger.info(f"OrmQ count before async_task: {before_count}")
+            logger.info("Generated %d search queries", len(search_queries))
 
-                django_q_task_id = async_task(
-                    'memories.tasks.run_benchmark_task',
-                    tracking_id,  # Pass our tracking ID as first parameter
-                    test_type,
-                    dataset,
-                    task_name=f'benchmark_{test_type}',
-                    timeout=7200,  # 2 hours timeout (benchmarks can take a long time)
-                    group=tracking_id,  # Store tracking_id for reference (shorter than full metadata JSON)
-                    sync=False  # Ensure async execution
-                )
-
-                logger.info(f"async_task returned django_q_task_id: {django_q_task_id}, tracking_id: {tracking_id}")
-
-                # Check if task was added to queue
-                import time
-                time.sleep(0.1)  # Give it a moment
-                after_count = OrmQ.objects.count()
-                logger.info(f"OrmQ count after async_task: {after_count}")
-
-                # Store mapping from tracking_id to django_q_task_id for status lookups
-                cache.set(f'benchmark_django_q_id_{tracking_id}', django_q_task_id, timeout=7200)  # 2 hours
-
-            except Exception as queue_error:
-                logger.error(f"Error during async_task call: {queue_error}", exc_info=True)
-                raise
-
-            return Response({
-                'success': True,
-                'task_id': tracking_id,  # Return tracking_id to frontend
-                'test_type': test_type,
-                'dataset': dataset,
-                'message': 'Benchmark queued successfully'
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to queue benchmark: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Step 3: Use memory search service to find relevant memories
+            relevant_memories = memory_search_service.search_memories_with_queries(
+                search_queries=search_queries,
+                user_id=user_id,
+                limit=limit,
+                threshold=threshold,
             )
 
+            # Step 4: Find additional semantic connections if enabled and we have enough results
+            # SVC-P2-12 fix: Add error handling for settings access
+            try:
+                settings = LLMSettings.get_settings()
+                enable_semantic = settings.enable_semantic_connections
+                semantic_threshold = settings.semantic_enhancement_threshold
+            except Exception as e:
+                logger.warning("Failed to load LLM settings for semantic connections: %s. Using defaults.", e)
+                enable_semantic = False
+                semantic_threshold = 3
 
-class BenchmarkStatusView(APIView):
-    """Check benchmark status"""
-
-    def get(self, request, task_id):
-        try:
-            # task_id here is actually the tracking_id from our system
-            tracking_id = task_id
-
-            # Check for progress data in cache (using tracking_id)
-            progress_data = cache.get(f'benchmark_progress_{tracking_id}')
-
-            # Get Django-Q task ID from cache
-            django_q_task_id = cache.get(f'benchmark_django_q_id_{tracking_id}')
-
-            # Check if task exists in completed tasks (Task table)
-            task = None
-            if django_q_task_id:
-                try:
-                    task = Task.objects.get(id=django_q_task_id)
-                except Task.DoesNotExist:
-                    pass
-
-            if task:
-                # Get metadata from cache (we store it there now instead of task.group)
-                metadata = cache.get(f'benchmark_metadata_{tracking_id}', {})
-
-                # Determine status
-                if task.success is True:
-                    task_status = 'completed'
-                elif task.success is False:
-                    task_status = 'failed'
-                else:
-                    task_status = 'running'
-
-                response_data = {
-                    'success': True,
-                    'task_id': tracking_id,  # Return tracking_id to frontend
-                    'status': task_status,
-                    'test_type': metadata.get('test_type'),
-                    'dataset': metadata.get('dataset'),
-                    'timestamp': task.stopped.isoformat() if task.stopped else task.started.isoformat() if task.started else None
-                }
-
-                # Add progress data if available
-                if progress_data:
-                    response_data['progress'] = progress_data
-
-                return Response(response_data)
+            if (
+                enable_semantic
+                and relevant_memories
+                and len(relevant_memories) >= semantic_threshold
+            ):
+                logger.info("Finding additional semantic connections...")
+                relevant_memories = memory_search_service.find_semantic_connections(
+                    memories=relevant_memories,
+                    original_query=prompt,
+                    user_id=user_id,
+                )
+                logger.info(
+                    "After semantic connection analysis: %d memories",
+                    len(relevant_memories),
+                )
             else:
-                # Task not in completed table - check if it's truly pending or if it timed out
-                # If task has been running for too long (>2 hours), it likely timed out
-                from datetime import timedelta
+                logger.info(
+                    "Skipping semantic connections: enabled=%s, memories=%d, threshold=%d",
+                    enable_semantic,
+                    len(relevant_memories),
+                    semantic_threshold,
+                )
 
-                # Check if we have stale progress data (task started more than 2 hours ago)
-                is_stale = False
-                if progress_data:
-                    # Try to determine how long ago this task started
-                    # If we can't find it in OrmQ either, assume it timed out
-                    try:
-                        pending_task = OrmQ.objects.filter(task__contains=tracking_id).first()
-                        if not pending_task:
-                            # Not in queue and not in completed tasks = likely timed out
-                            is_stale = True
-                    except:
-                        pass
+            # Step 5: Generate memory summary for AI assistance (optional)
+            memory_summary = None
+            include_summary = request.data.get("include_summary", False)
+            if relevant_memories and include_summary:
+                logger.info("Generating memory summary...")
+                memory_summary = memory_search_service.summarize_relevant_memories(
+                    memories=relevant_memories, user_query=prompt
+                )
+                logger.info("Memory summary generated successfully")
 
-                if is_stale:
-                    # Clear stale progress data
-                    cache.delete(f'benchmark_progress_{tracking_id}')
-                    return Response({
-                        'success': True,
-                        'task_id': tracking_id,
-                        'status': 'failed',
-                        'test_type': None,
-                        'dataset': None,
-                        'timestamp': None,
-                        'error': 'Task timed out or failed'
-                    })
+            # Step 6: Format memories for response with field selection
+            # Default to minimal fields for efficiency - can reduce response size by 60-80%
+            # API-P1-06: Validate fields against whitelist
+            requested_fields = request.data.get("fields", ["id", "content"])
+            fields = validate_fields(requested_fields)
+            include_search_metadata = request.data.get("include_search_metadata", False)
 
-                # Return pending status instead of 404 to avoid frontend polling errors
-                # The frontend will continue polling until it gets a completed/failed status
-                response_data = {
-                    'success': True,
-                    'task_id': tracking_id,
-                    'status': 'pending',
-                    'test_type': None,
-                    'dataset': None,
-                    'timestamp': None
+            formatted_memories = []
+            for memory in relevant_memories:
+                memory_data = self._format_memory(memory, fields, include_search_metadata)
+                formatted_memories.append(memory_data)
+
+            logger.info("Found %d relevant memories", len(formatted_memories))
+
+            return Response(
+                {
+                    "success": True,
+                    "memories": formatted_memories,
+                    "memory_summary": memory_summary,  # Add the summary
+                    "count": len(formatted_memories),
+                    "search_queries_generated": len(search_queries),
+                    "model_used": llm_result.get("model", "unknown"),
+                    "query_params": {
+                        "limit": limit,
+                        "threshold": threshold,
+                    },
+                    "debug_info": {
+                        "quality_filtering_applied": True,
+                        "improved_summarization": True,
+                        # API-P2-11 fix: relevant_memories is always defined here
+                        "raw_memory_count_before_filtering": len(relevant_memories)
+                    }
                 }
-
-                # Add progress data if available (task may be running but not yet in DB)
-                if progress_data:
-                    response_data['progress'] = progress_data
-                    response_data['status'] = 'running'  # Override to running if we have progress
-
-                return Response(response_data)
+            )
 
         except Exception as e:
-            logger.error(f"Failed to get benchmark status: {e}", exc_info=True)
+            # API-P1-03: Log full exception with stack trace
+            # API-P1-04: Return generic error message to prevent information disclosure
+            logger.error("Unexpected error during memory retrieval: %s", e, exc_info=True)
             return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {
+                    "success": False,
+                    "error": "An unexpected error occurred during memory retrieval. Please try again later.",
+                    "memories": [],
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
-class BenchmarkResultsView(APIView):
-    """Get benchmark results"""
+class TestConnectionView(APIView):
+    """
+    API endpoint to test connections to LLM and vector services
+    """
 
-    def get(self, request, task_id):
-        try:
-            # task_id here is actually the tracking_id from our system
-            tracking_id = task_id
-
-            # Get Django-Q task ID from cache
-            django_q_task_id = cache.get(f'benchmark_django_q_id_{tracking_id}')
-
-            if not django_q_task_id:
-                return Response(
-                    {'success': False, 'error': 'Benchmark task ID not found. Task may have expired.'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            # Get task from django-q
-            try:
-                task = Task.objects.get(id=django_q_task_id)
-            except Task.DoesNotExist:
-                return Response(
-                    {'success': False, 'error': 'Benchmark task not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            if task.success is not True:
-                task_status = 'failed' if task.success is False else 'pending'
-                return Response(
-                    {'success': False, 'error': f'Benchmark not yet completed (status: {task_status})'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Get the task result using django-q's result function
-            task_result = result(django_q_task_id)
-
-            if task_result is None:
-                return Response(
-                    {'success': False, 'error': 'Benchmark results not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            return Response({
-                'success': task_result.get('success', True),
-                'task_id': tracking_id,  # Return tracking_id to frontend
-                'output': task_result.get('output', ''),
-                'error': task_result.get('error'),
-                'timestamp': task_result.get('timestamp')
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to get benchmark results: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class ListDatasetsView(APIView):
-    """List available benchmark datasets"""
-    
     def get(self, request):
         try:
-            # Get test_data directory
-            test_data_dir = Path(__file__).parent / 'test_data'
-            
-            if not test_data_dir.exists():
-                return Response({
-                    'success': True,
-                    'datasets': []
-                })
-            
-            # List all .json files
-            datasets = []
-            for json_file in test_data_dir.glob('*.json'):
-                try:
-                    with open(json_file, 'r') as f:
-                        data = json.load(f)
-                    
-                    datasets.append({
-                        'filename': json_file.name,
-                        'description': data.get('description', 'No description'),
-                        'version': data.get('dataset_version', 'Unknown'),
-                        'num_conversations': len(data.get('test_conversations', [])),
-                        'num_queries': len(data.get('test_queries', []))
-                    })
-                except Exception as e:
-                    logger.warning(f"Failed to read dataset {json_file.name}: {e}")
-                    datasets.append({
-                        'filename': json_file.name,
-                        'description': 'Error reading file',
-                        'version': 'Unknown',
-                        'num_conversations': 0,
-                        'num_queries': 0
-                    })
-            
-            return Response({
-                'success': True,
-                'datasets': datasets
-            })
+            # Refresh LLM settings
+            llm_service.refresh_settings()
+
+            # Test LLM connection
+            llm_result = llm_service.test_connection()
+
+            # API-P2-07 fix: Moved import to module level
+            # Test vector service
+            vector_health = vector_service.health_check()
+            vector_info = vector_service.get_collection_info()
+
+            return Response(
+                {
+                    "llm_connection": llm_result.get("llm_connection", False),
+                    "llm_error": llm_result.get("llm_error"),
+                    "embeddings_connection": llm_result.get(
+                        "embeddings_connection", False
+                    ),
+                    "embeddings_error": llm_result.get("embeddings_error"),
+                    "vector_service_health": vector_health,
+                    "vector_collection_info": vector_info,
+                }
+            )
 
         except Exception as e:
-            logger.error(f"Failed to list datasets: {e}", exc_info=True)
+            logger.error("Error testing connections: %s", e)
             return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {
+                    "error": "Failed to test connections",
+                    "llm_connection": False,
+                    "embeddings_connection": False,
+                    "vector_service_health": False,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
-class UploadDatasetView(APIView):
-    """Upload a new benchmark dataset"""
+class MemoryStatsView(APIView):
+    """
+    API endpoint to get memory statistics for a user
+    """
 
-    parser_classes = [MultiPartParser]
+    def get(self, request):
+        user_id = request.query_params.get("user_id")
+
+        if not user_id:
+            return Response(
+                {"success": False, "error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            return Response(
+                {"success": False, "error": "Invalid user_id format"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # API-P1-02: Optimize query to fetch only needed field
+            # Use .only() to fetch only metadata field, reducing memory usage
+            memories = Memory.objects.filter(user_id=user_id).only('metadata')
+
+            # Basic stats
+            total_memories = memories.count()
+
+            # Count tags by category
+            tags_count = {}
+            domain_tags = {}  # Track domain-related tags separately if needed
+
+            for memory in memories:
+                metadata = memory.metadata or {}
+
+                # Count all tags
+                tags = metadata.get("tags", [])
+                for tag in tags:
+                    tags_count[tag] = tags_count.get(tag, 0) + 1
+
+                    # Optionally group domain tags for insights
+                    if tag in ["personal", "professional", "academic", "creative"]:
+                        domain_tags[tag] = domain_tags.get(tag, 0) + 1
+
+            # API-P2-07 fix: Moved import to module level
+            # Get vector service stats
+            collection_info = vector_service.get_collection_info()
+
+            return Response(
+                {
+                    "success": True,
+                    "total_memories": total_memories,
+                    "domain_distribution": domain_tags,
+                    "top_tags": dict(
+                        sorted(
+                            tags_count.items(), key=lambda x: x[1], reverse=True
+                        )  # Show more tags
+                    ),
+                    "vector_collection_info": collection_info,
+                }
+            )
+
+        except Exception as e:
+            # API-P1-03: Log detailed error
+            # API-P1-04: Return generic error
+            logger.error("Error getting memory stats: %s", e, exc_info=True)
+            return Response(
+                {"success": False, "error": "An error occurred while retrieving memory statistics"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class DeleteAllMemoriesView(APIView):
+    """Delete all memories for a user or all users"""
+
+    def delete(self, request):
+        # API-P2-09 fix: Use query parameters instead of request body
+        # DELETE requests don't reliably support request bodies in all HTTP clients
+        user_id = request.query_params.get("user_id") or request.data.get("user_id")
+        confirm_param = request.query_params.get("confirm") or request.data.get("confirm", False)
+
+        # Parse confirm parameter (could be string or boolean)
+        if isinstance(confirm_param, str):
+            confirm = confirm_param.lower() in ('true', '1', 'yes')
+        else:
+            confirm = bool(confirm_param)
+
+        if not confirm:
+            return Response(
+                {"success": False, "error": "Confirmation required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            if user_id:
+                # Validate user_id format
+                try:
+                    uuid.UUID(user_id)
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid user_id format"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Delete memories for specific user
+                memories_to_delete = Memory.objects.filter(user_id=user_id)
+                count = memories_to_delete.count()
+
+                if count == 0:
+                    return Response(
+                        {
+                            "success": True,
+                            "message": f"No memories found for user {user_id}",
+                            "deleted_count": 0,
+                        }
+                    )
+
+                # API-P2-01 fix: Use values_list to fetch only IDs, not full objects
+                # This is much more efficient for large datasets
+                memory_ids = list(
+                    memories_to_delete.values_list('id', flat=True)
+                )
+                memory_ids_str = [str(mid) for mid in memory_ids]
+
+                vector_delete_result = vector_service.delete_memories(
+                    memory_ids_str, user_id
+                )
+
+                if not vector_delete_result["success"]:
+                    # API-P1-03/04: Log detailed error but return generic message
+                    logger.error(
+                        f"Failed to delete vectors for user {user_id}: {vector_delete_result.get('error', 'Unknown error')}"
+                    )
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to delete memories from vector database.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                # API-P1-05: Use transaction for database delete
+                # If this fails, at least the failure is atomic
+                try:
+                    with transaction.atomic():
+                        # Delete from main database within transaction
+                        memories_to_delete.delete()
+
+                    logger.info(f"Deleted {count} memories for user {user_id}")
+                    return Response(
+                        {
+                            "success": True,
+                            "message": f"Successfully deleted {count} memories for user {user_id}",
+                            "deleted_count": count,
+                            "user_id": user_id,
+                        }
+                    )
+                except Exception as e:
+                    # API-P1-03: Log detailed error
+                    # API-P1-04: Return generic error
+                    logger.error(f"Failed to delete memories from database for user {user_id}: {e}", exc_info=True)
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to delete memories from database. Vector database may have orphaned entries.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+            else:
+                # Delete ALL memories (admin operation)
+                total_count = Memory.objects.count()
+
+                if total_count == 0:
+                    return Response(
+                        {
+                            "success": True,
+                            "message": "No memories found in database",
+                            "deleted_count": 0,
+                        }
+                    )
+
+                # Clear entire vector database
+                vector_clear_result = vector_service.clear_all_memories()
+
+                if not vector_clear_result["success"]:
+                    # API-P1-03/04: Log detailed error but return generic message
+                    logger.error(
+                        f"Failed to clear vector database: {vector_clear_result.get('error', 'Unknown error')}"
+                    )
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to clear vector database.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                # API-P1-05: Use transaction for database delete
+                try:
+                    with transaction.atomic():
+                        # Delete all memories from main database within transaction
+                        Memory.objects.all().delete()
+
+                    logger.warning(
+                        f"ADMIN ACTION: Deleted ALL {total_count} memories from database"
+                    )
+                    return Response(
+                        {
+                            "success": True,
+                            "message": f"Successfully deleted ALL {total_count} memories",
+                            "deleted_count": total_count,
+                        }
+                    )
+                except Exception as e:
+                    # API-P1-03: Log detailed error
+                    # API-P1-04: Return generic error
+                    logger.error(f"Failed to delete all memories from database: {e}", exc_info=True)
+                    return Response(
+                        {
+                            "success": False,
+                            "error": "Failed to delete memories from database. Vector database may have orphaned entries.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+        except Exception as e:
+            # API-P1-03: Log detailed error with stack trace
+            # API-P1-04: Return generic error to prevent information disclosure
+            logger.error(f"Error deleting memories: {e}", exc_info=True)
+            return Response(
+                {"success": False, "error": "An unexpected error occurred while deleting memories"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ImportOpenWebUIHistoryView(APIView):
+    """Import historical conversations from Open WebUI database"""
+
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
 
     def post(self, request):
         """
-        Upload a new benchmark dataset JSON file
+        Start import process from uploaded database file
 
-        Expected parameters:
-        - file: JSON dataset file
+        Request body:
+        - db_file: Uploaded SQLite database file (multipart/form-data)
+        - target_user_id: (optional) Mnemosyne user ID to assign all memories
+        - openwebui_user_id: (optional) Filter by Open WebUI user
+        - after_date: (optional) Only import after this date (ISO format)
+        - batch_size: (optional) Batch processing size (default: 10)
+        - limit: (optional) Maximum conversations to import
+        - dry_run: (optional) Preview mode (default: false)
         """
+        # API-P2-07 fix: Moved imports to module level
+
         try:
-            # Validate file upload
-            if 'file' not in request.FILES:
+            # Get uploaded file
+            if 'db_file' not in request.FILES:
                 return Response(
-                    {'success': False, 'error': 'No file uploaded'},
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"success": False, "error": "No database file uploaded"},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            uploaded_file = request.FILES['file']
+            db_file = request.FILES['db_file']
 
             # Validate file extension
-            if not uploaded_file.name.endswith('.json'):
+            if not db_file.name.endswith('.db'):
                 return Response(
-                    {'success': False, 'error': 'File must be a JSON file (.json)'},
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"success": False, "error": "File must be a .db SQLite database"},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Validate filename (alphanumeric, underscores, hyphens only)
-            import re
-            safe_filename = re.sub(r'[^\w\-.]', '_', uploaded_file.name)
-
-            # Read and validate JSON content
+            # Validate file size
+            # SVC-P2-12 fix: Add error handling for settings access
             try:
-                content = uploaded_file.read().decode('utf-8')
-                dataset = json.loads(content)
-            except json.JSONDecodeError as e:
-                return Response(
-                    {'success': False, 'error': f'Invalid JSON format: {str(e)}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            except UnicodeDecodeError:
-                return Response(
-                    {'success': False, 'error': 'File must be UTF-8 encoded'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Validate dataset structure
-            if 'test_conversations' not in dataset and 'test_queries' not in dataset:
-                return Response(
-                    {'success': False, 'error': 'Invalid dataset format: must contain "test_conversations" or "test_queries"'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Determine dataset directory
-            dataset_dir = Path(django_settings.BASE_DIR) / 'memories' / 'test_data'
-            dataset_dir.mkdir(parents=True, exist_ok=True)
-
-            # Check if file already exists
-            target_file = dataset_dir / safe_filename
-            if target_file.exists():
-                return Response(
-                    {'success': False, 'error': f'Dataset "{safe_filename}" already exists. Please delete it first or use a different filename.'},
-                    status=status.HTTP_409_CONFLICT
-                )
-
-            # Write file
-            with open(target_file, 'w', encoding='utf-8') as f:
-                json.dump(dataset, f, indent=2)
-
-            logger.info(f"Uploaded new dataset: {safe_filename}")
-
-            # Get dataset info
-            num_conversations = len(dataset.get('test_conversations', []))
-            num_queries = len(dataset.get('test_queries', []))
-
-            return Response({
-                'success': True,
-                'message': f'Dataset "{safe_filename}" uploaded successfully',
-                'filename': safe_filename,
-                'num_conversations': num_conversations,
-                'num_queries': num_queries
-            }, status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            logger.error(f"Failed to upload dataset: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-# =============================================================================
-# Activity Monitor API
-# =============================================================================
-
-class ActiveTasksView(APIView):
-    """Get currently running and pending tasks"""
-
-    def get(self, request):
-        try:
-            from django_q.models import Task as DjangoQTask, OrmQ
-            from django.core.cache import cache
-
-            running_tasks = []
-            pending_tasks = []
-
-            current_time = timezone.now()
-
-            # Get actually running tasks from the Task table (started but not stopped)
-            # These are tasks that workers have picked up and are actively processing
-            executing_tasks = DjangoQTask.objects.filter(
-                started__isnull=False,
-                stopped__isnull=True
-            ).order_by('-started')[:10]
-
-            for task in executing_tasks:
-                try:
-                    func_name = task.func
-                    task_name = task.name
-
-                    # Calculate elapsed time
-                    elapsed_seconds = (current_time - task.started).total_seconds() if task.started else 0
-
-                    # Try to get progress for extraction/benchmark tasks
-                    progress = None
-                    task_type = 'unknown'
-                    turn_id = None
-
-                    if 'extract_atomic_notes' in func_name:
-                        task_type = 'extraction'
-                        # Extract turn_id from task name (extract_{turn_id} or retry_extract_{turn_id}_{attempt})
-                        if task_name.startswith('extract_') or task_name.startswith('retry_extract_'):
-                            # Parse turn_id from name
-                            parts = task_name.replace('retry_', '').replace('extract_', '').split('_')
-                            if parts:
-                                # First part after 'extract_' is the UUID, rest is attempt number
-                                # UUIDs have format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (5 parts separated by -)
-                                # So we need to join first 5 parts with '-'
-                                if len(parts) >= 5:
-                                    turn_id = '-'.join(parts[:5])
-                                    progress_data = cache.get(f'extraction_progress_{turn_id}')
-                                    if progress_data:
-                                        progress = progress_data
-                    elif 'run_benchmark_task' in func_name:
-                        task_type = 'benchmark'
-                        # Extract tracking_id from group metadata
-                        if task.group:
-                            try:
-                                import json
-                                metadata = json.loads(task.group)
-                                tracking_id = metadata.get('tracking_id')
-                                if tracking_id:
-                                    progress_data = cache.get(f'benchmark_progress_{tracking_id}')
-                                    if progress_data:
-                                        progress = progress_data
-                            except:
-                                pass
-
-                    running_tasks.append({
-                        'task_id': str(task.id),
-                        'type': task_type,
-                        'name': task_name,
-                        'started': task.started.isoformat() if task.started else None,
-                        'elapsed_seconds': int(elapsed_seconds),
-                        'progress': progress,
-                        'turn_id': turn_id
-                    })
-                except Exception as e:
-                    logger.warning(f"Error processing running task {task.id}: {e}")
-
-            # Get ALL pending tasks from OrmQ (queued and waiting to be picked up by workers)
-            # All tasks in OrmQ are by definition "pending" - once picked up, they move to Task table
-            queued_tasks = OrmQ.objects.all().order_by('lock')[:20]
-
-            for orm_task in queued_tasks:
-                try:
-                    # orm_task.task is already a dict (Django-Q deserializes it automatically)
-                    task_data = orm_task.task
-                    func_name = task_data.get('func', 'unknown')
-                    args = task_data.get('args', [])
-                    task_name = task_data.get('name', func_name)
-
-                    task_type = 'unknown'
-                    turn_id = None
-
-                    if 'extract_atomic_notes' in func_name:
-                        task_type = 'extraction'
-                        # Extract turn_id from task name or args
-                        if task_name.startswith('extract_') or task_name.startswith('retry_extract_'):
-                            # Parse turn_id from name
-                            parts = task_name.replace('retry_', '').replace('extract_', '').split('_')
-                            if len(parts) >= 5:
-                                turn_id = '-'.join(parts[:5])
-                        elif args:
-                            turn_id = str(args[0])
-                    elif 'run_benchmark_task' in func_name:
-                        task_type = 'benchmark'
-
-                    # Calculate wait time until task becomes available (lock time)
-                    # If lock is in the past, the task is ready to be picked up (wait = 0)
-                    wait_seconds = max(0, (orm_task.lock - current_time).total_seconds())
-
-                    pending_tasks.append({
-                        'task_id': str(orm_task.id),
-                        'type': task_type,
-                        'name': task_name,
-                        'queued_at': orm_task.lock.isoformat(),
-                        'wait_seconds': int(wait_seconds),
-                        'turn_id': turn_id
-                    })
-                except Exception as e:
-                    logger.warning(f"Error processing pending task {orm_task.id}: {e}")
-
-            return Response({
-                'success': True,
-                'timestamp': current_time.isoformat(),
-                'running': running_tasks,
-                'pending': pending_tasks,
-                'running_count': len(running_tasks),
-                'pending_count': len(pending_tasks)
-            })
-
-        except Exception as e:
-            logger.error(f"Error fetching active tasks: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class RecentTasksView(APIView):
-    """Get recently completed tasks"""
-
-    def get(self, request):
-        try:
-            from django_q.models import Task as DjangoQTask
-
-            # Get last 20 completed tasks
-            recent_tasks = DjangoQTask.objects.all().order_by('-stopped')[:20]
-
-            tasks_list = []
-            for task in recent_tasks:
-                task_type = 'unknown'
-                # Task names are like "extract_{turn_id}" or "retry_extract_{turn_id}_{attempt}" for extraction tasks
-                if task.name.startswith('extract_') or task.name.startswith('retry_extract_'):
-                    task_type = 'extraction'
-                elif 'run_benchmark_task' in task.name or 'benchmark_' in task.name:
-                    task_type = 'benchmark'
-
-                # Calculate duration
-                duration_seconds = 0
-                if task.started and task.stopped:
-                    duration_seconds = (task.stopped - task.started).total_seconds()
-
-                task_status = 'completed' if task.success else 'failed'
-
-                tasks_list.append({
-                    'task_id': str(task.id),
-                    'type': task_type,
-                    'name': task.name,
-                    'status': task_status,
-                    'started': task.started.isoformat() if task.started else None,
-                    'stopped': task.stopped.isoformat() if task.stopped else None,
-                    'duration_seconds': int(duration_seconds)
-                })
-
-            return Response({
-                'success': True,
-                'tasks': tasks_list
-            })
-
-        except Exception as e:
-            logger.error(f"Error fetching recent tasks: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-# ============================================================================
-# Data Management API Views  
-# ============================================================================
-
-class ClearAllDataView(APIView):
-    """Clear all data except settings"""
-
-    def post(self, request):
-        """
-        Clear all data from conversations, notes, relationships
-        Preserves settings and other configuration data
-        """
-        try:
-            logger.info("Starting clear all data operation")
-            
-            # Clear conversation turns
-            conversations_deleted = ConversationTurn.objects.all().delete()[0]
-            logger.info(f"Deleted {conversations_deleted} conversation turns")
-            
-            # Clear atomic notes
-            notes_deleted = AtomicNote.objects.all().delete()[0]
-            logger.info(f"Deleted {notes_deleted} atomic notes")
-            
-            # Clear relationships (should cascade, but explicit is safer)
-            relationships_deleted = NoteRelationship.objects.all().delete()[0]
-            logger.info(f"Deleted {relationships_deleted} note relationships")
-            
-            # Clear vector storage in Qdrant if available
-            try:
-                # The vector service exposes a global instance `vector_service`
-                # with a `clear_all_memories()` admin method that deletes/recreates
-                # the Qdrant collection. Use that instead of non-existent helpers.
-                from .vector_service import vector_service as q_vector_service
-
-                if hasattr(q_vector_service, 'clear_all_memories'):
-                    resp = q_vector_service.clear_all_memories()
-                    logger.info("Cleared all vector embeddings: %s", resp)
-                else:
-                    logger.warning("Vector service does not implement clear_all_memories(), skipping Qdrant clear")
+                settings = LLMSettings.get_settings()
+                max_size_mb = settings.max_import_file_size_mb
             except Exception as e:
-                logger.warning(f"Failed to clear vector storage: {e}")
-            
-            # Clear Django-Q cache
+                logger.warning("Failed to load LLM settings for import file size: %s. Using default 100MB.", e)
+                max_size_mb = 100  # Default 100MB limit
+
+            max_size_bytes = max_size_mb * 1024 * 1024
+
+            if db_file.size > max_size_bytes:
+                return Response(
+                    {
+                        "success": False,
+                        "error": f"Database file too large. Maximum size is {max_size_mb}MB",
+                        "file_size_mb": round(db_file.size / (1024 * 1024), 2),
+                        "max_size_mb": max_size_mb
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Get and validate optional parameters BEFORE creating temp file
+            # API-P2-12 fix: Validate all parameters before creating temp file
+            # to prevent file leak on early returns
+            target_user_id = request.data.get('target_user_id')
+            openwebui_user_id = request.data.get('openwebui_user_id')
+            after_date_str = request.data.get('after_date')
+
+            # API-P2-04 fix: Proper boolean parsing instead of string comparison
+            dry_run_value = request.data.get('dry_run', False)
+            if isinstance(dry_run_value, bool):
+                dry_run = dry_run_value
+            elif isinstance(dry_run_value, str):
+                dry_run = dry_run_value.lower() in ('true', '1', 'yes')
+            else:
+                dry_run = bool(dry_run_value)
+
+            # Validate and clamp batch_size
             try:
-                from django.core.cache import cache
-                cache.clear()
-                logger.info("Cleared Django cache")
-            except Exception as e:
-                logger.warning(f"Failed to clear cache: {e}")
-            
-            total_deleted = conversations_deleted + notes_deleted + relationships_deleted
-            logger.info(f"Clear all data completed: {total_deleted} items deleted total")
-            
-            return Response({
-                'success': True,
-                'message': f'Successfully cleared all data ({total_deleted} items)',
-                'deleted_items': {
-                    'conversations': conversations_deleted,
-                    'notes': notes_deleted,
-                    'relationships': relationships_deleted
-                }
-            })
-            
-        except Exception as e:
-            logger.error(f"Failed to clear all data: {e}", exc_info=True)
-            return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                batch_size = int(request.data.get('batch_size', DEFAULT_IMPORT_BATCH_SIZE))
+                batch_size = max(1, min(MAX_RETRIEVAL_LIMIT, batch_size))  # Clamp to 1-100
+            except (ValueError, TypeError):
+                return Response(
+                    {"success": False, "error": f"Invalid batch_size. Must be an integer between 1-{MAX_RETRIEVAL_LIMIT}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
+            # Validate limit
+            limit = request.data.get('limit')
+            if limit:
+                try:
+                    limit = int(limit)
+                    if limit < 1:
+                        return Response(
+                            {"success": False, "error": "Limit must be a positive integer."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                except (ValueError, TypeError):
+                    return Response(
+                        {"success": False, "error": "Invalid limit. Must be a positive integer."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
-class CancelBenchmarkView(APIView):
-    """Cancel a running benchmark task"""
+            # Parse after_date if provided
+            after_date = None
+            if after_date_str:
+                try:
+                    # API-P2-07 fix: Moved import to module level
+                    # Parse date string and treat as start of day in UTC
+                    # This ensures consistent filtering regardless of user's timezone
+                    date_obj = datetime.fromisoformat(after_date_str.replace('Z', '')).date()
+                    after_date = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid date format. Use ISO format (YYYY-MM-DD)"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
-    def post(self, request):
-        """
-        Cancel a running benchmark task by stopping it in Django-Q
-        """
-        try:
-            # Accept either the django-q numeric task id or our tracking_id (returned to frontend)
-            django_q_task_id = request.data.get('django_q_task_id')
-            tracking_id = request.data.get('tracking_id') or request.data.get('task_id')
-            
-            # Debug logging to understand what's being received
-            logger.info(f"Cancel benchmark request data: {request.data}")
-            logger.info(f"django_q_task_id: {django_q_task_id}, tracking_id: {tracking_id}")
-            logger.info(f"Request method: {request.method}")
-            logger.info(f"Content type: {request.content_type}")
+            # Validate target_user_id if provided
+            if target_user_id:
+                try:
+                    uuid.UUID(target_user_id)
+                except ValueError:
+                    return Response(
+                        {"success": False, "error": "Invalid target_user_id format. Must be UUID."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
-            from django.core.cache import cache
+            # API-P2-13 fix: Generate unique import_id BEFORE starting thread
+            # to prevent race condition in progress initialization
+            import_id = str(uuid.uuid4())
 
-            # If caller provided tracking_id, look up the django-q id from cache
-            if not django_q_task_id and tracking_id:
-                cached = cache.get(f'benchmark_django_q_id_{tracking_id}')
-                if cached:
-                    django_q_task_id = cached
-                else:
-                    # Cache miss - try to find the task by group (which contains tracking_id)
+            # API-P2-12 fix: Only create temp file AFTER all validations pass
+            # This prevents file leaks from early returns during validation
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp_file:
+                for chunk in db_file.chunks():
+                    tmp_file.write(chunk)
+                tmp_path = tmp_file.name
+
+            # Run import in background thread
+            def run_import():
+                import_thread_id = threading.current_thread().ident
+                logger.info(f"[Thread {import_thread_id}] Starting import in background...")
+
+                # Track if temp file was created successfully
+                temp_file_created = Path(tmp_path).exists()
+
+                try:
                     try:
-                        task = Task.objects.filter(group=tracking_id).order_by('-started').first()
-                        if task:
-                            django_q_task_id = task.id
-                            logger.info(f"Found task {django_q_task_id} for tracking_id {tracking_id}")
+                        with OpenWebUIImporter(tmp_path) as importer:
+                            result = importer.import_conversations(
+                                import_id=import_id,  # API-P2-13 fix: Pass import_id
+                                target_user_id=target_user_id,
+                                openwebui_user_id=openwebui_user_id,
+                                after_date=after_date,
+                                batch_size=batch_size,
+                                limit=limit,
+                                dry_run=dry_run,
+                            )
+                            logger.info(f"[Thread {import_thread_id}] Import completed successfully: {result}")
                     except Exception as e:
-                        logger.debug(f"Could not find task by tracking_id: {e}")
+                        logger.error(f"[Thread {import_thread_id}] Import failed in background: {e}", exc_info=True)
+                finally:
+                    # Always cleanup temp file if it exists
+                    if temp_file_created or Path(tmp_path).exists():
+                        try:
+                            Path(tmp_path).unlink(missing_ok=True)
+                            logger.info(f"[Thread {import_thread_id}] Cleaned up temp file: {tmp_path}")
+                        except Exception as e:
+                            logger.error(f"[Thread {import_thread_id}] Failed to delete temp file: {e}")
+                    logger.info(f"[Thread {import_thread_id}] Background import thread exiting")
 
-            # Try to cancel queued OrmQ entries first (even if Task record not found)
-            # This handles cases where task is queued but not yet in Task table
-            queued_count = 0
-            extraction_count = 0
-            try:
-                from django_q.models import OrmQ
+            # API-P2-13 fix: Initialize progress state BEFORE starting thread
+            # to prevent race condition. Use _import_progresses dict with import_id.
+            # API-P2-07 fix: Moved import to module level
+            with _progress_lock:
+                if import_id not in _import_progresses:
+                    _import_progresses[import_id] = ImportProgress()
+                progress = _import_progresses[import_id]
+                progress.status = "initializing"
+                progress.start_time = datetime.now()
+                progress.end_time = None
+                progress.dry_run = dry_run
+                progress.error_message = None
+                progress.current_conversation_id = None
+                progress.total_conversations = 0
+                progress.processed_conversations = 0
+                progress.extracted_memories = 0
+                progress.failed_conversations = 0
 
-                # OrmQ.task is a pickled field, we need to iterate to filter
-                # Cannot use Django ORM queries on pickled data
-                to_delete = []
-                extraction_tasks = []
+            # Start import thread
+            import_thread = threading.Thread(target=run_import, daemon=True)
+            import_thread.start()
 
-                for q in OrmQ.objects.all():
-                    task_data = q.task  # Unpickles the data
-                    task_name = task_data.get('name', '')
-
-                    # Check if this task matches our tracking_id or task_id
-                    if (tracking_id and task_data.get('group') == tracking_id) or \
-                       (django_q_task_id and task_data.get('id') == str(django_q_task_id)):
-                        to_delete.append(q.id)
-                        logger.debug(f"Marking for deletion: {task_name} (group={task_data.get('group')})")
-
-                    # Also remove any extraction tasks spawned by the benchmark
-                    # These have names like "extract_<uuid>" or "retry_extract_<uuid>_N" but no group
-                    elif task_name.startswith('extract_') or task_name.startswith('retry_extract_'):
-                        extraction_tasks.append(q.id)
-                        logger.debug(f"Marking extraction task for deletion: {task_name}")
-
-                if to_delete:
-                    queued_count = len(to_delete)
-                    OrmQ.objects.filter(id__in=to_delete).delete()
-                    logger.info(f"Removed {queued_count} queued benchmark task(s) for tracking_id={tracking_id}")
-
-                # Also remove extraction tasks when cancelling benchmark
-                if extraction_tasks:
-                    extraction_count = len(extraction_tasks)
-                    OrmQ.objects.filter(id__in=extraction_tasks).delete()
-                    logger.info(f"Removed {extraction_count} queued extraction task(s)")
-
-            except Exception as e:
-                logger.error(f"Error checking/removing OrmQ entries: {e}", exc_info=True)
-
-            # If no Task record found, return success (we already cleaned up OrmQ above)
-            if not django_q_task_id:
-                total_cleared = queued_count + extraction_count
-                logger.warning(f"No Task record found for tracking_id {tracking_id}, cleared {total_cleared} queued entries (benchmark: {queued_count}, extraction: {extraction_count})")
-                return Response({
-                    'success': True,
-                    'message': f'Cleared {total_cleared} queued task(s) for {tracking_id} (benchmark: {queued_count}, extraction: {extraction_count}). Task may have already completed or failed.',
-                    'already_stopped': True,
-                    'queued_cleared': queued_count,
-                    'extraction_cleared': extraction_count
-                })
-
-            # Mark the Task object as cancelled/failed so status endpoints reflect cancellation
-            try:
-                task = Task.objects.get(id=django_q_task_id)
-
-                # Only update if not already stopped
-                if not task.stopped:
-                    task.success = False
-                    task.result = json.dumps({
-                        'success': False,
-                        'output': f'Benchmark task {django_q_task_id} was cancelled by user',
-                        'error': 'cancelled_by_user',
-                        'timestamp': timezone.now().isoformat()
-                    })
-                    task.stopped = timezone.now()
-                    task.save()
-                    logger.info(f"Marked django-q Task {django_q_task_id} as cancelled")
-
-                return Response({
-                    'success': True,
-                    'message': f'Benchmark task {django_q_task_id} cancelled successfully'
-                })
-
-            except Task.DoesNotExist:
-                # Task record doesn't exist - likely already completed/failed
-                # We've already cleared any queued entries, so return success
-                total_cleared = queued_count + extraction_count
-                logger.info(f"Task {django_q_task_id} not found in database (may have completed/failed), cleared {total_cleared} queued entries (benchmark: {queued_count}, extraction: {extraction_count})")
-                return Response({
-                    'success': True,
-                    'message': f'Task not found in database (already completed/failed). Cleared {total_cleared} queued task(s) (benchmark: {queued_count}, extraction: {extraction_count}).',
-                    'already_stopped': True,
-                    'queued_cleared': queued_count,
-                    'extraction_cleared': extraction_count
-                })
+            return Response(
+                {
+                    "success": True,
+                    "message": "Import started successfully",
+                    "import_id": import_id,  # API-P2-13 fix: Return import_id for progress tracking
+                    "dry_run": dry_run,
+                }
+            )
 
         except Exception as e:
-            logger.error(f"Failed to cancel benchmark task: {e}", exc_info=True)
+            logger.error(f"Error starting import: {e}")
             return Response(
-                {'success': False, 'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ImportProgressView(APIView):
+    """Get current import progress"""
+
+    def get(self, request):
+        try:
+            # API-P2-07 fix: Moved import to module level
+            progress = OpenWebUIImporter.get_progress()
+
+            return Response(
+                {
+                    "success": True,
+                    "progress": progress,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error getting import progress: {e}")
+            return Response(
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class CancelImportView(APIView):
+    """Cancel ongoing import"""
+
+    def post(self, request):
+        try:
+            # API-P2-07 fix: Moved import to module level
+            OpenWebUIImporter.cancel_import()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Import cancellation requested",
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error cancelling import: {e}")
+            return Response(
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

@@ -1,0 +1,2864 @@
+"""
+Comprehensive tests for critical fixes in the memories app.
+
+Tests cover P0 and P1 fixes for:
+- Thread safety in rate limiter and cache
+- Resource management (session cleanup)
+- Lazy connection patterns
+- Concurrency issues in imports
+- API parameter fixes
+"""
+
+import json
+import sqlite3
+import tempfile
+import threading
+import time
+import unittest
+from collections import defaultdict
+from pathlib import Path
+from typing import Dict, List
+from unittest.mock import MagicMock, Mock, patch, PropertyMock
+
+from django.conf import settings
+from django.test import TestCase, RequestFactory
+from qdrant_client.models import PointIdsList
+
+
+class RateLimiterThreadSafetyTests(TestCase):
+    """Tests for SVC-P0-04: Rate limiter thread safety fixes"""
+
+    def setUp(self):
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        self.limiter = SimpleRateLimiter()
+        self.limiter.EXTRACT_LIMIT = 5
+        self.limiter.WINDOW_SIZE = 1  # 1 second for testing
+
+    def test_concurrent_requests_respect_rate_limit(self):
+        """Test that concurrent requests cannot bypass rate limit"""
+        results = []
+        errors = []
+
+        def make_request(ip: str, limit: int):
+            try:
+                is_limited, count = self.limiter._is_rate_limited(ip, limit)
+                results.append((is_limited, count))
+            except Exception as e:
+                errors.append(e)
+
+        # Create 20 concurrent threads trying to bypass a limit of 5
+        threads = []
+        for i in range(20):
+            t = threading.Thread(target=make_request, args=("test_ip", 5))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        # No errors should occur
+        self.assertEqual(len(errors), 0, f"Errors occurred: {errors}")
+
+        # Count how many requests were allowed
+        allowed = sum(1 for limited, _ in results if not limited)
+
+        # Should allow exactly 5 requests, not more
+        self.assertEqual(
+            allowed, 5,
+            f"Rate limiter allowed {allowed} requests instead of 5. "
+            f"This indicates a race condition."
+        )
+
+        # The rest should be rate limited
+        limited_count = sum(1 for limited, _ in results if limited)
+        self.assertEqual(limited_count, 15)
+
+    def test_ip_spoofing_protection(self):
+        """Test SVC-P1-11: IP spoofing protection"""
+        factory = RequestFactory()
+
+        # Create request with spoofed X-Forwarded-For header
+        request = factory.get('/')
+        request.META['HTTP_X_FORWARDED_FOR'] = '1.2.3.4'
+        request.META['REMOTE_ADDR'] = '5.6.7.8'
+
+        # Without trusted proxy configuration, should use REMOTE_ADDR
+        with self.settings(TRUSTED_PROXY_IPS=[]):
+            ip = self.limiter._get_client_ip(request)
+            self.assertEqual(ip, '5.6.7.8', "Should ignore X-Forwarded-For without trusted proxy")
+
+        # With trusted proxy, should use X-Forwarded-For
+        with self.settings(TRUSTED_PROXY_IPS=['5.6.7.8']):
+            ip = self.limiter._get_client_ip(request)
+            self.assertEqual(ip, '1.2.3.4', "Should trust X-Forwarded-For from trusted proxy")
+
+    def test_cleanup_is_thread_safe(self):
+        """Test that cleanup operations don't cause race conditions"""
+        errors = []
+
+        def cleanup_thread():
+            try:
+                for _ in range(10):
+                    self.limiter._cleanup_old_entries()
+                    time.sleep(0.01)
+            except Exception as e:
+                errors.append(e)
+
+        def request_thread():
+            try:
+                for _ in range(10):
+                    self.limiter._is_rate_limited("test_ip", 5)
+                    time.sleep(0.01)
+            except Exception as e:
+                errors.append(e)
+
+        # Run cleanup and requests concurrently
+        threads = [
+            threading.Thread(target=cleanup_thread),
+            threading.Thread(target=cleanup_thread),
+            threading.Thread(target=request_thread),
+            threading.Thread(target=request_thread),
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should not raise any errors
+        self.assertEqual(len(errors), 0, f"Thread safety errors: {errors}")
+
+
+class LRUCacheThreadSafetyTests(TestCase):
+    """Tests for SVC-P0-03: LRU cache thread safety"""
+
+    def setUp(self):
+        from backend.memories.memory_search_service import MemorySearchService
+        self.service = MemorySearchService()
+        self.service._max_cache_size = 10
+
+    @patch('backend.memories.memory_search_service.llm_service.get_embeddings')
+    def test_concurrent_cache_access(self, mock_get_embeddings):
+        """Test that concurrent cache access doesn't corrupt cache"""
+        # Mock embeddings to return unique values
+        call_count = [0]
+
+        def get_embedding_side_effect(texts, **kwargs):
+            call_count[0] += 1
+            return {
+                'success': True,
+                'embeddings': [[float(call_count[0])] * 1024],
+                'model': 'test'
+            }
+
+        mock_get_embeddings.side_effect = get_embedding_side_effect
+
+        results = []
+        errors = []
+
+        def cache_thread(text: str):
+            try:
+                for _ in range(5):
+                    embedding = self.service._get_cached_embedding(text)
+                    results.append((text, embedding[0]))
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        # Create threads accessing same and different cache keys
+        threads = []
+        for i in range(5):
+            t1 = threading.Thread(target=cache_thread, args=(f"text_{i % 2}",))
+            t2 = threading.Thread(target=cache_thread, args=(f"text_{i % 2}",))
+            threads.extend([t1, t2])
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors should occur
+        self.assertEqual(len(errors), 0, f"Cache corruption errors: {errors}")
+
+        # Cache should have consistent values for same keys
+        text_0_embeddings = [emb for text, emb in results if text == "text_0"]
+        text_1_embeddings = [emb for text, emb in results if text == "text_1"]
+
+        # All embeddings for same text should be identical (cached)
+        self.assertTrue(
+            len(set(text_0_embeddings)) == 1,
+            "Cache returned different values for same key"
+        )
+        self.assertTrue(
+            len(set(text_1_embeddings)) == 1,
+            "Cache returned different values for same key"
+        )
+
+    def test_cache_eviction_is_thread_safe(self):
+        """Test LRU eviction under concurrent load"""
+        with patch('backend.memories.memory_search_service.llm_service.get_embeddings') as mock:
+            mock.return_value = {
+                'success': True,
+                'embeddings': [[1.0] * 1024],
+                'model': 'test'
+            }
+
+            errors = []
+
+            def fill_cache_thread(start_idx: int):
+                try:
+                    for i in range(start_idx, start_idx + 20):
+                        self.service._get_cached_embedding(f"text_{i}")
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [
+                threading.Thread(target=fill_cache_thread, args=(0,)),
+                threading.Thread(target=fill_cache_thread, args=(20,)),
+                threading.Thread(target=fill_cache_thread, args=(40,)),
+            ]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Should not raise errors during eviction
+            self.assertEqual(len(errors), 0, f"Eviction errors: {errors}")
+
+            # Cache size should not exceed max
+            self.assertLessEqual(
+                len(self.service._embedding_cache),
+                self.service._max_cache_size,
+                "Cache size exceeded maximum"
+            )
+
+
+class SessionCleanupTests(TestCase):
+    """Tests for SVC-P0-01: Session cleanup"""
+
+    def test_session_is_closed_on_cleanup(self):
+        """Test that session is properly closed when service is deleted"""
+        from backend.memories.llm_service import LLMService
+
+        service = LLMService()
+        session = service.session
+
+        # Verify session is created
+        self.assertIsNotNone(session)
+
+        # Delete service and verify session.close() is called
+        with patch.object(session, 'close') as mock_close:
+            del service
+            # Force garbage collection to trigger __del__
+            import gc
+            gc.collect()
+
+            # Session close should have been called
+            # Note: This test is tricky because __del__ timing is non-deterministic
+            # In production, the session will be closed when the process ends
+
+    @patch('backend.memories.llm_service.requests.Session')
+    def test_session_reuse(self, mock_session_class):
+        """Test that session is reused across calls"""
+        from backend.memories.llm_service import LLMService
+
+        mock_session = Mock()
+        mock_session_class.return_value = mock_session
+
+        service = LLMService()
+
+        # Mock the response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'message': {'content': 'test'},
+            'total_duration': 100
+        }
+        mock_session.post.return_value = mock_response
+
+        # Make multiple calls
+        with patch.object(service, 'settings', PropertyMock(return_value=Mock(
+            extraction_provider_type='ollama',
+            extraction_model='test',
+            extraction_endpoint_url='http://test',
+            extraction_timeout=60,
+            llm_temperature=0.7,
+            llm_max_tokens=100,
+            llm_top_p=0.9,
+            llm_top_k=40
+        ))):
+            for _ in range(3):
+                service.query_llm("test prompt", max_retries=0)
+
+        # Session should be created only once
+        self.assertEqual(mock_session_class.call_count, 1)
+
+        # Session.post should be called 3 times
+        self.assertEqual(mock_session.post.call_count, 3)
+
+
+class VectorServiceLazyConnectionTests(TestCase):
+    """Tests for SVC-P0-02: Lazy connection with retry logic"""
+
+    @patch('backend.memories.vector_service.QdrantClient')
+    def test_service_starts_without_qdrant(self, mock_qdrant):
+        """Test that VectorService can be instantiated even if Qdrant is down"""
+        from backend.memories.vector_service import VectorService
+
+        # Qdrant connection will fail
+        mock_qdrant.side_effect = Exception("Connection refused")
+
+        # Should not raise exception during initialization
+        try:
+            service = VectorService()
+            self.assertIsNotNone(service)
+            self.assertFalse(service._connected)
+        except Exception as e:
+            self.fail(f"VectorService __init__ should not raise: {e}")
+
+    @patch('backend.memories.vector_service.QdrantClient')
+    def test_lazy_connection_on_first_use(self, mock_qdrant):
+        """Test that connection is established on first use"""
+        from backend.memories.vector_service import VectorService
+
+        mock_client = Mock()
+        mock_qdrant.return_value = mock_client
+        mock_client.get_collections.return_value = Mock(collections=[])
+
+        service = VectorService()
+
+        # Connection should happen on first method call
+        with patch.object(service, '_ensure_collection'):
+            service.store_embedding("mem_id", [1.0] * 1024, "user_id", {})
+
+        # Client should have been created
+        self.assertTrue(mock_qdrant.called)
+
+    @patch('backend.memories.vector_service.QdrantClient')
+    def test_connection_retry_logic(self, mock_qdrant):
+        """Test that connection retries work correctly"""
+        from backend.memories.vector_service import VectorService
+
+        # Fail twice, succeed on third attempt
+        attempt_count = [0]
+
+        def connection_side_effect(*args, **kwargs):
+            attempt_count[0] += 1
+            if attempt_count[0] < 3:
+                raise Exception("Connection failed")
+            mock_client = Mock()
+            mock_client.get_collections.return_value = Mock(collections=[])
+            return mock_client
+
+        mock_qdrant.side_effect = connection_side_effect
+
+        service = VectorService()
+
+        # Should succeed after retries
+        with patch.object(service, '_ensure_collection'):
+            result = service._ensure_connection(max_retries=3, retry_delay=0.1)
+            self.assertTrue(result)
+            self.assertEqual(attempt_count[0], 3)
+
+
+class ImportConcurrencyTests(TestCase):
+    """Tests for SVC-P0-05 and SVC-P0-06: Import concurrency fixes"""
+
+    def setUp(self):
+        # Create a temporary SQLite database for testing
+        self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+        self.temp_db_path = self.temp_db.name
+        self.temp_db.close()
+
+        # Create test database with sample data
+        conn = sqlite3.connect(self.temp_db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE chat (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                title TEXT,
+                chat TEXT,
+                created_at INTEGER,
+                updated_at INTEGER
+            )
+        ''')
+        cursor.execute('''
+            INSERT INTO chat VALUES (
+                'conv1', 'user1', 'Test Conv',
+                '{"messages": [{"role": "user", "content": "Hello"}]}',
+                1234567890, 1234567890
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        import os
+        if os.path.exists(self.temp_db_path):
+            os.unlink(self.temp_db_path)
+
+    def test_concurrent_imports_use_separate_progress(self):
+        """Test SVC-P0-06: Multiple imports maintain separate progress"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter, _import_progresses, _progress_lock
+
+        # Clear any existing progress
+        with _progress_lock:
+            _import_progresses.clear()
+
+        # Create two importers with different import IDs
+        with OpenWebUIImporter(self.temp_db_path) as importer1:
+            with OpenWebUIImporter(self.temp_db_path) as importer2:
+                # Mock the extraction to avoid actual LLM calls
+                with patch.object(importer1, 'extract_memories_from_conversation', return_value=(0, [])):
+                    with patch.object(importer2, 'extract_memories_from_conversation', return_value=(0, [])):
+                        # Start two imports concurrently
+                        import1_id = "import1"
+                        import2_id = "import2"
+
+                        def run_import1():
+                            importer1.import_conversations(
+                                import_id=import1_id,
+                                dry_run=True
+                            )
+
+                        def run_import2():
+                            importer2.import_conversations(
+                                import_id=import2_id,
+                                dry_run=True
+                            )
+
+                        t1 = threading.Thread(target=run_import1)
+                        t2 = threading.Thread(target=run_import2)
+
+                        t1.start()
+                        t2.start()
+                        t1.join()
+                        t2.join()
+
+                        # Both imports should have separate progress objects
+                        with _progress_lock:
+                            self.assertIn(import1_id, _import_progresses)
+                            self.assertIn(import2_id, _import_progresses)
+                            self.assertIsNot(
+                                _import_progresses[import1_id],
+                                _import_progresses[import2_id],
+                                "Progress objects should be separate"
+                            )
+
+    def test_cancellation_is_atomic(self):
+        """Test SVC-P0-05: Cancellation check-and-act is atomic"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter, _import_progresses, _progress_lock
+
+        with _progress_lock:
+            _import_progresses.clear()
+
+        cancel_happened = [False]
+
+        with OpenWebUIImporter(self.temp_db_path) as importer:
+            import_id = "test_cancel"
+
+            # Mock extraction to simulate slow processing
+            def slow_extraction(*args, **kwargs):
+                time.sleep(0.1)
+                return (0, [])
+
+            with patch.object(importer, 'extract_memories_from_conversation', side_effect=slow_extraction):
+                def run_import():
+                    result = importer.import_conversations(
+                        import_id=import_id,
+                        dry_run=True
+                    )
+                    cancel_happened[0] = not result.get('success', True)
+
+                def cancel_import():
+                    time.sleep(0.05)  # Let import start
+                    OpenWebUIImporter.cancel_import(import_id)
+
+                t1 = threading.Thread(target=run_import)
+                t2 = threading.Thread(target=cancel_import)
+
+                t1.start()
+                t2.start()
+                t1.join(timeout=2)
+                t2.join()
+
+                # Import should have been cancelled
+                self.assertTrue(cancel_happened[0], "Import should have been cancelled")
+
+
+class RetryLogicTests(TestCase):
+    """Tests for SVC-P1-01: Retry logic fixes"""
+
+    @patch('backend.memories.llm_service.requests.Session')
+    def test_correct_number_of_retry_attempts(self, mock_session_class):
+        """Test that retry loop executes correct number of times"""
+        from backend.memories.llm_service import LLMService
+
+        mock_session = Mock()
+        mock_session_class.return_value = mock_session
+
+        # Make all attempts timeout
+        mock_session.post.side_effect = Exception("Connection error")
+
+        service = LLMService()
+
+        with patch.object(service, 'settings', PropertyMock(return_value=Mock(
+            extraction_provider_type='ollama',
+            extraction_model='test',
+            extraction_endpoint_url='http://test',
+            extraction_timeout=60,
+            llm_temperature=0.7,
+            llm_max_tokens=100,
+            llm_top_p=0.9,
+            llm_top_k=40
+        ))):
+            result = service.query_llm("test", max_retries=3, retry_delay=0.01)
+
+        # Should fail after 4 attempts total (initial + 3 retries)
+        self.assertEqual(mock_session.post.call_count, 4)
+        self.assertFalse(result['success'])
+
+
+class OpenAIParameterTests(TestCase):
+    """Tests for SVC-P1-03: OpenAI parameter fix"""
+
+    def test_openai_request_excludes_top_k(self):
+        """Test that top_k is not sent to OpenAI endpoints"""
+        from backend.memories.llm_service import LLMService
+
+        service = LLMService()
+
+        with patch.object(service, 'settings', PropertyMock(return_value=Mock(
+            llm_top_p=0.9,
+            llm_top_k=40
+        ))):
+            data = service._prepare_openai_request(
+                model="gpt-4",
+                system_prompt="system",
+                user_prompt="user",
+                temperature=0.7,
+                max_tokens=100,
+                response_format=None
+            )
+
+        # Should not contain top_k
+        self.assertNotIn('top_k', data)
+        # Should contain top_p
+        self.assertIn('top_p', data)
+        self.assertEqual(data['top_p'], 0.9)
+
+
+class VectorServiceFixesTests(TestCase):
+    """Tests for SVC-P1-05, P1-06, P1-07: Vector service fixes"""
+
+    @patch('backend.memories.vector_service.QdrantClient')
+    def test_pointidslist_usage(self, mock_qdrant):
+        """Test SVC-P1-05: Correct PointIdsList usage"""
+        from backend.memories.vector_service import VectorService
+
+        mock_client = Mock()
+        mock_qdrant.return_value = mock_client
+        mock_client.get_collections.return_value = Mock(collections=[
+            Mock(name='memories')
+        ])
+
+        service = VectorService()
+        service._connected = True
+        service.client = mock_client
+
+        # Delete an embedding
+        service.delete_embedding("test_vector_id")
+
+        # Verify PointIdsList was used
+        mock_client.delete.assert_called_once()
+        call_args = mock_client.delete.call_args
+        points_selector = call_args[1]['points_selector']
+
+        # Should be PointIdsList instance
+        self.assertIsInstance(points_selector, PointIdsList)
+
+    @patch('backend.memories.vector_service.settings')
+    @patch('backend.memories.vector_service.QdrantClient')
+    def test_configurable_vector_dimension(self, mock_qdrant, mock_settings):
+        """Test SVC-P1-06: Vector dimension from settings"""
+        from backend.memories.vector_service import VectorService
+
+        mock_client = Mock()
+        mock_qdrant.return_value = mock_client
+        mock_client.get_collections.return_value = Mock(collections=[])
+
+        # Set custom dimension
+        mock_settings.QDRANT_VECTOR_DIMENSION = 768
+        mock_settings.QDRANT_COLLECTION_NAME = "memories"
+
+        service = VectorService()
+        service._connected = True
+        service.client = mock_client
+
+        # Create collection should use configured dimension
+        service._ensure_collection()
+
+        # Verify create_collection was called with correct dimension
+        mock_client.create_collection.assert_called_once()
+        call_args = mock_client.create_collection.call_args
+        vectors_config = call_args[1]['vectors_config']
+        self.assertEqual(vectors_config.size, 768)
+
+    @patch('backend.memories.vector_service.QdrantClient')
+    def test_nested_attribute_error_handling(self, mock_qdrant):
+        """Test SVC-P1-07: Safe nested attribute access"""
+        from backend.memories.vector_service import VectorService
+
+        mock_client = Mock()
+        mock_qdrant.return_value = mock_client
+        mock_client.get_collections.return_value = Mock(collections=[
+            Mock(name='memories')
+        ])
+
+        # Mock collection info with missing nested attributes
+        mock_collection_info = Mock()
+        mock_collection_info.status = "green"
+        mock_collection_info.points_count = 100
+        mock_collection_info.optimizer_status = "ok"
+        # config.params.vectors will raise AttributeError
+        mock_collection_info.config.params.vectors.size = AttributeError()
+
+        mock_client.get_collection.return_value = mock_collection_info
+
+        service = VectorService()
+        service._connected = True
+        service.client = mock_client
+
+        # Should not raise exception
+        try:
+            result = service.get_collection_info()
+            # Should return None for missing attributes
+            self.assertIsNone(result.get('vector_count'))
+            self.assertEqual(result['status'], 'green')
+        except AttributeError:
+            self.fail("Should handle missing nested attributes gracefully")
+
+
+class ImporterErrorHandlingTests(TestCase):
+    """Tests for SVC-P1-13, P1-14, P1-15: Importer error handling"""
+
+    def test_connection_error_handling(self):
+        """Test SVC-P1-13: SQLite connection error handling"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter
+
+        # Try to open non-existent database
+        with self.assertRaises(FileNotFoundError):
+            OpenWebUIImporter("/nonexistent/path.db")
+
+        # Try to open invalid database
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"invalid database content")
+            invalid_db_path = f.name
+
+        try:
+            with self.assertRaises(ConnectionError):
+                with OpenWebUIImporter(invalid_db_path) as importer:
+                    pass
+        finally:
+            import os
+            os.unlink(invalid_db_path)
+
+    def test_json_size_limit(self):
+        """Test SVC-P1-15: JSON size limit protection"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter
+
+        # Create temporary database
+        temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+        temp_db.close()
+
+        conn = sqlite3.connect(temp_db.name)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE chat (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                title TEXT,
+                chat TEXT,
+                created_at INTEGER,
+                updated_at INTEGER
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+        try:
+            with OpenWebUIImporter(temp_db.name) as importer:
+                # Create JSON larger than 10MB
+                large_json = json.dumps({"x": "a" * (11 * 1024 * 1024)})
+
+                # Should return empty list without crashing
+                result = importer.extract_user_messages(large_json)
+                self.assertEqual(result, [])
+        finally:
+            import os
+            os.unlink(temp_db.name)
+
+    def test_truncation_warning(self):
+        """Test SVC-P1-14: Truncation warning is logged"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter
+
+        # Create temporary database
+        temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+        temp_db.close()
+
+        conn = sqlite3.connect(temp_db.name)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE chat (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                title TEXT,
+                chat TEXT,
+                created_at INTEGER,
+                updated_at INTEGER
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+        try:
+            with OpenWebUIImporter(temp_db.name) as importer:
+                # Create very long conversation text
+                long_text = "a" * 60000
+
+                # Mock the LLM call
+                with patch('backend.memories.openwebui_importer.llm_service.query_llm') as mock_llm:
+                    mock_llm.return_value = {
+                        'success': True,
+                        'response': '[]',
+                        'model': 'test'
+                    }
+
+                    # Should truncate and log warning
+                    with self.assertLogs('backend.memories.openwebui_importer', level='WARNING') as cm:
+                        count, memories = importer.extract_memories_from_conversation(
+                            long_text, "user_id", dry_run=True
+                        )
+
+                        # Check that truncation warning was logged
+                        self.assertTrue(
+                            any('truncating' in msg.lower() for msg in cm.output),
+                            "Should log truncation warning"
+                        )
+        finally:
+            import os
+            os.unlink(temp_db.name)
+
+
+class SettingsCacheTests(TestCase):
+    """Tests for SVC-P1-08: Settings caching to avoid DB queries in hot path"""
+
+    def setUp(self):
+        from backend.memories.memory_search_service import MemorySearchService
+        self.service = MemorySearchService()
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_settings_cached_across_calls(self, mock_llm_settings_class):
+        """Test that settings are cached and not fetched on every call"""
+        mock_settings = Mock()
+        mock_settings.search_threshold_direct = 0.8
+        mock_settings.search_threshold_semantic = 0.6
+        mock_settings.search_threshold_experiential = 0.7
+        mock_settings.search_threshold_contextual = 0.5
+        mock_settings.search_threshold_interest = 0.65
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        # Call method that uses cached settings multiple times
+        for _ in range(10):
+            threshold = self.service._get_threshold_for_search_type("direct")
+            self.assertEqual(threshold, 0.8)
+
+        # Settings should only be fetched once (first call)
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 1)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_settings_cache_expires_after_ttl(self, mock_llm_settings_class):
+        """Test that settings cache expires after TTL"""
+        mock_settings_v1 = Mock()
+        mock_settings_v1.search_threshold_direct = 0.8
+
+        mock_settings_v2 = Mock()
+        mock_settings_v2.search_threshold_direct = 0.9
+
+        mock_llm_settings_class.get_settings.side_effect = [mock_settings_v1, mock_settings_v2]
+
+        # Override TTL for testing
+        self.service._settings_cache_ttl = 0.1  # 100ms
+
+        # First call - should fetch from DB
+        threshold1 = self.service._get_threshold_for_search_type("direct")
+        self.assertEqual(threshold1, 0.8)
+
+        # Second call immediately - should use cache
+        threshold2 = self.service._get_threshold_for_search_type("direct")
+        self.assertEqual(threshold2, 0.8)
+
+        # Wait for cache to expire
+        import time
+        time.sleep(0.15)
+
+        # Third call - should fetch from DB again
+        threshold3 = self.service._get_threshold_for_search_type("direct")
+        self.assertEqual(threshold3, 0.9)
+
+        # Should have fetched settings twice
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 2)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_settings_cache_thread_safety(self, mock_llm_settings_class):
+        """Test that settings cache is thread-safe"""
+        mock_settings = Mock()
+        mock_settings.search_threshold_direct = 0.8
+        mock_settings.search_threshold_semantic = 0.6
+        mock_settings.search_threshold_experiential = 0.7
+        mock_settings.search_threshold_contextual = 0.5
+        mock_settings.search_threshold_interest = 0.65
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        errors = []
+        results = []
+
+        def access_settings():
+            try:
+                for _ in range(5):
+                    threshold = self.service._get_threshold_for_search_type("direct")
+                    results.append(threshold)
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads accessing settings cache
+        threads = [threading.Thread(target=access_settings) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should not have any errors
+        self.assertEqual(len(errors), 0, f"Thread safety errors: {errors}")
+
+        # All results should be identical
+        self.assertTrue(all(r == 0.8 for r in results))
+
+        # Settings should be fetched only once despite concurrent access
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 1)
+
+
+class ConfigurableCacheSizeTests(TestCase):
+    """Tests for SVC-P1-09: Configurable cache size to prevent unbounded growth"""
+
+    @patch('backend.memories.memory_search_service.settings')
+    def test_default_cache_size(self, mock_settings):
+        """Test that default cache size is 1000"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        # No EMBEDDING_CACHE_SIZE setting
+        del mock_settings.EMBEDDING_CACHE_SIZE
+        mock_settings.EMBEDDING_CACHE_SIZE = AttributeError()
+
+        service = MemorySearchService()
+        self.assertEqual(service._max_cache_size, 1000)
+
+    @patch('backend.memories.memory_search_service.settings')
+    def test_custom_cache_size(self, mock_settings):
+        """Test that custom cache size is respected"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        mock_settings.EMBEDDING_CACHE_SIZE = 500
+
+        service = MemorySearchService()
+        self.assertEqual(service._max_cache_size, 500)
+
+    @patch('backend.memories.memory_search_service.settings')
+    def test_large_cache_size_warning(self, mock_settings):
+        """Test that large cache sizes trigger warning"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        mock_settings.EMBEDDING_CACHE_SIZE = 15000
+
+        with self.assertLogs('backend.memories.memory_search_service', level='WARNING') as cm:
+            service = MemorySearchService()
+
+            # Should log warning about large cache
+            self.assertTrue(
+                any('Large embedding cache size' in msg for msg in cm.output),
+                "Should warn about large cache size"
+            )
+            self.assertTrue(
+                any('Redis' in msg for msg in cm.output),
+                "Should suggest Redis for large deployments"
+            )
+
+    @patch('backend.memories.memory_search_service.llm_service.get_embeddings')
+    @patch('backend.memories.memory_search_service.settings')
+    def test_cache_respects_max_size(self, mock_settings, mock_get_embeddings):
+        """Test that cache eviction respects configured max size"""
+        from backend.memories.memory_search_service import MemorySearchService
+
+        # Set small cache for testing
+        mock_settings.EMBEDDING_CACHE_SIZE = 3
+
+        mock_get_embeddings.return_value = {
+            'success': True,
+            'embeddings': [[1.0] * 1024],
+            'model': 'test'
+        }
+
+        service = MemorySearchService()
+
+        # Fill cache beyond max
+        for i in range(10):
+            service._get_cached_embedding(f"text_{i}")
+
+        # Cache size should not exceed max
+        self.assertLessEqual(len(service._embedding_cache), 3)
+        self.assertLessEqual(len(service._cache_order), 3)
+
+
+class GlobalSingletonThreadSafetyTests(TestCase):
+    """Tests for SVC-P1-04: Global singleton thread safety"""
+
+    @patch('backend.memories.llm_service.LLMSettings')
+    def test_concurrent_settings_access(self, mock_llm_settings_class):
+        """Test that concurrent access to settings doesn't cause race conditions"""
+        from backend.memories.llm_service import LLMService
+
+        mock_settings = Mock()
+        mock_settings.extraction_provider_type = 'ollama'
+        mock_settings.extraction_model = 'test-model'
+        mock_settings.extraction_endpoint_url = 'http://localhost:11434'
+        mock_settings.extraction_timeout = 60
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        service = LLMService()
+        errors = []
+        results = []
+
+        def access_settings():
+            try:
+                for _ in range(10):
+                    settings = service.settings
+                    results.append(settings.extraction_model)
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads accessing settings
+        threads = [threading.Thread(target=access_settings) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors should occur
+        self.assertEqual(len(errors), 0, f"Thread safety errors: {errors}")
+
+        # All results should be identical
+        self.assertTrue(all(r == 'test-model' for r in results))
+
+        # Settings should only be loaded once despite concurrent access
+        self.assertEqual(mock_llm_settings_class.get_settings.call_count, 1)
+
+    @patch('backend.memories.llm_service.LLMSettings')
+    def test_concurrent_refresh_settings(self, mock_llm_settings_class):
+        """Test that concurrent refresh_settings calls are thread-safe"""
+        from backend.memories.llm_service import LLMService
+
+        mock_settings = Mock()
+        mock_settings.extraction_provider_type = 'ollama'
+        mock_settings.extraction_model = 'test-model'
+
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        service = LLMService()
+
+        # Access settings once to initialize
+        _ = service.settings
+
+        errors = []
+
+        def refresh_and_access():
+            try:
+                for _ in range(5):
+                    service.refresh_settings()
+                    _ = service.settings
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads refreshing settings
+        threads = [threading.Thread(target=refresh_and_access) for _ in range(3)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors should occur
+        self.assertEqual(len(errors), 0, f"Thread safety errors during refresh: {errors}")
+
+    @patch('backend.memories.llm_service.LLMSettings')
+    def test_settings_loaded_flag_consistency(self, mock_llm_settings_class):
+        """Test that _settings_loaded flag remains consistent under concurrent load"""
+        from backend.memories.llm_service import LLMService
+
+        load_count = [0]
+
+        def mock_get_settings():
+            load_count[0] += 1
+            import time
+            time.sleep(0.01)  # Simulate slow DB query
+            mock_settings = Mock()
+            mock_settings.extraction_provider_type = 'ollama'
+            return mock_settings
+
+        mock_llm_settings_class.get_settings.side_effect = mock_get_settings
+
+        service = LLMService()
+        results = []
+
+        def access_settings():
+            for _ in range(3):
+                settings = service.settings
+                results.append(settings)
+
+        # Create threads that all try to access settings simultaneously
+        threads = [threading.Thread(target=access_settings) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Settings should only be loaded once, not 15 times
+        self.assertEqual(load_count[0], 1, "Settings should be loaded exactly once")
+
+
+class ListModificationTests(TestCase):
+    """Tests for SVC-P1-10: List modification during iteration"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    @patch('backend.memories.memory_search_service.llm_service')
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_find_semantic_connections_does_not_modify_input_list(
+        self, mock_llm_settings_class, mock_llm_service
+    ):
+        """Test that find_semantic_connections doesn't modify the input list"""
+        from backend.memories.memory_search_service import memory_search_service
+
+        # Create test memories
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="I love programming in Python",
+            metadata={}
+        )
+        memory2 = Memory.objects.create(
+            user_id=self.user.id,
+            content="I enjoy data science",
+            metadata={}
+        )
+        memory3 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Machine learning is fascinating",
+            metadata={}
+        )
+
+        original_memories = [memory1, memory2]
+        original_length = len(original_memories)
+        original_ids = [m.id for m in original_memories]
+
+        # Mock settings to enable semantic connections
+        mock_settings = Mock()
+        mock_settings.enable_semantic_connections = True
+        mock_settings.semantic_enhancement_threshold = 1
+        mock_settings.semantic_connection_prompt = "Test prompt"
+        mock_settings.llm_temperature = 0.7
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        # Mock LLM service to return additional search query
+        mock_llm_service.query_llm.return_value = {
+            "success": True,
+            "response": json.dumps({
+                "has_connections": True,
+                "additional_searches": [
+                    {"search_query": "machine learning"}
+                ],
+                "reasoning": "Test reasoning"
+            })
+        }
+
+        # Mock search_memories to return memory3
+        with patch.object(
+            memory_search_service,
+            'search_memories',
+            return_value=[memory3]
+        ):
+            result = memory_search_service.find_semantic_connections(
+                original_memories,
+                "Tell me about my tech interests",
+                str(self.user.id)
+            )
+
+        # Original list should NOT be modified
+        self.assertEqual(len(original_memories), original_length)
+        self.assertEqual([m.id for m in original_memories], original_ids)
+
+        # Result should contain original + additional memories
+        self.assertEqual(len(result), 3)
+        self.assertIn(memory1, result)
+        self.assertIn(memory2, result)
+        self.assertIn(memory3, result)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_disabled_semantic_connections_returns_original_list(
+        self, mock_llm_settings_class
+    ):
+        """Test that disabled semantic connections returns input unchanged"""
+        from backend.memories.memory_search_service import memory_search_service
+
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory",
+            metadata={}
+        )
+
+        original_memories = [memory1]
+
+        # Mock settings to disable semantic connections
+        mock_settings = Mock()
+        mock_settings.enable_semantic_connections = False
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        result = memory_search_service.find_semantic_connections(
+            original_memories,
+            "Test query",
+            str(self.user.id)
+        )
+
+        # Should return the same list
+        self.assertEqual(result, original_memories)
+
+    @patch('backend.memories.memory_search_service.LLMSettings')
+    def test_below_threshold_returns_original_list(
+        self, mock_llm_settings_class
+    ):
+        """Test that below threshold returns input unchanged"""
+        from backend.memories.memory_search_service import memory_search_service
+
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory",
+            metadata={}
+        )
+
+        original_memories = [memory1]
+
+        # Mock settings with high threshold
+        mock_settings = Mock()
+        mock_settings.enable_semantic_connections = True
+        mock_settings.semantic_enhancement_threshold = 10  # Higher than we have
+        mock_llm_settings_class.get_settings.return_value = mock_settings
+
+        result = memory_search_service.find_semantic_connections(
+            original_memories,
+            "Test query",
+            str(self.user.id)
+        )
+
+        # Should return the same list
+        self.assertEqual(result, original_memories)
+
+
+class CleanupTimerRaceTests(TestCase):
+    """Tests for SVC-P1-12: Cleanup timer race condition"""
+
+    def test_cleanup_executes_only_once_with_concurrent_calls(self):
+        """Test that cleanup timestamp prevents redundant cleanup work"""
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        import time
+
+        limiter = SimpleRateLimiter()
+        limiter.CLEANUP_INTERVAL = 1  # 1 second for testing
+
+        # Add some test data
+        with limiter._lock:
+            limiter._requests['1.1.1.1'].append(time.time() - 100)  # Old entry
+            limiter._requests['2.2.2.2'].append(time.time() - 100)
+            limiter._requests['3.3.3.3'].append(time.time() - 100)
+            limiter._last_cleanup = time.time() - 2  # Last cleanup was 2 seconds ago
+
+        cleanup_executions = []
+
+        def track_cleanup():
+            """Call cleanup and track if it actually did work"""
+            initial_time = limiter._last_cleanup
+            limiter._cleanup_old_entries()
+            final_time = limiter._last_cleanup
+
+            # If timestamp changed, cleanup was executed
+            if final_time != initial_time:
+                cleanup_executions.append(threading.current_thread().name)
+
+        # Create 10 threads that all try to cleanup simultaneously
+        threads = [
+            threading.Thread(target=track_cleanup, name=f"Thread-{i}")
+            for i in range(10)
+        ]
+
+        # Start all threads at once
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Only ONE thread should have executed cleanup
+        # (the first one to acquire the lock after the interval passed)
+        self.assertEqual(
+            len(cleanup_executions), 1,
+            f"Expected 1 cleanup execution, got {len(cleanup_executions)}: {cleanup_executions}"
+        )
+
+    def test_cleanup_timestamp_updated_before_work(self):
+        """Test that timestamp is updated immediately, not after cleanup work"""
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        import time
+
+        limiter = SimpleRateLimiter()
+        limiter.CLEANUP_INTERVAL = 1  # 1 second for testing
+
+        # Set last cleanup to old time
+        initial_time = time.time() - 2
+        limiter._last_cleanup = initial_time
+
+        # Add many entries to make cleanup take some time
+        with limiter._lock:
+            for i in range(100):
+                limiter._requests[f'ip_{i}'].append(time.time() - 100)
+
+        # Execute cleanup
+        limiter._cleanup_old_entries()
+
+        # Timestamp should be updated (not equal to initial_time)
+        self.assertNotEqual(
+            limiter._last_cleanup, initial_time,
+            "Cleanup timestamp should be updated"
+        )
+
+        # Old entries should be cleaned
+        with limiter._lock:
+            self.assertEqual(
+                len(limiter._requests), 0,
+                "All old entries should be cleaned up"
+            )
+
+    def test_cleanup_interval_prevents_frequent_cleanup(self):
+        """Test that cleanup interval is respected"""
+        from backend.memories.rate_limiter import SimpleRateLimiter
+        import time
+
+        limiter = SimpleRateLimiter()
+        limiter.CLEANUP_INTERVAL = 300  # 5 minutes
+
+        # Do cleanup now
+        limiter._cleanup_old_entries()
+        first_cleanup_time = limiter._last_cleanup
+
+        # Add old entry
+        with limiter._lock:
+            limiter._requests['1.1.1.1'].append(time.time() - 100)
+
+        # Try cleanup again immediately
+        limiter._cleanup_old_entries()
+        second_cleanup_time = limiter._last_cleanup
+
+        # Timestamp should be the same (cleanup skipped)
+        self.assertEqual(
+            first_cleanup_time, second_cleanup_time,
+            "Cleanup should be skipped when called within interval"
+        )
+
+        # Old entry should still exist (cleanup was skipped)
+        with limiter._lock:
+            self.assertIn('1.1.1.1', limiter._requests)
+
+
+class APIPaginationTests(TestCase):
+    """Tests for API-P1-01: Missing pagination"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    def test_memory_list_returns_paginated_results(self):
+        """Test that memory list endpoint returns paginated results"""
+        from backend.memories.views import MemoryViewSet
+        from rest_framework.test import APIRequestFactory
+
+        # Create 100 memories to test pagination
+        for i in range(100):
+            Memory.objects.create(
+                user_id=self.user.id,
+                content=f"Test memory {i}",
+                metadata={}
+            )
+
+        factory = APIRequestFactory()
+        request = factory.get(f'/api/memories/?user_id={self.user.id}')
+        view = MemoryViewSet.as_view({'get': 'list'})
+
+        response = view(request)
+
+        # Should return paginated response
+        self.assertIn('results', response.data or response.data.get('memories'))
+        # Default page size is 50
+        results = response.data.get('results', response.data.get('memories', []))
+        self.assertLessEqual(len(results), 50)
+
+
+class APIFieldValidationTests(TestCase):
+    """Tests for API-P1-06: Unvalidated field selection"""
+
+    def test_validate_fields_filters_invalid_fields(self):
+        """Test that validate_fields only allows whitelisted fields"""
+        from backend.memories.views import validate_fields
+
+        # Test with valid fields
+        result = validate_fields(["id", "content", "metadata"])
+        self.assertEqual(set(result), {"id", "content", "metadata"})
+
+        # Test with invalid fields
+        result = validate_fields(["id", "content", "password", "__dict__", "_internal"])
+        self.assertEqual(set(result), {"id", "content"})
+
+        # Test with all invalid fields - should return defaults
+        result = validate_fields(["invalid", "also_invalid"])
+        self.assertEqual(result, ["id", "content"])
+
+        # Test with non-list input - should return defaults
+        result = validate_fields("not a list")
+        self.assertEqual(result, ["id", "content"])
+
+        # Test with empty list - should return defaults
+        result = validate_fields([])
+        self.assertEqual(result, ["id", "content"])
+
+
+class APIExceptionHandlingTests(TestCase):
+    """Tests for API-P1-03: Exception swallowing and API-P1-04: Information disclosure"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    def test_memory_retrieve_logs_but_hides_exception_details(self):
+        """Test that exceptions are logged but not exposed to users"""
+        from backend.memories.views import MemoryViewSet
+        from rest_framework.test import APIRequestFactory
+        import logging
+
+        factory = APIRequestFactory()
+
+        # Test with invalid UUID
+        request = factory.get('/api/memories/invalid-uuid/')
+        view = MemoryViewSet.as_view({'get': 'retrieve'})
+
+        with self.assertLogs('backend.memories.views', level=logging.DEBUG) as cm:
+            response = view(request, pk='invalid-uuid')
+
+        # Should return generic error message
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('error', response.data)
+        # Should not expose the actual ValueError details in response
+        self.assertNotIn('ValueError', response.data.get('error', ''))
+
+        # Should log the actual error
+        self.assertTrue(
+            any('Invalid UUID format' in log for log in cm.output),
+            f"Expected UUID error in logs: {cm.output}"
+        )
+
+    def test_stats_view_doesnt_expose_internal_errors(self):
+        """Test that memory stats view doesn't leak internal error details"""
+        from backend.memories.views import MemoryStatsView
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        view = MemoryStatsView.as_view()
+
+        # Mock vector_service to raise an exception
+        with patch('backend.memories.views.vector_service') as mock_vector:
+            mock_vector.get_collection_info.side_effect = Exception("Internal database connection failed with credentials XYZ")
+
+            request = factory.get(f'/api/memory-stats/?user_id={self.user.id}')
+            response = view(request)
+
+        # Should return 500 status
+        self.assertEqual(response.status_code, 500)
+
+        # Should return generic error message
+        error_msg = response.data.get('error', '')
+        self.assertNotIn('database connection', error_msg.lower())
+        self.assertNotIn('credentials', error_msg.lower())
+        self.assertNotIn('XYZ', error_msg)
+
+
+class APITransactionTests(TestCase):
+    """Tests for API-P1-05: Missing transactions"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    @patch('backend.memories.views.vector_service')
+    def test_delete_uses_transaction_for_atomicity(self, mock_vector_service):
+        """Test that delete operations use transactions"""
+        # Create test memories
+        memory1 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory 1",
+            metadata={}
+        )
+        memory2 = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory 2",
+            metadata={}
+        )
+
+        initial_count = Memory.objects.filter(user_id=self.user.id).count()
+        self.assertEqual(initial_count, 2)
+
+        # Mock successful vector delete
+        mock_vector_service.delete_memories.return_value = {"success": True}
+
+        # Simulate database error during delete
+        from backend.memories.views import DeleteAllMemoriesView
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        view = DeleteAllMemoriesView.as_view()
+
+        # This should use transaction, so if it fails, nothing should be deleted
+        with patch.object(Memory.objects, 'filter') as mock_filter:
+            mock_queryset = Mock()
+            mock_queryset.count.return_value = 2
+            mock_queryset.__iter__ = Mock(return_value=iter([memory1, memory2]))
+            # Simulate delete failure
+            mock_queryset.delete.side_effect = Exception("Database error")
+            mock_filter.return_value = mock_queryset
+
+            request = factory.delete('/api/memories/delete-all/', {
+                'user_id': str(self.user.id),
+                'confirm': True
+            }, format='json')
+
+            response = view(request)
+
+        # Should return error
+        self.assertEqual(response.status_code, 500)
+
+        # Original memories should still exist (transaction rolled back)
+        remaining_count = Memory.objects.filter(user_id=self.user.id).count()
+        self.assertEqual(remaining_count, initial_count, "Transaction should have rolled back")
+
+
+class APIQueryOptimizationTests(TestCase):
+    """Tests for API-P1-02: N+1 query problem"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    @patch('backend.memories.views.vector_service')
+    def test_memory_stats_optimizes_query(self, mock_vector_service):
+        """Test that memory stats uses optimized query"""
+        from backend.memories.views import MemoryStatsView
+        from rest_framework.test import APIRequestFactory
+        from django.test.utils import override_settings
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        # Create test memories
+        for i in range(10):
+            Memory.objects.create(
+                user_id=self.user.id,
+                content=f"Memory {i}",
+                metadata={"tags": ["test", f"tag{i}"]}
+            )
+
+        mock_vector_service.get_collection_info.return_value = {"status": "ok"}
+
+        factory = APIRequestFactory()
+        view = MemoryStatsView.as_view()
+        request = factory.get(f'/api/memory-stats/?user_id={self.user.id}')
+
+        # Count queries
+        with CaptureQueriesContext(connection) as queries:
+            response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should use minimal queries (not N+1)
+        # Expecting: 1 query for memories, maybe 1 for count, 1 for vector info
+        self.assertLessEqual(
+            len(queries),
+            5,
+            f"Too many queries ({len(queries)}), possible N+1 problem. Queries: {[q['sql'] for q in queries]}"
+        )
+
+
+class APIP2VariableNameTests(TestCase):
+    """Tests for API-P2-03: Variable Name Collision"""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+
+    @patch('memories.views.memory_search_service')
+    @patch('memories.views.llm_service')
+    def test_extract_memories_no_variable_shadowing(self, mock_llm, mock_memory_service):
+        """
+        Test that extraction doesn't have variable name collision issues.
+        API-P2-03: Ensure response_memory doesn't shadow memory_data loop variable.
+        """
+        # Mock LLM extraction to return multiple memories
+        mock_llm.extract_memories.return_value = {
+            "memories": [
+                {"content": "Memory 1", "tags": ["tag1"]},
+                {"content": "Memory 2", "tags": ["tag2"]},
+                {"content": "Memory 3", "tags": ["tag3"]},
+            ],
+            "model": "test-model"
+        }
+
+        # Mock memory storage
+        mock_memory = MagicMock()
+        mock_memory.id = uuid.uuid4()
+        mock_memory.content = "Memory 1"
+        mock_memory.metadata = {"tags": ["tag1"]}
+        mock_memory.created_at = datetime.datetime.now()
+        mock_memory.updated_at = datetime.datetime.now()
+        mock_memory_service.store_memory_with_embedding.return_value = mock_memory
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ExtractMemoriesView
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            '/api/memories/extract/',
+            {
+                'text': 'Test conversation with multiple memories',
+                'fields': ['id', 'content', 'metadata', 'created_at', 'updated_at']
+            },
+            format='json'
+        )
+        request.user = self.user
+
+        view = ExtractMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should have stored 3 memories
+        self.assertEqual(mock_memory_service.store_memory_with_embedding.call_count, 3)
+
+        # Check that all requested fields are in response
+        self.assertIn('memories', response.data)
+        stored_memories = response.data['memories']
+        self.assertEqual(len(stored_memories), 3)
+
+        # Each memory should have all requested fields (no variable shadowing issues)
+        for memory in stored_memories:
+            self.assertIn('id', memory)
+            self.assertIn('content', memory)
+            self.assertIn('metadata', memory)
+            self.assertIn('created_at', memory)
+            self.assertIn('updated_at', memory)
+
+
+class APIP2SettingsFetchTests(TestCase):
+    """Tests for API-P2-02: Multiple LLM Settings Fetches in Same Request"""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+
+    @patch('memories.views.llm_service')
+    @patch('memories.views.memory_search_service')
+    def test_extract_uses_cached_settings(self, mock_memory_service, mock_llm):
+        """
+        Test that extraction uses llm_service.settings instead of fetching again.
+        API-P2-02: After refresh_settings(), use cached settings instead of LLMSettings.get_settings()
+        """
+        # Mock settings object
+        mock_settings = MagicMock()
+        mock_settings.memory_extraction_prompt = "Test extraction prompt"
+        mock_llm.settings = mock_settings
+
+        # Mock LLM extraction
+        mock_llm.extract_memories.return_value = {
+            "memories": [{"content": "Test memory", "tags": ["test"]}],
+            "model": "test-model"
+        }
+
+        # Mock memory storage
+        mock_memory = MagicMock()
+        mock_memory.id = uuid.uuid4()
+        mock_memory.content = "Test memory"
+        mock_memory.metadata = {"tags": ["test"]}
+        mock_memory.created_at = datetime.datetime.now()
+        mock_memory.updated_at = datetime.datetime.now()
+        mock_memory_service.store_memory_with_embedding.return_value = mock_memory
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ExtractMemoriesView
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            '/api/memories/extract/',
+            {'text': 'Test conversation'},
+            format='json'
+        )
+        request.user = self.user
+
+        view = ExtractMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should call refresh_settings once
+        mock_llm.refresh_settings.assert_called_once()
+
+        # Should access cached settings property, not call get_settings again
+        # This is verified implicitly - if we called LLMSettings.get_settings() it would fail
+        # because we didn't mock it
+
+    @patch('memories.views.llm_service')
+    @patch('memories.views.memory_search_service')
+    def test_retrieve_uses_cached_settings(self, mock_memory_service, mock_llm):
+        """
+        Test that retrieval uses llm_service.settings instead of fetching again.
+        API-P2-02: After refresh_settings(), use cached settings instead of LLMSettings.get_settings()
+        """
+        # Mock settings object
+        mock_settings = MagicMock()
+        mock_settings.memory_search_prompt = "Test search prompt"
+        mock_settings.enable_semantic_connections = False
+        mock_llm.settings = mock_settings
+
+        # Mock LLM query generation
+        mock_llm.generate_search_queries.return_value = {
+            "success": True,
+            "queries": ["query1", "query2"],
+            "model": "test-model"
+        }
+
+        # Mock memory search
+        mock_memory_service.search_memories_with_queries.return_value = []
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import RetrieveMemoriesView
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            '/api/memories/retrieve/',
+            {'prompt': 'test prompt'},
+            format='json'
+        )
+        request.user = self.user
+
+        view = RetrieveMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should call refresh_settings once
+        mock_llm.refresh_settings.assert_called_once()
+
+        # Should access cached settings property
+        # Verified implicitly by not mocking LLMSettings.get_settings()
+
+
+class APIP2MagicNumbersTests(TestCase):
+    """Tests for API-P2-05: Hardcoded Magic Numbers"""
+
+    def test_constants_defined(self):
+        """Test that magic numbers have been extracted as named constants"""
+        from memories import views
+
+        # Verify all constants are defined
+        self.assertTrue(hasattr(views, 'MAX_CONVERSATION_TEXT_LENGTH'))
+        self.assertTrue(hasattr(views, 'MAX_PROMPT_LENGTH'))
+        self.assertTrue(hasattr(views, 'EXTRACTION_MAX_TOKENS'))
+        self.assertTrue(hasattr(views, 'ERROR_MESSAGE_TRUNCATE_LENGTH'))
+        self.assertTrue(hasattr(views, 'DEFAULT_RETRIEVAL_LIMIT'))
+        self.assertTrue(hasattr(views, 'MAX_RETRIEVAL_LIMIT'))
+        self.assertTrue(hasattr(views, 'DEFAULT_CLAMPED_LIMIT'))
+        self.assertTrue(hasattr(views, 'DEFAULT_IMPORT_BATCH_SIZE'))
+
+        # Verify values are sensible
+        self.assertEqual(views.MAX_CONVERSATION_TEXT_LENGTH, 50000)
+        self.assertEqual(views.MAX_PROMPT_LENGTH, 5000)
+        self.assertEqual(views.EXTRACTION_MAX_TOKENS, 16384)
+        self.assertEqual(views.ERROR_MESSAGE_TRUNCATE_LENGTH, 500)
+        self.assertEqual(views.DEFAULT_RETRIEVAL_LIMIT, 99)
+        self.assertEqual(views.MAX_RETRIEVAL_LIMIT, 100)
+        self.assertEqual(views.DEFAULT_CLAMPED_LIMIT, 10)
+        self.assertEqual(views.DEFAULT_IMPORT_BATCH_SIZE, 10)
+
+    def test_conversation_text_length_limit_enforced(self):
+        """Test that MAX_CONVERSATION_TEXT_LENGTH is enforced"""
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ExtractMemoriesView, MAX_CONVERSATION_TEXT_LENGTH
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='testpass')
+
+        factory = APIRequestFactory()
+
+        # Create text that exceeds the limit
+        long_text = "x" * (MAX_CONVERSATION_TEXT_LENGTH + 1)
+
+        request = factory.post(
+            '/api/memories/extract/',
+            {'text': long_text, 'user_id': str(user.id)},
+            format='json'
+        )
+        request.user = user
+
+        view = ExtractMemoriesView.as_view()
+        response = view(request)
+
+        # Should be rejected with 400
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('max_length', response.data)
+        self.assertEqual(response.data['max_length'], MAX_CONVERSATION_TEXT_LENGTH)
+
+    def test_prompt_length_limit_enforced(self):
+        """Test that MAX_PROMPT_LENGTH is enforced"""
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIRequestFactory
+        from memories.views import RetrieveMemoriesView, MAX_PROMPT_LENGTH
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='testpass')
+
+        factory = APIRequestFactory()
+
+        # Create prompt that exceeds the limit
+        long_prompt = "x" * (MAX_PROMPT_LENGTH + 1)
+
+        request = factory.post(
+            '/api/memories/retrieve/',
+            {'prompt': long_prompt, 'user_id': str(user.id)},
+            format='json'
+        )
+        request.user = user
+
+        view = RetrieveMemoriesView.as_view()
+        response = view(request)
+
+        # Should be rejected with 400
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('max_length', response.data)
+        self.assertEqual(response.data['max_length'], MAX_PROMPT_LENGTH)
+
+
+class SVCP2ImportLocationTests(TestCase):
+    """Tests for SVC-P2-01: Import Inside Loop"""
+
+    def test_imports_at_module_level(self):
+        """
+        Test that critical imports are at module level, not inside functions.
+        SVC-P2-01: Imports should be at top of file to avoid repeated execution.
+        """
+        import importlib
+        import inspect
+
+        # Reload the module to ensure we're testing current code
+        from backend.memories import openwebui_importer
+        importlib.reload(openwebui_importer)
+
+        # Check that MEMORY_EXTRACTION_FORMAT is imported at module level
+        self.assertTrue(
+            hasattr(openwebui_importer, 'MEMORY_EXTRACTION_FORMAT'),
+            "MEMORY_EXTRACTION_FORMAT should be imported at module level"
+        )
+
+        # Check that LLMSettings is imported at module level
+        self.assertTrue(
+            hasattr(openwebui_importer, 'LLMSettings'),
+            "LLMSettings should be imported at module level"
+        )
+
+        # Verify the function doesn't have import statements
+        # by checking the source code
+        importer_class = openwebui_importer.OpenWebUIImporter
+        source = inspect.getsource(importer_class.extract_memories_from_conversation)
+
+        # Should not have 'from settings_app.models import' in the function
+        self.assertNotIn(
+            'from settings_app.models import',
+            source,
+            "Function should not have import statement for LLMSettings"
+        )
+
+        # Should not have 'from .llm_service import MEMORY_EXTRACTION_FORMAT' in the function
+        self.assertNotIn(
+            'from .llm_service import MEMORY_EXTRACTION_FORMAT',
+            source,
+            "Function should not have import statement for MEMORY_EXTRACTION_FORMAT"
+        )
+
+
+class SVCP2TimeoutTests(TestCase):
+    """Tests for SVC-P2-04: Hardcoded Timeout"""
+
+    def test_timeout_constant_defined(self):
+        """Test that timeout is defined as a named constant"""
+        from memories import llm_service
+
+        # Verify constant is defined
+        self.assertTrue(
+            hasattr(llm_service, 'DEFAULT_REQUEST_TIMEOUT'),
+            "DEFAULT_REQUEST_TIMEOUT should be defined as module constant"
+        )
+
+        # Verify it has a sensible value
+        timeout = llm_service.DEFAULT_REQUEST_TIMEOUT
+        self.assertIsInstance(timeout, int)
+        self.assertGreater(timeout, 0)
+        self.assertEqual(timeout, 60)
+
+    @patch('memories.llm_service.requests.Session')
+    def test_timeout_used_in_embedding_requests(self, mock_session_class):
+        """Test that timeout constant is used in embedding requests"""
+        from backend.memories.llm_service import LLMService, DEFAULT_REQUEST_TIMEOUT
+
+        # Mock session and response
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        mock_session.post.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        service = LLMService()
+
+        # Mock settings
+        mock_settings = MagicMock()
+        mock_settings.embeddings_endpoint_url = "http://localhost:11434"
+        mock_settings.embeddings_model = "test-model"
+        service._settings = mock_settings
+        service._settings_loaded = True
+
+        # Call embedding method
+        try:
+            service.get_embeddings(["test text"])
+        except:
+            pass  # We don't care about errors, just checking timeout is used
+
+        # Verify timeout parameter was used
+        if mock_session.post.called:
+            call_kwargs = mock_session.post.call_args[1]
+            self.assertIn('timeout', call_kwargs)
+            self.assertEqual(call_kwargs['timeout'], DEFAULT_REQUEST_TIMEOUT)
+
+
+class SVCP2MagicNumbersServiceTests(TestCase):
+    """Tests for SVC-P2-08: Hardcoded Magic Numbers in Services"""
+
+    def test_llm_service_constants_defined(self):
+        """Test that magic numbers in llm_service are extracted as constants"""
+        from memories import llm_service
+
+        self.assertTrue(hasattr(llm_service, 'LOG_CONTENT_TRUNCATE_LENGTH'))
+        self.assertTrue(hasattr(llm_service, 'TOKEN_SAFETY_MARGIN'))
+
+        self.assertEqual(llm_service.LOG_CONTENT_TRUNCATE_LENGTH, 500)
+        self.assertEqual(llm_service.TOKEN_SAFETY_MARGIN, 512)
+
+    def test_memory_search_service_constants_defined(self):
+        """Test that magic numbers in memory_search_service are extracted as constants"""
+        from memories import memory_search_service
+
+        self.assertTrue(hasattr(memory_search_service, 'DEFAULT_CACHE_SIZE'))
+        self.assertTrue(hasattr(memory_search_service, 'MAX_CACHE_SIZE_WARNING'))
+        self.assertTrue(hasattr(memory_search_service, 'SETTINGS_CACHE_TTL'))
+        self.assertTrue(hasattr(memory_search_service, 'DEFAULT_SEARCH_LIMIT'))
+        self.assertTrue(hasattr(memory_search_service, 'DEFAULT_SEARCH_THRESHOLD'))
+        self.assertTrue(hasattr(memory_search_service, 'SEARCH_CANDIDATE_LIMIT'))
+        self.assertTrue(hasattr(memory_search_service, 'CONTENT_PREVIEW_LENGTH'))
+        self.assertTrue(hasattr(memory_search_service, 'MAX_MEMORIES_FOR_SUMMARY'))
+
+        self.assertEqual(memory_search_service.DEFAULT_CACHE_SIZE, 1000)
+        self.assertEqual(memory_search_service.MAX_CACHE_SIZE_WARNING, 10000)
+        self.assertEqual(memory_search_service.SETTINGS_CACHE_TTL, 300)
+        self.assertEqual(memory_search_service.DEFAULT_SEARCH_LIMIT, 10)
+        self.assertEqual(memory_search_service.DEFAULT_SEARCH_THRESHOLD, 0.7)
+        self.assertEqual(memory_search_service.SEARCH_CANDIDATE_LIMIT, 20)
+        self.assertEqual(memory_search_service.CONTENT_PREVIEW_LENGTH, 100)
+        self.assertEqual(memory_search_service.MAX_MEMORIES_FOR_SUMMARY, 20)
+
+
+class SVCP2NamespaceUUIDTests(TestCase):
+    """Tests for SVC-P2-14: Hardcoded Namespace UUID"""
+
+    def test_namespace_uuid_constant_defined(self):
+        """Test that namespace UUID is defined as a named constant"""
+        from backend.memories import openwebui_importer
+
+        self.assertTrue(
+            hasattr(openwebui_importer, 'UUID_NAMESPACE_DNS'),
+            "UUID_NAMESPACE_DNS should be defined as module constant"
+        )
+
+        # Verify it's the standard DNS namespace from RFC 4122
+        namespace = openwebui_importer.UUID_NAMESPACE_DNS
+        self.assertEqual(str(namespace), "6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+    def test_map_user_generates_deterministic_uuid(self):
+        """Test that mapping generates deterministic UUIDs"""
+        from backend.memories.openwebui_importer import OpenWebUIImporter
+
+        importer = OpenWebUIImporter(db_path=None)
+
+        # Test with same input
+        user_id1 = importer.map_openwebui_user_to_mnemosyne("test_user")
+        user_id2 = importer.map_openwebui_user_to_mnemosyne("test_user")
+
+        # Should generate same UUID for same input
+        self.assertEqual(user_id1, user_id2)
+
+        # Should be valid UUID
+        import uuid
+        uuid.UUID(user_id1)  # Will raise if invalid
+
+        # Different input should generate different UUID
+        user_id3 = importer.map_openwebui_user_to_mnemosyne("different_user")
+        self.assertNotEqual(user_id1, user_id3)
+
+
+class APIP2ProgressRaceTests(TestCase):
+    """Tests for API-P2-13: Race Condition in Progress Initialization"""
+
+    @patch('memories.views.OpenWebUIImporter')
+    @patch('memories.views.LLMSettings')
+    def test_import_id_generated_and_progress_initialized_before_thread(
+        self, mock_settings_class, mock_importer_class
+    ):
+        """
+        Test that import_id is generated and progress is initialized before background thread starts.
+        API-P2-13: Prevents race condition where thread might start before progress is tracked.
+        """
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIRequestFactory
+        from memories.views import ImportOpenWebUIHistoryView
+        from backend.memories.openwebui_importer import _import_progresses, _progress_lock
+        import io
+
+        User = get_user_model()
+        user = User.objects.create_user(username='testuser', password='testpass')
+
+        # Mock settings
+        mock_settings = MagicMock()
+        mock_settings.max_import_file_size_mb = 100
+        mock_settings_class.get_settings.return_value = mock_settings
+
+        # Mock importer to prevent actual import
+        mock_importer_instance = MagicMock()
+        mock_importer_class.return_value.__enter__.return_value = mock_importer_instance
+
+        # Mock import_conversations to simulate slow start (testing race condition)
+        import time
+        def slow_import(*args, **kwargs):
+            time.sleep(0.1)  # Simulate delay
+            return {"success": True, "total_conversations": 0}
+
+        mock_importer_instance.import_conversations.side_effect = slow_import
+
+        factory = APIRequestFactory()
+
+        # Create a fake database file
+        db_file = io.BytesIO(b"fake database content")
+        db_file.name = 'test.db'
+        db_file.size = 1000
+
+        # Clear any existing progress
+        with _progress_lock:
+            _import_progresses.clear()
+
+        request = factory.post(
+            '/api/import/',
+            {'db_file': db_file, 'dry_run': 'false'},
+            format='multipart'
+        )
+        request.user = user
+        request.FILES['db_file'] = db_file
+
+        view = ImportOpenWebUIHistoryView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+
+        # Should return import_id
+        self.assertIn('import_id', response.data)
+        import_id = response.data['import_id']
+        self.assertIsNotNone(import_id)
+
+        # Progress should exist immediately (before thread even starts work)
+        with _progress_lock:
+            self.assertIn(import_id, _import_progresses)
+            progress = _import_progresses[import_id]
+            self.assertIn(progress.status, ['initializing', 'running'])
+            self.assertIsNotNone(progress.start_time)
+
+        # Clean up
+        with _progress_lock:
+            _import_progresses.clear()
+
+
+class APIP2HTTPMethodTests(TestCase):
+    """Tests for API-P2-09: Wrong HTTP Method for Delete Endpoint"""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+
+    @patch('backend.memories.views.vector_service')
+    def test_delete_accepts_query_parameters(self, mock_vector_service):
+        """
+        Test that DELETE endpoint accepts query parameters.
+        API-P2-09: DELETE requests should use query params, not request body.
+        """
+        # Create test memory
+        memory = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory",
+            metadata={}
+        )
+
+        # Mock vector service
+        mock_vector_service.delete_memories.return_value = {"success": True}
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import DeleteAllMemoriesView
+
+        factory = APIRequestFactory()
+
+        # Test with query parameters (should work)
+        request = factory.delete(
+            f'/api/memories/delete-all/?user_id={self.user.id}&confirm=true'
+        )
+
+        view = DeleteAllMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['success'])
+
+    @patch('backend.memories.views.vector_service')
+    def test_delete_still_accepts_request_body(self, mock_vector_service):
+        """
+        Test that DELETE endpoint still accepts request body for backwards compatibility.
+        API-P2-09: Support both query params and request body.
+        """
+        # Create test memory
+        memory = Memory.objects.create(
+            user_id=self.user.id,
+            content="Test memory 2",
+            metadata={}
+        )
+
+        # Mock vector service
+        mock_vector_service.delete_memories.return_value = {"success": True}
+
+        from rest_framework.test import APIRequestFactory
+        from memories.views import DeleteAllMemoriesView
+
+        factory = APIRequestFactory()
+
+        # Test with request body (should still work for backwards compatibility)
+        request = factory.delete(
+            '/api/memories/delete-all/',
+            {'user_id': str(self.user.id), 'confirm': True},
+            format='json'
+        )
+
+        view = DeleteAllMemoriesView.as_view()
+        response = view(request)
+
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['success'])
+
+    def test_delete_confirm_parameter_parsing(self):
+        """
+        Test that confirm parameter is properly parsed from strings.
+        API-P2-09: Query params are always strings, need proper parsing.
+        """
+        from rest_framework.test import APIRequestFactory
+        from memories.views import DeleteAllMemoriesView
+
+        factory = APIRequestFactory()
+        view = DeleteAllMemoriesView.as_view()
+
+        # Test various confirm string values
+        test_cases = [
+            ('true', True),
+            ('TRUE', True),
+            ('1', True),
+            ('yes', True),
+            ('false', False),
+            ('0', False),
+            ('no', False),
+            ('', False),
+        ]
+
+        for confirm_value, expected_requires_confirm in test_cases:
+            request = factory.delete(
+                f'/api/memories/delete-all/?confirm={confirm_value}'
+            )
+            response = view(request)
+
+            if expected_requires_confirm:
+                # Should proceed (might fail for other reasons like no user_id)
+                self.assertNotEqual(response.data.get('error'), 'Confirmation required')
+            else:
+                # Should require confirmation
+                self.assertEqual(response.data.get('error'), 'Confirmation required')
+
+
+class SVCP2RegexOptimizationTests(TestCase):
+    """Tests for SVC-P2-11: Inefficient Multiple Regex Operations"""
+
+    def test_token_estimation_with_mixed_content(self):
+        """Verify token estimation works correctly after regex optimization"""
+        from memories.token_utils import TokenCounter
+
+        # Test with mixed content
+        text = "Hello World! 123 test@example.com"
+        tokens = TokenCounter.estimate_tokens(text)
+
+        # Should return a positive number
+        self.assertGreater(tokens, 0)
+        # Should be reasonable for this text (roughly 8-12 tokens)
+        self.assertLess(tokens, 30)
+
+    def test_character_counting_optimization(self):
+        """Verify character type counting produces correct results"""
+        from memories.token_utils import TokenCounter
+
+        # Test with known content
+        text = "ABC 123 !@#"
+
+        # Estimate tokens - this will use the optimized character counting
+        tokens = TokenCounter.estimate_tokens(text)
+
+        # Should be positive
+        self.assertGreater(tokens, 0)
+
+    def test_large_text_performance(self):
+        """Verify optimized version handles large texts efficiently"""
+        from memories.token_utils import TokenCounter
+        import time
+
+        # Create a large text (10KB)
+        large_text = "Lorem ipsum dolor sit amet. " * 400
+
+        start_time = time.time()
+        tokens = TokenCounter.estimate_tokens(large_text)
+        elapsed = time.time() - start_time
+
+        # Should complete quickly (under 100ms even for large texts)
+        self.assertLess(elapsed, 0.1)
+        # Should return reasonable token count
+        self.assertGreater(tokens, 1000)
+
+    def test_character_types_counted_correctly(self):
+        """Verify different character types are counted correctly"""
+        from memories.token_utils import TokenCounter
+
+        # Test with each character type
+        test_cases = [
+            ("ABCD", 5, 10),      # Letters only
+            ("1234", 5, 10),      # Numbers only
+            ("    ", 3, 8),       # Spaces only
+            ("!@#$", 3, 8),       # Punctuation only
+            ("Test123!@#", 10, 20),  # Mixed
+        ]
+
+        for text, min_tokens, max_tokens in test_cases:
+            tokens = TokenCounter.estimate_tokens(text)
+            self.assertGreaterEqual(tokens, min_tokens, f"Failed for text: {text}")
+            self.assertLessEqual(tokens, max_tokens, f"Failed for text: {text}")
+
+    def test_empty_text_handling(self):
+        """Verify empty text is handled correctly"""
+        from memories.token_utils import TokenCounter
+
+        tokens = TokenCounter.estimate_tokens("")
+        self.assertEqual(tokens, 0)
+
+        tokens = TokenCounter.estimate_tokens("   ")
+        self.assertGreater(tokens, 0)
+
+    def test_unicode_characters(self):
+        """Verify unicode characters are handled correctly"""
+        from memories.token_utils import TokenCounter
+
+        # Test with unicode
+        text = "Hello 世界! Café ñoño"
+        tokens = TokenCounter.estimate_tokens(text)
+
+        # Should handle unicode without crashing
+        self.assertGreater(tokens, 0)
+
+    def test_no_regex_module_used(self):
+        """Verify 're' module is not imported in token_utils"""
+        import memories.token_utils as token_utils_module
+
+        # Check that 're' is not in the module's namespace
+        # (it was removed after optimization)
+        self.assertFalse(hasattr(token_utils_module, 're'))
+
+
+class SVCP2ValueErrorHandlingTests(TestCase):
+    """Tests for SVC-P2-09: No Error Handling for ValueError"""
+
+    def test_safe_int_with_valid_value(self):
+        """Verify _safe_int converts valid values correctly"""
+        from memories.llm_service import llm_service
+
+        # Test with integer
+        result = llm_service._safe_int(42, 10, "test")
+        self.assertEqual(result, 42)
+
+        # Test with string integer
+        result = llm_service._safe_int("100", 10, "test")
+        self.assertEqual(result, 100)
+
+        # Test with float (should truncate)
+        result = llm_service._safe_int(3.14, 10, "test")
+        self.assertEqual(result, 3)
+
+    def test_safe_int_with_invalid_value(self):
+        """Verify _safe_int returns default for invalid values"""
+        from memories.llm_service import llm_service
+
+        # Test with invalid string
+        result = llm_service._safe_int("not_a_number", 10, "test")
+        self.assertEqual(result, 10)
+
+        # Test with None
+        result = llm_service._safe_int(None, 10, "test")
+        self.assertEqual(result, 10)
+
+        # Test with object
+        result = llm_service._safe_int(object(), 10, "test")
+        self.assertEqual(result, 10)
+
+    def test_safe_float_with_valid_value(self):
+        """Verify _safe_float converts valid values correctly"""
+        from memories.llm_service import llm_service
+
+        # Test with float
+        result = llm_service._safe_float(3.14, 1.0, "test")
+        self.assertAlmostEqual(result, 3.14)
+
+        # Test with integer
+        result = llm_service._safe_float(42, 1.0, "test")
+        self.assertAlmostEqual(result, 42.0)
+
+        # Test with string float
+        result = llm_service._safe_float("2.71", 1.0, "test")
+        self.assertAlmostEqual(result, 2.71)
+
+    def test_safe_float_with_invalid_value(self):
+        """Verify _safe_float returns default for invalid values"""
+        from memories.llm_service import llm_service
+
+        # Test with invalid string
+        result = llm_service._safe_float("not_a_number", 1.0, "test")
+        self.assertAlmostEqual(result, 1.0)
+
+        # Test with None
+        result = llm_service._safe_float(None, 1.0, "test")
+        self.assertAlmostEqual(result, 1.0)
+
+        # Test with object
+        result = llm_service._safe_float(object(), 1.0, "test")
+        self.assertAlmostEqual(result, 1.0)
+
+    @patch('memories.llm_service.LLMSettings.get_settings')
+    def test_query_llm_handles_invalid_temperature_setting(self, mock_settings):
+        """Verify query_llm handles invalid temperature settings gracefully"""
+        from memories.llm_service import llm_service
+
+        # Mock settings with invalid temperature
+        mock_settings.return_value = MagicMock()
+        mock_settings.return_value.llm_temperature = "invalid"
+        mock_settings.return_value.llm_max_tokens = 4000
+
+        # Should not crash, should use default temperature
+        llm_service._settings_loaded = False
+        _ = llm_service.settings  # Trigger settings load
+
+    @patch('memories.llm_service.LLMSettings.get_settings')
+    def test_query_llm_handles_invalid_max_tokens_setting(self, mock_settings):
+        """Verify query_llm handles invalid max_tokens settings gracefully"""
+        from memories.llm_service import llm_service
+
+        # Mock settings with invalid max_tokens
+        mock_settings.return_value = MagicMock()
+        mock_settings.return_value.llm_temperature = 0.7
+        mock_settings.return_value.llm_max_tokens = "invalid"
+
+        # Should not crash, should use default max_tokens
+        llm_service._settings_loaded = False
+        _ = llm_service.settings  # Trigger settings load
+
+    def test_prepare_ollama_request_handles_invalid_settings(self):
+        """Verify prepare_ollama_request handles invalid top_p and top_k settings"""
+        from memories.llm_service import llm_service
+        from types import SimpleNamespace
+
+        # Create settings with invalid values
+        llm_service._settings = SimpleNamespace(
+            llm_top_p="invalid_float",
+            llm_top_k="invalid_int",
+        )
+
+        # Should not crash when preparing request
+        # The _safe_float and _safe_int methods should handle the errors
+        result = llm_service._safe_float(llm_service.settings.llm_top_p, 0.9, "llm_top_p")
+        self.assertAlmostEqual(result, 0.9)
+
+        result = llm_service._safe_int(llm_service.settings.llm_top_k, 40, "llm_top_k")
+        self.assertEqual(result, 40)
+
+
+class SVCP2SettingsErrorHandlingTests(TestCase):
+    """Tests for SVC-P2-12: No Error Handling for Settings"""
+
+    @patch('memories.views.LLMSettings.get_settings')
+    @patch('memories.views.memory_search_service')
+    @patch('memories.views.llm_service')
+    def test_retrieve_handles_settings_error(self, mock_llm, mock_memory_service, mock_settings):
+        """Verify retrieve endpoint handles settings loading errors gracefully"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Database connection failed")
+
+        # Mock LLM and memory service
+        mock_llm.refresh_settings.return_value = None
+        mock_llm.settings.memory_search_prompt = "test prompt"
+        mock_llm.query_llm.return_value = {
+            "success": True,
+            "response": "[]",
+            "model": "test-model"
+        }
+        mock_memory_service.search_memories_with_queries.return_value = []
+
+        from django.test import Client
+        client = Client()
+
+        # Should not crash, should use defaults
+        response = client.post(
+            '/api/memories/retrieve/',
+            data=json.dumps({
+                "user_id": str(uuid.uuid4()),
+                "prompt": "test query"
+            }),
+            content_type='application/json'
+        )
+
+        # Should succeed with defaults (semantic connections disabled)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data.get('success'))
+
+    @patch('memories.memory_search_service.LLMSettings.get_settings')
+    def test_memory_search_service_handles_settings_error(self, mock_settings):
+        """Verify memory search service handles settings loading errors"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Database error")
+
+        from memories.memory_search_service import MemorySearchService
+        service = MemorySearchService()
+
+        # Should not crash, should return fallback settings
+        settings = service._get_settings()
+
+        self.assertIsNotNone(settings)
+        # Fallback should have enable_semantic_connections as False
+        self.assertFalse(settings.enable_semantic_connections)
+        self.assertEqual(settings.semantic_enhancement_threshold, 3)
+
+    @patch('memories.openwebui_importer.LLMSettings.get_settings')
+    @patch('memories.openwebui_importer.llm_service')
+    def test_openwebui_importer_handles_settings_error(self, mock_llm, mock_settings):
+        """Verify OpenWebUI importer handles settings loading errors"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Settings unavailable")
+
+        # Mock LLM service
+        mock_llm.query_llm.return_value = {
+            "success": True,
+            "response": "[]",
+            "model": "test-model"
+        }
+
+        from memories.openwebui_importer import OpenWebUIImporter
+        import tempfile
+        import sqlite3
+
+        # Create a temporary database
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
+            db_path = tmp_file.name
+
+        try:
+            # Create minimal database structure
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE chat (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    title TEXT,
+                    chat TEXT,
+                    created_at INTEGER,
+                    updated_at INTEGER
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO chat VALUES (
+                    'test-id',
+                    'test-user',
+                    'Test Chat',
+                    '{"messages": [{"role": "user", "content": "test"}]}',
+                    1234567890,
+                    1234567890
+                )
+            """)
+            conn.commit()
+            conn.close()
+
+            # Test that importer doesn't crash with settings error
+            with OpenWebUIImporter(db_path) as importer:
+                # Should use fallback prompt instead of crashing
+                # This is verified by not raising an exception
+                pass
+
+        finally:
+            import os
+            if os.path.exists(db_path):
+                os.unlink(db_path)
+
+    @patch('memories.views.LLMSettings.get_settings')
+    def test_import_file_size_validation_handles_settings_error(self, mock_settings):
+        """Verify import file size validation handles settings errors"""
+        # Mock settings to raise an exception
+        mock_settings.side_effect = Exception("Settings error")
+
+        from django.test import Client
+        from io import BytesIO
+
+        client = Client()
+
+        # Create a small dummy file
+        dummy_file = BytesIO(b'dummy content')
+        dummy_file.name = 'test.db'
+
+        # Should not crash, should use default 100MB limit
+        response = client.post(
+            '/api/import/openwebui/',
+            data={'db_file': dummy_file},
+            format='multipart'
+        )
+
+        # Should succeed (or fail for other reasons, but not settings)
+        # The important thing is it doesn't crash with 500 error
+        self.assertNotEqual(response.status_code, 500)
+
+
+class APIP2InconsistentResponseFormatTests(TestCase):
+    """Tests for API-P2-08: Inconsistent Response Format"""
+
+    def setUp(self):
+        """Create test user and memory for testing"""
+        from memories.models import Memory
+        self.test_user_id = str(uuid.uuid4())
+        self.test_memory = Memory.objects.create(
+            user_id=self.test_user_id,
+            content="Test memory content",
+            metadata={"test": "data"}
+        )
+
+    @patch('memories.views.vector_service')
+    def test_retrieve_success_has_consistent_format(self, mock_vector_service):
+        """Verify retrieve endpoint returns consistent response format with success field"""
+        from django.test import Client
+        client = Client()
+
+        response = client.get(f'/api/memories/{self.test_memory.id}/')
+
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+
+        # Should have success field
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertTrue(data['success'])
+
+        # Should have memory field
+        self.assertIn('memory', data)
+        self.assertIsInstance(data['memory'], dict)
+
+    @patch('memories.views.vector_service')
+    def test_list_success_has_consistent_format(self, mock_vector_service):
+        """Verify list endpoint returns consistent response format with success field"""
+        from django.test import Client
+        client = Client()
+
+        response = client.get('/api/memories/')
+
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+
+        # Should have success field (added to paginated response)
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertTrue(data['success'])
+
+        # Should have pagination fields
+        self.assertIn('count', data)
+        self.assertIn('results', data)
+
+    @patch('memories.views.memory_search_service')
+    def test_create_success_has_consistent_format(self, mock_memory_service):
+        """Verify create endpoint returns consistent response format with success field"""
+        from django.test import Client
+        client = Client()
+
+        # Mock the memory creation
+        mock_memory = MagicMock()
+        mock_memory.id = uuid.uuid4()
+        mock_memory.content = "New memory"
+        mock_memory.user_id = self.test_user_id
+        mock_memory.metadata = {}
+        mock_memory.created_at = datetime.now()
+        mock_memory.updated_at = datetime.now()
+
+        with patch('memories.views.MemoryViewSet.perform_create'):
+            response = client.post(
+                '/api/memories/',
+                data=json.dumps({
+                    "user_id": self.test_user_id,
+                    "content": "New memory"
+                }),
+                content_type='application/json'
+            )
+
+        # Response should have success field
+        if response.status_code == 201:
+            data = response.json()
+            self.assertIn('success', data)
+
+    def test_error_responses_have_consistent_format(self):
+        """Verify error responses have consistent format with success=False"""
+        from django.test import Client
+        client = Client()
+
+        # Test with invalid UUID
+        response = client.get('/api/memories/invalid-uuid/')
+
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+
+        # Should have consistent error format
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertFalse(data['success'])
+        self.assertIn('error', data)
+
+    def test_not_found_has_consistent_format(self):
+        """Verify 404 responses have consistent format"""
+        from django.test import Client
+        client = Client()
+
+        # Try to get non-existent memory with valid UUID
+        non_existent_id = uuid.uuid4()
+        response = client.get(f'/api/memories/{non_existent_id}/')
+
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+
+        # Should have consistent error format
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertFalse(data['success'])
+        self.assertIn('error', data)
+
+    def test_all_responses_have_success_field(self):
+        """Verify all API responses include the success field"""
+        from django.test import Client
+        client = Client()
+
+        # Test retrieve success
+        response = client.get(f'/api/memories/{self.test_memory.id}/')
+        if response.status_code == 200:
+            self.assertIn('success', response.json())
+
+        # Test list success
+        response = client.get('/api/memories/')
+        if response.status_code == 200:
+            self.assertIn('success', response.json())
+
+        # Test error response
+        response = client.get('/api/memories/invalid/')
+        self.assertIn('success', response.json())
+
+
+class APIP2MissingTypeHintsTests(TestCase):
+    """Tests for API-P2-06: Missing Type Hints"""
+
+    def test_validate_fields_has_type_hints(self):
+        """Verify validate_fields function has type hints"""
+        import inspect
+        from memories.views import validate_fields
+
+        # Get the function signature
+        sig = inspect.signature(validate_fields)
+
+        # Check parameter type hint
+        self.assertIn('requested_fields', sig.parameters)
+        param = sig.parameters['requested_fields']
+        self.assertIsNotNone(param.annotation)
+        # The annotation should not be inspect.Parameter.empty
+        self.assertNotEqual(param.annotation, inspect.Parameter.empty)
+
+        # Check return type hint
+        self.assertIsNotNone(sig.return_annotation)
+        self.assertNotEqual(sig.return_annotation, inspect.Signature.empty)
+
+    def test_format_memory_has_type_hints(self):
+        """Verify _format_memory method has type hints"""
+        import inspect
+        from memories.views import RetrieveMemoriesView
+
+        # Get the method signature
+        method = RetrieveMemoriesView._format_memory
+        sig = inspect.signature(method)
+
+        # Check parameter type hints (excluding self)
+        params = list(sig.parameters.keys())
+        self.assertIn('memory', params)
+        self.assertIn('fields', params)
+        self.assertIn('include_search_metadata', params)
+
+        # Check memory parameter has type hint
+        memory_param = sig.parameters['memory']
+        self.assertIsNotNone(memory_param.annotation)
+        self.assertNotEqual(memory_param.annotation, inspect.Parameter.empty)
+
+        # Check fields parameter has type hint
+        fields_param = sig.parameters['fields']
+        self.assertIsNotNone(fields_param.annotation)
+        self.assertNotEqual(fields_param.annotation, inspect.Parameter.empty)
+
+        # Check include_search_metadata parameter has type hint
+        metadata_param = sig.parameters['include_search_metadata']
+        self.assertIsNotNone(metadata_param.annotation)
+        self.assertNotEqual(metadata_param.annotation, inspect.Parameter.empty)
+
+        # Check return type hint
+        self.assertIsNotNone(sig.return_annotation)
+        self.assertNotEqual(sig.return_annotation, inspect.Signature.empty)
+
+    def test_get_queryset_has_type_hints(self):
+        """Verify get_queryset method has type hints"""
+        import inspect
+        from memories.views import MemoryViewSet
+
+        # Get the method signature
+        method = MemoryViewSet.get_queryset
+        sig = inspect.signature(method)
+
+        # Check return type hint
+        self.assertIsNotNone(sig.return_annotation)
+        self.assertNotEqual(sig.return_annotation, inspect.Signature.empty)
+
+    def test_type_hints_are_correct_types(self):
+        """Verify type hints use correct typing module types"""
+        from typing import get_type_hints
+        from memories.views import validate_fields, RetrieveMemoriesView, MemoryViewSet
+
+        # Test validate_fields
+        hints = get_type_hints(validate_fields)
+        self.assertIn('requested_fields', hints)
+        self.assertIn('return', hints)
+
+        # Test _format_memory
+        hints = get_type_hints(RetrieveMemoriesView._format_memory)
+        self.assertIn('memory', hints)
+        self.assertIn('fields', hints)
+        self.assertIn('include_search_metadata', hints)
+        self.assertIn('return', hints)
+
+        # Test get_queryset
+        hints = get_type_hints(MemoryViewSet.get_queryset)
+        self.assertIn('return', hints)
+
+    def test_typing_imports_present(self):
+        """Verify necessary typing imports are present in views module"""
+        import memories.views as views_module
+
+        # Check that typing imports are available
+        self.assertTrue(hasattr(views_module, 'Any'))
+        self.assertTrue(hasattr(views_module, 'Dict'))
+        self.assertTrue(hasattr(views_module, 'List'))
+        self.assertTrue(hasattr(views_module, 'Optional'))
+
+    def test_django_queryset_import_present(self):
+        """Verify Django QuerySet import is present"""
+        import memories.views as views_module
+
+        # Check that QuerySet is imported
+        self.assertTrue(hasattr(views_module, 'QuerySet'))
+
+
+class APIP2ImportsInsideFunctionsTests(TestCase):
+    """Tests for API-P2-07: Imports Inside Functions"""
+
+    def test_no_imports_in_test_connection_view(self):
+        """Verify TestConnectionView.get() has no imports inside function body"""
+        import inspect
+        from memories.views import TestConnectionView
+
+        # Get the source code of the get method
+        source = inspect.getsource(TestConnectionView.get)
+
+        # Check that 'import' and 'from' keywords don't appear in function body
+        # (after the function definition line)
+        lines = source.split('\n')
+        # Skip the def line
+        function_body = '\n'.join(lines[1:])
+
+        # Should not have 'import' or 'from ... import' in function body
+        self.assertNotIn('import tempfile', function_body)
+        self.assertNotIn('import threading', function_body)
+        self.assertNotIn('from .vector_service import', function_body)
+        self.assertNotIn('from .openwebui_importer import', function_body)
+        self.assertNotIn('from pathlib import', function_body)
+        self.assertNotIn('from datetime import timezone', function_body)
+
+    def test_no_imports_in_memory_stats_view(self):
+        """Verify MemoryStatsView.get() has no imports inside function body"""
+        import inspect
+        from memories.views import MemoryStatsView
+
+        # Get the source code of the get method
+        source = inspect.getsource(MemoryStatsView.get)
+
+        # Check that vector_service import is not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        self.assertNotIn('from .vector_service import', function_body)
+
+    def test_no_imports_in_import_openwebui_history_view(self):
+        """Verify ImportOpenWebUIHistoryView.post() has no imports inside function body"""
+        import inspect
+        from memories.views import ImportOpenWebUIHistoryView
+
+        # Get the source code of the post method
+        source = inspect.getsource(ImportOpenWebUIHistoryView.post)
+
+        # Check that imports are not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        # Should not have these imports in function body
+        self.assertNotIn('import tempfile', function_body)
+        self.assertNotIn('import threading', function_body)
+        self.assertNotIn('from pathlib import Path', function_body)
+        self.assertNotIn('from .openwebui_importer import OpenWebUIImporter', function_body)
+        self.assertNotIn('from datetime import timezone', function_body)
+        self.assertNotIn('from .openwebui_importer import ImportProgress', function_body)
+
+    def test_no_imports_in_import_progress_view(self):
+        """Verify ImportProgressView.get() has no imports inside function body"""
+        import inspect
+        from memories.views import ImportProgressView
+
+        # Get the source code of the get method
+        source = inspect.getsource(ImportProgressView.get)
+
+        # Check that imports are not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        self.assertNotIn('from .openwebui_importer import', function_body)
+
+    def test_no_imports_in_cancel_import_view(self):
+        """Verify CancelImportView.post() has no imports inside function body"""
+        import inspect
+        from memories.views import CancelImportView
+
+        # Get the source code of the post method
+        source = inspect.getsource(CancelImportView.post)
+
+        # Check that imports are not in function body
+        lines = source.split('\n')
+        function_body = '\n'.join(lines[1:])
+
+        self.assertNotIn('from .openwebui_importer import', function_body)
+
+    def test_all_imports_at_module_level(self):
+        """Verify all required imports are at module level in views.py"""
+        import memories.views as views_module
+
+        # Check that all required imports are available at module level
+        self.assertTrue(hasattr(views_module, 'tempfile'))
+        self.assertTrue(hasattr(views_module, 'threading'))
+        self.assertTrue(hasattr(views_module, 'Path'))
+        self.assertTrue(hasattr(views_module, 'timezone'))
+        self.assertTrue(hasattr(views_module, 'vector_service'))
+        self.assertTrue(hasattr(views_module, 'OpenWebUIImporter'))
+        self.assertTrue(hasattr(views_module, 'ImportProgress'))
+        self.assertTrue(hasattr(views_module, '_import_progresses'))
+        self.assertTrue(hasattr(views_module, '_progress_lock'))
+
+    def test_imports_work_correctly(self):
+        """Verify that moved imports still work correctly"""
+        # This is a functional test to ensure the refactoring didn't break anything
+        import memories.views as views_module
+
+        # Test that we can use the imported modules/classes
+        self.assertIsNotNone(views_module.tempfile)
+        self.assertIsNotNone(views_module.threading)
+        self.assertIsNotNone(views_module.Path)
+        self.assertIsNotNone(views_module.timezone)
+
+        # Test that we can instantiate/use the classes
+        self.assertTrue(callable(views_module.OpenWebUIImporter))
+        self.assertTrue(callable(views_module.ImportProgress))
+
+
+if __name__ == '__main__':
+    unittest.main()

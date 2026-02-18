@@ -4,6 +4,7 @@ export interface Memory {
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  score?: number;
 }
 
 export interface StoreMemoryRequest {

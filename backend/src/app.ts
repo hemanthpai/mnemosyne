@@ -1,27 +1,27 @@
 import Fastify from "fastify";
-import type { MemoryRepository } from "./repository/index.js";
+import type { MemoryService } from "./services/memory-service.js";
 import { memoryRoutes } from "./routes/memories.js";
 
 export interface AppOptions {
-  repository: MemoryRepository;
+  service: MemoryService;
 }
 
 export function buildApp(options: AppOptions) {
-  const { repository } = options;
+  const { service } = options;
   const app = Fastify({ logger: false });
 
   app.get("/health", async (_request, reply) => {
-    const healthy = await repository.healthCheck();
+    const healthy = await service.healthCheck();
     if (!healthy) {
       return reply.status(503).send({ status: "unhealthy" });
     }
     return { status: "ok" };
   });
 
-  app.register(memoryRoutes(repository));
+  app.register(memoryRoutes(service));
 
   app.addHook("onClose", async () => {
-    await repository.close();
+    await service.close();
   });
 
   return app;

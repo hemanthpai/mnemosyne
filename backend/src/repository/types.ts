@@ -3,11 +3,14 @@ import type { Memory } from "../types/memory.js";
 export interface StoreParams {
   content: string;
   tags: string[];
+  embedding?: number[] | null;
 }
 
 export interface FetchParams {
   query?: string;
   tags?: string[];
+  queryEmbedding?: number[] | null;
+  limit?: number;
 }
 
 export interface MemoryRepository {

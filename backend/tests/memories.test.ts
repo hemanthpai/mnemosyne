@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { InMemoryRepository } from "../src/repository/index.js";
-import type { MemoryRepository } from "../src/repository/index.js";
+import { NoopEmbeddingService } from "../src/embedding/index.js";
+import { MemoryService } from "../src/services/memory-service.js";
 
-let repo: InMemoryRepository;
+let service: MemoryService;
 
-function createApp(repository?: MemoryRepository) {
-  return buildApp({ repository: repository ?? repo });
+function createApp(svc?: MemoryService) {
+  return buildApp({ service: svc ?? service });
 }
 
 beforeEach(() => {
-  repo = new InMemoryRepository();
+  const repo = new InMemoryRepository();
+  const embedding = new NoopEmbeddingService();
+  service = new MemoryService(repo, embedding);
 });
 
 describe("GET /health", () => {
@@ -22,14 +25,14 @@ describe("GET /health", () => {
   });
 
   it("returns 503 when repository is unhealthy", async () => {
-    const unhealthyRepo: MemoryRepository = {
+    const unhealthyService: MemoryService = {
       initialize: vi.fn(),
       store: vi.fn(),
       fetch: vi.fn(),
       healthCheck: vi.fn().mockResolvedValue(false),
       close: vi.fn(),
-    };
-    const app = createApp(unhealthyRepo);
+    } as unknown as MemoryService;
+    const app = createApp(unhealthyService);
     const res = await app.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ status: "unhealthy" });

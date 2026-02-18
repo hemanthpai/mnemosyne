@@ -2,6 +2,7 @@
 
 These tests run against live Docker services.
 """
+import os
 import uuid
 
 import pytest
@@ -198,3 +199,53 @@ class TestEndToEnd:
                 )
                 text = result.content[0].text
                 assert content in text
+
+
+# ──────────────────────────────────────────────
+# Category 4: Semantic search tests (require embedding service)
+# ──────────────────────────────────────────────
+
+
+EMBEDDING_URL = os.environ.get("EMBEDDING_URL", "")
+
+
+@pytest.mark.skipif(not EMBEDDING_URL, reason="EMBEDDING_URL not set — skipping semantic search tests")
+class TestSemanticSearch:
+    @pytest.mark.asyncio
+    async def test_semantic_similarity_search(self, backend_client):
+        """Store a memory and retrieve it with a semantically similar query."""
+        content = "The cat sat on the windowsill watching birds outside"
+        tag = unique("semantic")
+        resp = await backend_client.post(
+            "/api/memories",
+            json={"content": content, "tags": [tag]},
+        )
+        assert resp.status_code == 201
+
+        # Search with semantically similar but different words
+        resp = await backend_client.get(
+            "/api/memories", params={"query": "feline by the window", "tags": tag}
+        )
+        data = resp.json()
+        assert data["total"] >= 1
+        assert any(m["content"] == content for m in data["memories"])
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_returns_scores(self, backend_client):
+        """Vector search results should include similarity scores."""
+        content = unique("scored")
+        tag = unique("score-test")
+        await backend_client.post(
+            "/api/memories",
+            json={"content": content, "tags": [tag]},
+        )
+
+        resp = await backend_client.get(
+            "/api/memories", params={"query": content, "tags": tag}
+        )
+        data = resp.json()
+        assert data["total"] >= 1
+        # When embeddings are active, results should have scores
+        scored = [m for m in data["memories"] if "score" in m]
+        assert len(scored) >= 1
+        assert all(0 <= m["score"] <= 1 for m in scored)

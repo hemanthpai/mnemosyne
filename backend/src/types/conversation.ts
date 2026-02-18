@@ -1,0 +1,34 @@
+export interface ConversationMessage {
+  id: string;
+  conversationId: string;
+  role: string;
+  content: string;
+  position: number;
+  createdAt: string;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  source: string;
+  sourceId?: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  score?: number;
+  messages?: ConversationMessage[];
+}
+
+export interface StoreConversationRequest {
+  title: string;
+  source?: string;
+  sourceId?: string;
+  tags?: string[];
+  messages: { role: string; content: string }[];
+}
+
+export interface SearchConversationsQuery {
+  query?: string;
+  tags?: string;
+  limit?: string;
+}

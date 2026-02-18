@@ -1,9 +1,11 @@
 import { buildApp } from "./app.js";
 import { InMemoryRepository, PostgresRepository } from "./repository/index.js";
+import { ConversationPostgresRepository } from "./repository/index.js";
 import type { MemoryRepository } from "./repository/index.js";
 import { OllamaEmbeddingService, NoopEmbeddingService } from "./embedding/index.js";
 import type { EmbeddingService } from "./embedding/index.js";
 import { MemoryService } from "./services/memory-service.js";
+import { ConversationService } from "./services/conversation-service.js";
 
 const HOST = process.env.HOST ?? "0.0.0.0";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -34,7 +36,16 @@ if (EMBEDDING_URL) {
 const service = new MemoryService(repository, embedding);
 await service.initialize();
 
-const app = buildApp({ service });
+let conversationService: ConversationService | undefined;
+
+if (DATABASE_URL) {
+  const conversationRepo = new ConversationPostgresRepository(DATABASE_URL);
+  conversationService = new ConversationService(conversationRepo, embedding);
+  await conversationService.initialize();
+  console.log("Conversation service initialized");
+}
+
+const app = buildApp({ service, conversationService });
 
 try {
   await app.listen({ host: HOST, port: PORT });

@@ -3,41 +3,18 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.pyc
-*.pyd
-*.pyo
-*.py.class
+.venv/
+*.egg-info/
 
-# Django
-*.log
-*.pot
-*.pyc
-*.pyo
-*.db
-*.sqlite3
-db.sqlite3
-media/
-staticfiles/
+# Node
+node_modules/
+dist/
+npm-debug.log*
+
+# Environment
 .env
 .env.*
-*.env
-*.secret
-instance/
-.settings/
-local_settings.py
 !.env.example
-# VSCode
-.history/
-
-# Node/React
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-/frontend/build/
-/frontend/dist/
-/frontend/.env
-/frontend/.env.*
 
 # OS
 .DS_Store
@@ -45,33 +22,21 @@ Thumbs.db
 
 # Test/coverage
 .coverage
-.tox/
-.nox/
-.cache/
-pytest_cache/
 htmlcov/
 coverage.xml
+.pytest_cache/
 
-# Migrations (optional, if you want to ignore generated migrations)
-# **/migrations/*.py
-# **/migrations/*.pyc
-
-# Jupyter
-.ipynb_checkpoints
-
-# Qdrant local
-qdrant_storage/
-
-# Misc
+# Editor
 *.swp
 *.swo
-*.bak
-*.tmp
-*.orig
-*.old
-*.log
-*.md
-*.MD
-
-# Editor backups
 *~
+.history/
+
+# Logs
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# uv
+uv.lock

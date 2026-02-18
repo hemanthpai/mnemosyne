@@ -1,70 +1,44 @@
-import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import type { MemoryRepository } from "../repository/index.js";
 import type {
-  Memory,
   StoreMemoryRequest,
   FetchMemoriesQuery,
 } from "../types/memory.js";
 
-const memories: Memory[] = [];
+export function memoryRoutes(repo: MemoryRepository) {
+  return async function (app: FastifyInstance): Promise<void> {
+    app.post<{ Body: StoreMemoryRequest }>(
+      "/api/memories",
+      async (request, reply) => {
+        const { content, tags } = request.body ?? {};
 
-export function getMemoryStore(): Memory[] {
-  return memories;
-}
+        if (!content || typeof content !== "string" || content.trim() === "") {
+          return reply.status(400).send({
+            error: "content is required and must be a non-empty string",
+          });
+        }
 
-export function clearMemoryStore(): void {
-  memories.length = 0;
-}
-
-export async function memoryRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Body: StoreMemoryRequest }>(
-    "/api/memories",
-    async (request, reply) => {
-      const { content, tags } = request.body ?? {};
-
-      if (!content || typeof content !== "string" || content.trim() === "") {
-        return reply.status(400).send({
-          error: "content is required and must be a non-empty string",
+        const memory = await repo.store({
+          content: content.trim(),
+          tags: Array.isArray(tags) ? tags : [],
         });
-      }
 
-      const now = new Date().toISOString();
-      const memory: Memory = {
-        id: randomUUID(),
-        content: content.trim(),
-        tags: Array.isArray(tags) ? tags : [],
-        createdAt: now,
-        updatedAt: now,
-      };
+        return reply.status(201).send(memory);
+      },
+    );
 
-      memories.push(memory);
-      return reply.status(201).send(memory);
-    },
-  );
+    app.get<{ Querystring: FetchMemoriesQuery }>(
+      "/api/memories",
+      async (request) => {
+        const { query, tags } = request.query;
 
-  app.get<{ Querystring: FetchMemoriesQuery }>(
-    "/api/memories",
-    async (request) => {
-      const { query, tags } = request.query;
-      let result = memories;
+        const tagList = tags
+          ? tags.split(",").map((t) => t.trim().toLowerCase())
+          : undefined;
 
-      if (query) {
-        const lower = query.toLowerCase();
-        result = result.filter((m) =>
-          m.content.toLowerCase().includes(lower),
-        );
-      }
-
-      if (tags) {
-        const tagList = tags.split(",").map((t) => t.trim().toLowerCase());
-        result = result.filter((m) =>
-          tagList.some((tag) =>
-            m.tags.map((t) => t.toLowerCase()).includes(tag),
-          ),
-        );
-      }
-
-      return { memories: result, total: result.length };
-    },
-  );
+        const memories = await repo.fetch({ query, tags: tagList });
+        return { memories, total: memories.length };
+      },
+    );
+  };
 }

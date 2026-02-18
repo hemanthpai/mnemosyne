@@ -1,13 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import { clearMemoryStore } from "../src/routes/memories.js";
+import { InMemoryRepository } from "../src/repository/index.js";
+import type { MemoryRepository } from "../src/repository/index.js";
 
-function createApp() {
-  return buildApp();
+let repo: InMemoryRepository;
+
+function createApp(repository?: MemoryRepository) {
+  return buildApp({ repository: repository ?? repo });
 }
 
 beforeEach(() => {
-  clearMemoryStore();
+  repo = new InMemoryRepository();
 });
 
 describe("GET /health", () => {
@@ -16,6 +19,20 @@ describe("GET /health", () => {
     const res = await app.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ status: "ok" });
+  });
+
+  it("returns 503 when repository is unhealthy", async () => {
+    const unhealthyRepo: MemoryRepository = {
+      initialize: vi.fn(),
+      store: vi.fn(),
+      fetch: vi.fn(),
+      healthCheck: vi.fn().mockResolvedValue(false),
+      close: vi.fn(),
+    };
+    const app = createApp(unhealthyRepo);
+    const res = await app.inject({ method: "GET", url: "/health" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ status: "unhealthy" });
   });
 });
 

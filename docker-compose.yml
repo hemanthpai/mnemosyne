@@ -1,4 +1,19 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      - POSTGRES_USER=mnemosyne
+      - POSTGRES_PASSWORD=mnemosyne
+      - POSTGRES_DB=mnemosyne
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mnemosyne"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   backend:
     build: ./backend
     ports:
@@ -6,6 +21,10 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=3000
+      - DATABASE_URL=postgresql://mnemosyne:mnemosyne@postgres:5432/mnemosyne
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
       interval: 5s
@@ -23,3 +42,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,10 +1,49 @@
 import os
+import subprocess
+import sys
+
 import pytest
 import httpx
 
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:3000")
 MCP_URL = os.environ.get("MCP_URL", "http://mcp-server:8080")
+WEBUI_DB_PATH = os.environ.get("WEBUI_DB_PATH", "")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ingest_conversations():
+    """Ingest Open WebUI conversations once before all tests.
+
+    Only runs when WEBUI_DB_PATH is set and the file exists.
+    """
+    if not WEBUI_DB_PATH or not os.path.isfile(WEBUI_DB_PATH):
+        yield
+        return
+
+    script = os.path.join(os.path.dirname(__file__), "ingest_webui.py")
+    if not os.path.isfile(script):
+        print(f"Ingestion script not found at {script}, skipping ingestion")
+        yield
+        return
+
+    print(f"\n=== Ingesting conversations from {WEBUI_DB_PATH} ===")
+    result = subprocess.run(
+        [
+            sys.executable, script,
+            "--db", WEBUI_DB_PATH,
+            "--backend-url", BACKEND_URL,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    print(result.stdout)
+    if result.returncode != 0:
+        print(f"Ingestion stderr: {result.stderr}", file=sys.stderr)
+        pytest.fail(f"Ingestion failed with exit code {result.returncode}")
+
+    yield
 
 
 @pytest.fixture

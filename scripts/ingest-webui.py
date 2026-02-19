@@ -151,7 +151,7 @@ def main():
 
         try:
             resp = client.post("/api/conversations", json=payload)
-            if resp.status_code == 201:
+            if resp.status_code == 200:
                 succeeded += 1
             else:
                 failed += 1

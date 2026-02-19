@@ -3,6 +3,7 @@ import type { Conversation, ConversationMessage } from "../types/conversation.js
 import type {
   ConversationRepository,
   StoreConversationParams,
+  UpsertConversationParams,
   SearchConversationParams,
 } from "./conversation-types.js";
 
@@ -41,6 +42,61 @@ export class InMemoryConversationRepository implements ConversationRepository {
     this.messages.push(...storedMessages);
 
     return { ...conversation, messages: storedMessages };
+  }
+
+  async findBySourceId(sourceId: string): Promise<Conversation | null> {
+    const conversation = this.conversations.find((c) => c.sourceId === sourceId);
+    if (!conversation) return null;
+    return this.getById(conversation.id);
+  }
+
+  async upsert(params: UpsertConversationParams): Promise<Conversation> {
+    const now = new Date().toISOString();
+    let conversation = this.conversations.find((c) => c.sourceId === params.sourceId);
+
+    if (!conversation) {
+      // Create new conversation
+      conversation = {
+        id: randomUUID(),
+        title: params.title ?? "",
+        source: params.source ?? "",
+        sourceId: params.sourceId,
+        tags: params.tags ?? [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.conversations.push(conversation);
+    } else {
+      // Update metadata fields that are present
+      if (params.title !== undefined) conversation.title = params.title;
+      if (params.source !== undefined) conversation.source = params.source;
+      if (params.tags !== undefined) conversation.tags = params.tags;
+      conversation.updatedAt = now;
+    }
+
+    // Append new messages if provided
+    if (params.messages && params.messages.length > 0) {
+      const existingMessages = this.messages.filter(
+        (m) => m.conversationId === conversation!.id,
+      );
+      const nextPosition = existingMessages.length > 0
+        ? Math.max(...existingMessages.map((m) => m.position)) + 1
+        : 0;
+
+      const newMessages: ConversationMessage[] = params.messages.map(
+        (msg, idx) => ({
+          id: randomUUID(),
+          conversationId: conversation!.id,
+          role: msg.role,
+          content: msg.content,
+          position: nextPosition + idx,
+          createdAt: now,
+        }),
+      );
+      this.messages.push(...newMessages);
+    }
+
+    return (await this.getById(conversation.id))!;
   }
 
   async search(params: SearchConversationParams): Promise<Conversation[]> {

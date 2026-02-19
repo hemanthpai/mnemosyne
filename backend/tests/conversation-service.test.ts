@@ -29,6 +29,8 @@ function createMockRepo(): ConversationRepository {
     store: vi.fn().mockResolvedValue(mockConversation),
     search: vi.fn().mockResolvedValue([mockConversation]),
     getById: vi.fn().mockResolvedValue(mockConversation),
+    findBySourceId: vi.fn().mockResolvedValue(null),
+    upsert: vi.fn().mockResolvedValue(mockConversation),
     healthCheck: vi.fn().mockResolvedValue(true),
     close: vi.fn(),
   };
@@ -113,6 +115,60 @@ describe("ConversationService", () => {
       const storeCall = (repo.store as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(storeCall.source).toBe("");
       expect(storeCall.tags).toEqual([]);
+    });
+  });
+
+  describe("upsert", () => {
+    it("embeds new user messages >= 50 chars", async () => {
+      const longMsg = "This is a user message that is definitely longer than fifty characters in total";
+      await service.upsert("src-1", {
+        messages: [
+          { role: "user", content: longMsg },
+          { role: "assistant", content: "Sure, here is a long response about that topic." },
+        ],
+      });
+
+      expect(embedding.embed).toHaveBeenCalledTimes(1);
+      expect(embedding.embed).toHaveBeenCalledWith(longMsg);
+
+      const upsertCall = (repo.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(upsertCall.sourceId).toBe("src-1");
+      expect(upsertCall.messages[0].embedding).toEqual(fakeVector);
+      expect(upsertCall.messages[1].embedding).toBeNull();
+    });
+
+    it("passes metadata through to repository", async () => {
+      await service.upsert("src-2", {
+        title: "Updated title",
+        source: "webui",
+        tags: ["imported"],
+      });
+
+      const upsertCall = (repo.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(upsertCall.sourceId).toBe("src-2");
+      expect(upsertCall.title).toBe("Updated title");
+      expect(upsertCall.source).toBe("webui");
+      expect(upsertCall.tags).toEqual(["imported"]);
+    });
+
+    it("does not embed when no messages provided", async () => {
+      await service.upsert("src-3");
+
+      expect(embedding.embed).not.toHaveBeenCalled();
+
+      const upsertCall = (repo.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(upsertCall.sourceId).toBe("src-3");
+      expect(upsertCall.messages).toBeUndefined();
+    });
+
+    it("skips embedding for short user messages", async () => {
+      await service.upsert("src-4", {
+        messages: [{ role: "user", content: "Hi" }],
+      });
+
+      expect(embedding.embed).not.toHaveBeenCalled();
+      const upsertCall = (repo.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(upsertCall.messages[0].embedding).toBeNull();
     });
   });
 

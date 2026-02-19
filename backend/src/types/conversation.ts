@@ -20,11 +20,11 @@ export interface Conversation {
 }
 
 export interface StoreConversationRequest {
-  title: string;
+  sourceId: string;
+  title?: string;
   source?: string;
-  sourceId?: string;
   tags?: string[];
-  messages: { role: string; content: string }[];
+  messages?: { role: string; content: string }[];
 }
 
 export interface SearchConversationsQuery {

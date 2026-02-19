@@ -3,6 +3,7 @@ import type { Conversation, ConversationMessage } from "../types/conversation.js
 import type {
   ConversationRepository,
   StoreConversationParams,
+  UpsertConversationParams,
   SearchConversationParams,
 } from "./conversation-types.js";
 
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversations_tags ON conversations USING GIN (tags);
-CREATE INDEX IF NOT EXISTS idx_conversations_source_id ON conversations (source_id);
+DROP INDEX IF EXISTS idx_conversations_source_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_source_id_unique ON conversations (source_id) WHERE source_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_conv_messages_conversation_id ON conversation_messages (conversation_id);
 `;
 
@@ -87,6 +89,122 @@ export class ConversationPostgresRepository implements ConversationRepository {
         ...this.rowToConversation(conv),
         messages,
       };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async findBySourceId(sourceId: string): Promise<Conversation | null> {
+    const result = await this.pool.query(
+      `SELECT id FROM conversations WHERE source_id = $1`,
+      [sourceId],
+    );
+    if (result.rows.length === 0) return null;
+    return this.getById(result.rows[0].id as string);
+  }
+
+  async upsert(params: UpsertConversationParams): Promise<Conversation> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Find existing conversation by source_id
+      const existing = await client.query(
+        `SELECT id FROM conversations WHERE source_id = $1`,
+        [params.sourceId],
+      );
+
+      let conversationId: string;
+
+      if (existing.rows.length === 0) {
+        // Create new conversation
+        const insertResult = await client.query(
+          `INSERT INTO conversations (title, source, source_id, tags)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id`,
+          [
+            params.title ?? "",
+            params.source ?? "",
+            params.sourceId,
+            params.tags ?? [],
+          ],
+        );
+        conversationId = insertResult.rows[0].id as string;
+      } else {
+        conversationId = existing.rows[0].id as string;
+
+        // Update metadata fields that are present
+        const updates: string[] = [];
+        const values: unknown[] = [];
+        let idx = 1;
+
+        if (params.title !== undefined) {
+          updates.push(`title = $${idx}`);
+          values.push(params.title);
+          idx++;
+        }
+        if (params.source !== undefined) {
+          updates.push(`source = $${idx}`);
+          values.push(params.source);
+          idx++;
+        }
+        if (params.tags !== undefined) {
+          updates.push(`tags = $${idx}`);
+          values.push(params.tags);
+          idx++;
+        }
+
+        if (updates.length > 0) {
+          updates.push(`updated_at = now()`);
+          values.push(conversationId);
+          await client.query(
+            `UPDATE conversations SET ${updates.join(", ")} WHERE id = $${idx}`,
+            values,
+          );
+        }
+      }
+
+      // Append new messages if provided
+      if (params.messages && params.messages.length > 0) {
+        // Get the next position
+        const maxPos = await client.query(
+          `SELECT COALESCE(MAX(position), -1) AS max_pos FROM conversation_messages WHERE conversation_id = $1`,
+          [conversationId],
+        );
+        let nextPosition = (maxPos.rows[0].max_pos as number) + 1;
+
+        for (const msg of params.messages) {
+          const hasEmbedding = msg.embedding && msg.embedding.length > 0;
+
+          if (hasEmbedding) {
+            await client.query(
+              `INSERT INTO conversation_messages (conversation_id, role, content, position, embedding)
+               VALUES ($1, $2, $3, $4, $5::vector)`,
+              [conversationId, msg.role, msg.content, nextPosition, JSON.stringify(msg.embedding)],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO conversation_messages (conversation_id, role, content, position)
+               VALUES ($1, $2, $3, $4)`,
+              [conversationId, msg.role, msg.content, nextPosition],
+            );
+          }
+          nextPosition++;
+        }
+
+        // Update updated_at when messages are appended
+        await client.query(
+          `UPDATE conversations SET updated_at = now() WHERE id = $1`,
+          [conversationId],
+        );
+      }
+
+      await client.query("COMMIT");
+
+      return (await this.getById(conversationId))!;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

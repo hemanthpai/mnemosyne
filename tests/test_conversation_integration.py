@@ -15,12 +15,13 @@ class TestConversationStore:
     @pytest.mark.asyncio
     async def test_store_conversation(self, backend_client):
         title = unique("conv")
+        source_id = unique("src")
         resp = await backend_client.post(
             "/api/conversations",
             json={
+                "sourceId": source_id,
                 "title": title,
                 "source": "test",
-                "sourceId": "src-1",
                 "tags": ["integration"],
                 "messages": [
                     {"role": "user", "content": "Hello, how are you?"},
@@ -28,11 +29,11 @@ class TestConversationStore:
                 ],
             },
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 200
         body = resp.json()
         assert body["title"] == title
         assert body["source"] == "test"
-        assert body["sourceId"] == "src-1"
+        assert body["sourceId"] == source_id
         assert body["tags"] == ["integration"]
         assert "id" in body
         assert len(body["messages"]) == 2
@@ -42,10 +43,11 @@ class TestConversationStore:
         assert body["messages"][1]["position"] == 1
 
     @pytest.mark.asyncio
-    async def test_store_validation_missing_title(self, backend_client):
+    async def test_store_validation_missing_source_id(self, backend_client):
         resp = await backend_client.post(
             "/api/conversations",
             json={
+                "title": "No source id",
                 "messages": [{"role": "user", "content": "Hello"}],
             },
         )
@@ -55,7 +57,7 @@ class TestConversationStore:
     async def test_store_validation_empty_messages(self, backend_client):
         resp = await backend_client.post(
             "/api/conversations",
-            json={"title": "Test", "messages": []},
+            json={"sourceId": unique("src"), "messages": []},
         )
         assert resp.status_code == 400
 
@@ -64,20 +66,133 @@ class TestConversationStore:
         resp = await backend_client.post(
             "/api/conversations",
             json={
-                "title": "Test",
+                "sourceId": unique("src"),
                 "messages": [{"role": "user"}],
             },
         )
         assert resp.status_code == 400
 
 
+class TestConversationUpsert:
+    @pytest.mark.asyncio
+    async def test_create_via_upsert(self, backend_client):
+        source_id = unique("upsert-create")
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "title": "Created via upsert",
+                "messages": [
+                    {"role": "user", "content": "First message"},
+                    {"role": "assistant", "content": "First response"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["sourceId"] == source_id
+        assert body["title"] == "Created via upsert"
+        assert len(body["messages"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_append_messages(self, backend_client):
+        source_id = unique("upsert-append")
+
+        # Create
+        resp1 = await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "title": "Append test",
+                "messages": [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi there!"},
+                ],
+            },
+        )
+        assert resp1.status_code == 200
+        conv_id = resp1.json()["id"]
+
+        # Append
+        resp2 = await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "messages": [
+                    {"role": "user", "content": "Follow up question"},
+                    {"role": "assistant", "content": "Follow up answer"},
+                ],
+            },
+        )
+        assert resp2.status_code == 200
+        body = resp2.json()
+        assert body["id"] == conv_id
+        assert len(body["messages"]) == 4
+        assert body["messages"][2]["position"] == 2
+        assert body["messages"][2]["content"] == "Follow up question"
+        assert body["messages"][3]["position"] == 3
+
+    @pytest.mark.asyncio
+    async def test_update_metadata(self, backend_client):
+        source_id = unique("upsert-meta")
+
+        # Create with initial metadata
+        await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "title": "Original title",
+                "tags": ["original"],
+            },
+        )
+
+        # Update metadata
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "title": "Updated title",
+                "tags": ["updated", "new-tag"],
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["title"] == "Updated title"
+        assert body["tags"] == ["updated", "new-tag"]
+
+    @pytest.mark.asyncio
+    async def test_source_id_required(self, backend_client):
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={
+                "title": "Missing source id",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_minimal_source_id_only(self, backend_client):
+        source_id = unique("upsert-minimal")
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={"sourceId": source_id},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["sourceId"] == source_id
+        assert body["title"] == ""
+
+
 class TestConversationGetById:
     @pytest.mark.asyncio
     async def test_get_by_id(self, backend_client):
         title = unique("getbyid")
+        source_id = unique("src")
         store_resp = await backend_client.post(
             "/api/conversations",
             json={
+                "sourceId": source_id,
                 "title": title,
                 "messages": [
                     {"role": "user", "content": "Question"},
@@ -106,9 +221,11 @@ class TestConversationSearch:
     @pytest.mark.asyncio
     async def test_text_search_by_message_content(self, backend_client):
         marker = unique("textsearch")
+        source_id = unique("src")
         await backend_client.post(
             "/api/conversations",
             json={
+                "sourceId": source_id,
                 "title": "Chat about markers",
                 "messages": [
                     {
@@ -131,9 +248,11 @@ class TestConversationSearch:
     @pytest.mark.asyncio
     async def test_text_search_by_title(self, backend_client):
         title = unique("titlesearch")
+        source_id = unique("src")
         await backend_client.post(
             "/api/conversations",
             json={
+                "sourceId": source_id,
                 "title": title,
                 "messages": [
                     {
@@ -158,6 +277,7 @@ class TestConversationSearch:
         await backend_client.post(
             "/api/conversations",
             json={
+                "sourceId": unique("src"),
                 "title": title,
                 "tags": [tag],
                 "messages": [{"role": "user", "content": "Tagged content"}],
@@ -166,6 +286,7 @@ class TestConversationSearch:
         await backend_client.post(
             "/api/conversations",
             json={
+                "sourceId": unique("src"),
                 "title": unique("other"),
                 "tags": ["unrelated"],
                 "messages": [{"role": "user", "content": "Other content"}],
@@ -189,6 +310,7 @@ class TestConversationSearch:
             await backend_client.post(
                 "/api/conversations",
                 json={
+                    "sourceId": unique(f"limit-{i}"),
                     "title": unique(f"limit-{i}"),
                     "messages": [{"role": "user", "content": f"Content {i}"}],
                 },

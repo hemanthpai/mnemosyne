@@ -22,13 +22,14 @@ beforeEach(() => {
   conversationService = new ConversationService(convRepo, embedding);
 });
 
-describe("POST /api/conversations", () => {
-  it("stores a conversation and returns 201", async () => {
+describe("POST /api/conversations (upsert)", () => {
+  it("creates a conversation and returns 200", async () => {
     const app = createApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/conversations",
       payload: {
+        sourceId: "src-1",
         title: "Test conversation",
         source: "test",
         tags: ["test"],
@@ -38,11 +39,12 @@ describe("POST /api/conversations", () => {
         ],
       },
     });
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.id).toBeDefined();
     expect(body.title).toBe("Test conversation");
     expect(body.source).toBe("test");
+    expect(body.sourceId).toBe("src-1");
     expect(body.tags).toEqual(["test"]);
     expect(body.messages).toHaveLength(2);
     expect(body.messages[0].role).toBe("user");
@@ -50,45 +52,112 @@ describe("POST /api/conversations", () => {
     expect(body.messages[1].role).toBe("assistant");
   });
 
-  it("returns 400 when title is missing", async () => {
+  it("appends messages on second call with same sourceId", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-append",
+        title: "Append test",
+        messages: [
+          { role: "user", content: "First message" },
+          { role: "assistant", content: "First response" },
+        ],
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-append",
+        messages: [
+          { role: "user", content: "Second message" },
+          { role: "assistant", content: "Second response" },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.messages).toHaveLength(4);
+    expect(body.messages[0].position).toBe(0);
+    expect(body.messages[1].position).toBe(1);
+    expect(body.messages[2].position).toBe(2);
+    expect(body.messages[2].content).toBe("Second message");
+    expect(body.messages[3].position).toBe(3);
+  });
+
+  it("updates metadata on upsert", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-meta",
+        title: "Original title",
+        tags: ["original"],
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-meta",
+        title: "Updated title",
+        tags: ["updated"],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.title).toBe("Updated title");
+    expect(body.tags).toEqual(["updated"]);
+  });
+
+  it("works with only sourceId (minimal upsert)", async () => {
     const app = createApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/conversations",
       payload: {
-        messages: [{ role: "user", content: "Hello" }],
+        sourceId: "src-minimal",
       },
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe(
-      "title is required and must be a non-empty string",
-    );
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.id).toBeDefined();
+    expect(body.sourceId).toBe("src-minimal");
+    expect(body.title).toBe("");
+    expect(body.tags).toEqual([]);
   });
 
-  it("returns 400 when title is empty string", async () => {
+  it("returns 400 when sourceId is missing", async () => {
     const app = createApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/conversations",
       payload: {
-        title: "   ",
+        title: "No source id",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
     expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe(
+      "sourceId is required and must be a non-empty string",
+    );
   });
 
-  it("returns 400 when messages is missing", async () => {
+  it("returns 400 when sourceId is empty string", async () => {
     const app = createApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/conversations",
-      payload: { title: "Test" },
+      payload: {
+        sourceId: "   ",
+      },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe(
-      "messages is required and must be a non-empty array",
-    );
   });
 
   it("returns 400 when messages is empty array", async () => {
@@ -96,9 +165,12 @@ describe("POST /api/conversations", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/conversations",
-      payload: { title: "Test", messages: [] },
+      payload: { sourceId: "src-empty-msgs", messages: [] },
     });
     expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe(
+      "messages must be a non-empty array when provided",
+    );
   });
 
   it("returns 400 when message has no role", async () => {
@@ -107,7 +179,7 @@ describe("POST /api/conversations", () => {
       method: "POST",
       url: "/api/conversations",
       payload: {
-        title: "Test",
+        sourceId: "src-bad-msg",
         messages: [{ content: "Hello" }],
       },
     });
@@ -123,24 +195,24 @@ describe("POST /api/conversations", () => {
       method: "POST",
       url: "/api/conversations",
       payload: {
-        title: "Test",
+        sourceId: "src-bad-msg-2",
         messages: [{ role: "user" }],
       },
     });
     expect(res.statusCode).toBe(400);
   });
 
-  it("defaults source to empty and tags to empty array", async () => {
+  it("defaults source to empty and tags to empty array on create", async () => {
     const app = createApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/conversations",
       payload: {
-        title: "Minimal",
+        sourceId: "src-defaults",
         messages: [{ role: "user", content: "Hi" }],
       },
     });
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.source).toBe("");
     expect(body.tags).toEqual([]);
@@ -164,6 +236,7 @@ describe("GET /api/conversations", () => {
       method: "POST",
       url: "/api/conversations",
       payload: {
+        sourceId: "src-ts",
         title: "TypeScript discussion",
         messages: [
           { role: "user", content: "Tell me about TypeScript generics" },
@@ -188,6 +261,7 @@ describe("GET /api/conversations", () => {
       method: "POST",
       url: "/api/conversations",
       payload: {
+        sourceId: "src-work",
         title: "Work chat",
         tags: ["work"],
         messages: [{ role: "user", content: "Project update" }],
@@ -197,6 +271,7 @@ describe("GET /api/conversations", () => {
       method: "POST",
       url: "/api/conversations",
       payload: {
+        sourceId: "src-personal",
         title: "Personal chat",
         tags: ["personal"],
         messages: [{ role: "user", content: "Weekend plans" }],
@@ -219,6 +294,7 @@ describe("GET /api/conversations", () => {
         method: "POST",
         url: "/api/conversations",
         payload: {
+          sourceId: `src-limit-${i}`,
           title: `Conv ${i}`,
           messages: [{ role: "user", content: `Message ${i}` }],
         },
@@ -242,6 +318,7 @@ describe("GET /api/conversations/:id", () => {
       method: "POST",
       url: "/api/conversations",
       payload: {
+        sourceId: "src-findable",
         title: "Findable",
         messages: [
           { role: "user", content: "Question" },

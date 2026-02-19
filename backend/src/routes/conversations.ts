@@ -10,42 +10,45 @@ export function conversationRoutes(service: ConversationService) {
     app.post<{ Body: StoreConversationRequest }>(
       "/api/conversations",
       async (request, reply) => {
-        const { title, source, sourceId, tags, messages } =
+        const { sourceId, title, source, tags, messages } =
           request.body ?? {};
 
-        if (!title || typeof title !== "string" || title.trim() === "") {
+        if (!sourceId || typeof sourceId !== "string" || sourceId.trim() === "") {
           return reply.status(400).send({
-            error: "title is required and must be a non-empty string",
+            error: "sourceId is required and must be a non-empty string",
           });
         }
 
-        if (!Array.isArray(messages) || messages.length === 0) {
-          return reply.status(400).send({
-            error: "messages is required and must be a non-empty array",
-          });
-        }
-
-        for (const msg of messages) {
-          if (
-            !msg.role ||
-            typeof msg.role !== "string" ||
-            !msg.content ||
-            typeof msg.content !== "string"
-          ) {
+        if (messages !== undefined) {
+          if (!Array.isArray(messages) || messages.length === 0) {
             return reply.status(400).send({
-              error:
-                "each message must have a non-empty role and content string",
+              error: "messages must be a non-empty array when provided",
             });
+          }
+
+          for (const msg of messages) {
+            if (
+              !msg.role ||
+              typeof msg.role !== "string" ||
+              !msg.content ||
+              typeof msg.content !== "string"
+            ) {
+              return reply.status(400).send({
+                error:
+                  "each message must have a non-empty role and content string",
+              });
+            }
           }
         }
 
-        const conversation = await service.store(title.trim(), messages, {
-          source: source ?? "",
-          sourceId: sourceId,
-          tags: Array.isArray(tags) ? tags : [],
+        const conversation = await service.upsert(sourceId.trim(), {
+          title: title?.trim(),
+          source,
+          tags: Array.isArray(tags) ? tags : undefined,
+          messages,
         });
 
-        return reply.status(201).send(conversation);
+        return reply.status(200).send(conversation);
       },
     );
 

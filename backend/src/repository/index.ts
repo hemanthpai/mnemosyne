@@ -5,6 +5,7 @@ export { PostgresRepository } from "./postgres.js";
 export type {
   ConversationRepository,
   StoreConversationParams,
+  UpsertConversationParams,
   SearchConversationParams,
 } from "./conversation-types.js";
 export { InMemoryConversationRepository } from "./conversation-memory.js";

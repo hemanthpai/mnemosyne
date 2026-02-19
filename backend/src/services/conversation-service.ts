@@ -40,6 +40,42 @@ export class ConversationService {
     });
   }
 
+  async upsert(
+    sourceId: string,
+    options: {
+      title?: string;
+      source?: string;
+      tags?: string[];
+      messages?: { role: string; content: string }[];
+    } = {},
+  ): Promise<Conversation> {
+    let embeddedMessages:
+      | { role: string; content: string; embedding: number[] | null }[]
+      | undefined;
+
+    if (options.messages && options.messages.length > 0) {
+      embeddedMessages = await Promise.all(
+        options.messages.map(async (msg) => {
+          let embedding: number[] | null = null;
+
+          if (msg.role === "user" && msg.content.length >= MIN_EMBED_LENGTH) {
+            embedding = await this.embedding.embed(msg.content);
+          }
+
+          return { role: msg.role, content: msg.content, embedding };
+        }),
+      );
+    }
+
+    return this.repository.upsert({
+      sourceId,
+      title: options.title,
+      source: options.source,
+      tags: options.tags,
+      messages: embeddedMessages,
+    });
+  }
+
   async search(
     query?: string,
     tags?: string[],

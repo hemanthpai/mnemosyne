@@ -6,10 +6,13 @@ import type {
   UpsertConversationParams,
   SearchConversationParams,
 } from "./conversation-types.js";
+import { kMeans } from "../utils/kmeans.js";
 
 export class InMemoryConversationRepository implements ConversationRepository {
   private conversations: Conversation[] = [];
   private messages: ConversationMessage[] = [];
+  private embeddings: Map<string, number[]> = new Map();
+  private centroidsMap: Map<string, number[][]> = new Map();
 
   async initialize(): Promise<void> {}
 
@@ -38,8 +41,17 @@ export class InMemoryConversationRepository implements ConversationRepository {
       }),
     );
 
+    // Track embeddings
+    for (let i = 0; i < params.messages.length; i++) {
+      if (params.messages[i].embedding && params.messages[i].embedding!.length > 0) {
+        this.embeddings.set(storedMessages[i].id, params.messages[i].embedding!);
+      }
+    }
+
     this.conversations.push(conversation);
     this.messages.push(...storedMessages);
+    this.computeAvgEmbedding(conversationId);
+    this.computeCentroids(conversationId);
 
     return { ...conversation, messages: storedMessages };
   }
@@ -93,9 +105,19 @@ export class InMemoryConversationRepository implements ConversationRepository {
           createdAt: now,
         }),
       );
+
+      // Track embeddings
+      for (let i = 0; i < params.messages.length; i++) {
+        if (params.messages[i].embedding && params.messages[i].embedding!.length > 0) {
+          this.embeddings.set(newMessages[i].id, params.messages[i].embedding!);
+        }
+      }
+
       this.messages.push(...newMessages);
     }
 
+    this.computeAvgEmbedding(conversation.id);
+    this.computeCentroids(conversation.id);
     return (await this.getById(conversation.id))!;
   }
 
@@ -125,12 +147,23 @@ export class InMemoryConversationRepository implements ConversationRepository {
     }
 
     const limit = params.limit ?? 10;
-    return result.slice(0, limit).map((c) => ({
-      ...c,
-      messages: this.messages
-        .filter((m) => m.conversationId === c.id)
-        .sort((a, b) => a.position - b.position),
-    }));
+    const includeAvg = params.include?.includes("avg_embedding") ?? false;
+    const includeCentroids = params.include?.includes("centroids") ?? false;
+    return result.slice(0, limit).map((c) => {
+      const conv: Conversation = {
+        ...c,
+        messages: this.messages
+          .filter((m) => m.conversationId === c.id)
+          .sort((a, b) => a.position - b.position),
+      };
+      if (!includeAvg) {
+        delete conv.avgEmbedding;
+      }
+      if (includeCentroids) {
+        conv.centroids = this.centroidsMap.get(c.id) ?? null;
+      }
+      return conv;
+    });
   }
 
   async getById(id: string): Promise<Conversation | null> {
@@ -153,5 +186,59 @@ export class InMemoryConversationRepository implements ConversationRepository {
   clear(): void {
     this.conversations = [];
     this.messages = [];
+    this.embeddings.clear();
+    this.centroidsMap.clear();
+  }
+
+  private computeAvgEmbedding(conversationId: string): void {
+    const msgIds = this.messages
+      .filter((m) => m.conversationId === conversationId)
+      .map((m) => m.id);
+
+    const vectors: number[][] = [];
+    for (const msgId of msgIds) {
+      const emb = this.embeddings.get(msgId);
+      if (emb) vectors.push(emb);
+    }
+
+    const conversation = this.conversations.find((c) => c.id === conversationId);
+    if (!conversation) return;
+
+    if (vectors.length === 0) {
+      conversation.avgEmbedding = null;
+      return;
+    }
+
+    const dim = vectors[0].length;
+    const avg = new Array(dim).fill(0);
+    for (const vec of vectors) {
+      for (let i = 0; i < dim; i++) {
+        avg[i] += vec[i];
+      }
+    }
+    for (let i = 0; i < dim; i++) {
+      avg[i] /= vectors.length;
+    }
+    conversation.avgEmbedding = avg;
+  }
+
+  private computeCentroids(conversationId: string): void {
+    const msgIds = this.messages
+      .filter((m) => m.conversationId === conversationId)
+      .map((m) => m.id);
+
+    const vectors: number[][] = [];
+    for (const msgId of msgIds) {
+      const emb = this.embeddings.get(msgId);
+      if (emb) vectors.push(emb);
+    }
+
+    if (vectors.length === 0) {
+      this.centroidsMap.delete(conversationId);
+      return;
+    }
+
+    const k = Math.min(3, vectors.length);
+    this.centroidsMap.set(conversationId, kMeans(vectors, k));
   }
 }

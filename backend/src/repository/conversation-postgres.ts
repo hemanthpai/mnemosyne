@@ -6,6 +6,7 @@ import type {
   UpsertConversationParams,
   SearchConversationParams,
 } from "./conversation-types.js";
+import { kMeans } from "../utils/kmeans.js";
 
 const SCHEMA_SQL = `
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -34,6 +35,24 @@ CREATE INDEX IF NOT EXISTS idx_conversations_tags ON conversations USING GIN (ta
 DROP INDEX IF EXISTS idx_conversations_source_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_source_id_unique ON conversations (source_id) WHERE source_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_conv_messages_conversation_id ON conversation_messages (conversation_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'conversations' AND column_name = 'avg_embedding'
+  ) THEN
+    ALTER TABLE conversations ADD COLUMN avg_embedding vector(4096);
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS conversation_centroids (
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,
+  embedding vector(4096) NOT NULL,
+  PRIMARY KEY (conversation_id, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_centroids_conv_id ON conversation_centroids(conversation_id);
 `;
 
 export class ConversationPostgresRepository implements ConversationRepository {
@@ -45,6 +64,116 @@ export class ConversationPostgresRepository implements ConversationRepository {
 
   async initialize(): Promise<void> {
     await this.pool.query(SCHEMA_SQL);
+    await this.backfillAvgEmbeddings();
+    await this.backfillCentroids();
+  }
+
+  private async backfillAvgEmbeddings(): Promise<void> {
+    const result = await this.pool.query(
+      `SELECT DISTINCT c.id
+       FROM conversations c
+       JOIN conversation_messages cm ON cm.conversation_id = c.id
+       WHERE c.avg_embedding IS NULL AND cm.embedding IS NOT NULL`,
+    );
+    for (const row of result.rows) {
+      const client = await this.pool.connect();
+      try {
+        await this.recomputeAvgEmbedding(client, row.id as string);
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  private async recomputeAvgEmbedding(
+    client: pg.PoolClient,
+    conversationId: string,
+  ): Promise<void> {
+    const result = await client.query(
+      `SELECT embedding::text FROM conversation_messages
+       WHERE conversation_id = $1 AND embedding IS NOT NULL`,
+      [conversationId],
+    );
+
+    if (result.rows.length === 0) {
+      await client.query(
+        `UPDATE conversations SET avg_embedding = NULL WHERE id = $1`,
+        [conversationId],
+      );
+      return;
+    }
+
+    const vectors = result.rows.map((r) => JSON.parse(r.embedding as string) as number[]);
+    const dim = vectors[0].length;
+    const avg = new Array(dim).fill(0);
+    for (const vec of vectors) {
+      for (let i = 0; i < dim; i++) {
+        avg[i] += vec[i];
+      }
+    }
+    for (let i = 0; i < dim; i++) {
+      avg[i] /= vectors.length;
+    }
+
+    await client.query(
+      `UPDATE conversations SET avg_embedding = $1::vector WHERE id = $2`,
+      [JSON.stringify(avg), conversationId],
+    );
+  }
+
+  private async recomputeCentroids(
+    client: pg.PoolClient,
+    conversationId: string,
+  ): Promise<void> {
+    const result = await client.query(
+      `SELECT embedding::text FROM conversation_messages
+       WHERE conversation_id = $1 AND embedding IS NOT NULL`,
+      [conversationId],
+    );
+
+    // Delete existing centroids
+    await client.query(
+      `DELETE FROM conversation_centroids WHERE conversation_id = $1`,
+      [conversationId],
+    );
+
+    if (result.rows.length === 0) return;
+
+    const vectors = result.rows.map(
+      (r) => JSON.parse(r.embedding as string) as number[],
+    );
+    const k = Math.min(3, vectors.length);
+    const centroids = kMeans(vectors, k);
+
+    for (let i = 0; i < centroids.length; i++) {
+      await client.query(
+        `INSERT INTO conversation_centroids (conversation_id, idx, embedding)
+         VALUES ($1, $2, $3::vector)`,
+        [conversationId, i, JSON.stringify(centroids[i])],
+      );
+    }
+  }
+
+  private async backfillCentroids(): Promise<void> {
+    const result = await this.pool.query(
+      `SELECT DISTINCT c.id
+       FROM conversations c
+       JOIN conversation_messages cm ON cm.conversation_id = c.id
+       WHERE cm.embedding IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_centroids cc WHERE cc.conversation_id = c.id
+         )`,
+    );
+    if (result.rows.length === 0) return;
+
+    const client = await this.pool.connect();
+    try {
+      for (const row of result.rows) {
+        await this.recomputeCentroids(client, row.id as string);
+      }
+    } finally {
+      client.release();
+    }
   }
 
   async store(params: StoreConversationParams): Promise<Conversation> {
@@ -83,6 +212,8 @@ export class ConversationPostgresRepository implements ConversationRepository {
         messages.push(this.rowToMessage(msgResult.rows[0]));
       }
 
+      await this.recomputeAvgEmbedding(client, conv.id as string);
+      await this.recomputeCentroids(client, conv.id as string);
       await client.query("COMMIT");
 
       return {
@@ -202,6 +333,8 @@ export class ConversationPostgresRepository implements ConversationRepository {
         );
       }
 
+      await this.recomputeAvgEmbedding(client, conversationId);
+      await this.recomputeCentroids(client, conversationId);
       await client.query("COMMIT");
 
       return (await this.getById(conversationId))!;
@@ -221,6 +354,14 @@ export class ConversationPostgresRepository implements ConversationRepository {
     }
 
     return this.textSearch(params, limit);
+  }
+
+  private shouldIncludeAvgEmbedding(include?: string[]): boolean {
+    return include?.includes("avg_embedding") ?? false;
+  }
+
+  private shouldIncludeCentroids(include?: string[]): boolean {
+    return include?.includes("centroids") ?? false;
   }
 
   private async vectorSearch(
@@ -265,7 +406,7 @@ export class ConversationPostgresRepository implements ConversationRepository {
       ]),
     );
 
-    const conversations = await this.fetchConversationsByIds(ids);
+    const conversations = await this.fetchConversationsByIds(ids, params.include);
 
     return conversations
       .map((c) => ({ ...c, score: scoreMap.get(c.id) }))
@@ -314,7 +455,7 @@ export class ConversationPostgresRepository implements ConversationRepository {
     if (result.rows.length === 0) return [];
 
     const ids = result.rows.map((r) => r.id);
-    return this.fetchConversationsByIds(ids);
+    return this.fetchConversationsByIds(ids, params.include);
   }
 
   async getById(id: string): Promise<Conversation | null> {
@@ -340,13 +481,19 @@ export class ConversationPostgresRepository implements ConversationRepository {
     };
   }
 
-  private async fetchConversationsByIds(ids: string[]): Promise<Conversation[]> {
+  private async fetchConversationsByIds(
+    ids: string[],
+    include?: string[],
+  ): Promise<Conversation[]> {
     if (ids.length === 0) return [];
 
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+    const extraCols = this.shouldIncludeAvgEmbedding(include)
+      ? ", avg_embedding"
+      : "";
 
     const convResult = await this.pool.query(
-      `SELECT id, title, source, source_id, tags, created_at, updated_at
+      `SELECT id, title, source, source_id, tags, created_at, updated_at${extraCols}
        FROM conversations WHERE id IN (${placeholders})`,
       ids,
     );
@@ -367,10 +514,36 @@ export class ConversationPostgresRepository implements ConversationRepository {
       msgsByConv.set(msg.conversationId, existing);
     }
 
-    return convResult.rows.map((row) => ({
-      ...this.rowToConversation(row),
-      messages: msgsByConv.get(row.id as string) ?? [],
-    }));
+    // Optionally fetch centroids
+    let centroidsByConv: Map<string, number[][]> | null = null;
+    if (this.shouldIncludeCentroids(include)) {
+      const centroidResult = await this.pool.query(
+        `SELECT conversation_id, idx, embedding::text
+         FROM conversation_centroids
+         WHERE conversation_id IN (${placeholders})
+         ORDER BY conversation_id, idx`,
+        ids,
+      );
+      centroidsByConv = new Map();
+      for (const row of centroidResult.rows) {
+        const convId = row.conversation_id as string;
+        const embedding = JSON.parse(row.embedding as string) as number[];
+        const existing = centroidsByConv.get(convId) ?? [];
+        existing.push(embedding);
+        centroidsByConv.set(convId, existing);
+      }
+    }
+
+    return convResult.rows.map((row) => {
+      const conv: Conversation = {
+        ...this.rowToConversation(row),
+        messages: msgsByConv.get(row.id as string) ?? [],
+      };
+      if (centroidsByConv) {
+        conv.centroids = centroidsByConv.get(row.id as string) ?? null;
+      }
+      return conv;
+    });
   }
 
   async healthCheck(): Promise<boolean> {
@@ -398,6 +571,9 @@ export class ConversationPostgresRepository implements ConversationRepository {
     };
     if (row.score != null) {
       conv.score = parseFloat(row.score as string);
+    }
+    if (row.avg_embedding != null) {
+      conv.avgEmbedding = JSON.parse(row.avg_embedding as string) as number[];
     }
     return conv;
   }

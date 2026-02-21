@@ -1,0 +1,290 @@
+{
+  "name": "Mnemosyne — Memory Recall",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "mnemosyne-recall",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000001",
+      "name": "Recall Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "mnemosyne-recall"
+    },
+    {
+      "parameters": {
+        "jsCode": "const userMessage = $json.body.message;\n\nreturn [{\n  json: {\n    model: 'nousresearch/hermes-4-70b',\n    messages: [\n      {\n        role: 'system',\n        content: 'Your job is to generate 2-3 diverse search queries to find relevant past conversations to help another AI Assistant agent respond to the user message specified. Each query should target a different aspect: key topics, entities, or related concepts. Specifically, you should seek to find out what has the user shared or asked about the relevant topics, entities, or related concepts. Return a JSON object with a \"queries\" array of strings.'\n      },\n      {\n        role: 'user',\n        content: userMessage\n      }\n    ],\n    response_format: {\n      type: 'json_schema',\n      json_schema: {\n        name: 'search_queries',\n        strict: true,\n        schema: {\n          type: 'object',\n          properties: {\n            queries: {\n              type: 'array',\n              items: { type: 'string' }\n            }\n          },\n          required: ['queries'],\n          additionalProperties: false\n        }\n      }\n    },\n    temperature: 0.7,\n    stream: false\n  }\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Prepare Query Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://minion.coho-mahi.ts.net:4000/v1/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000003",
+      "name": "Generate Queries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const userMessage = $('Recall Webhook').first().json.body.message;\n\n// Store userMessage in static data for extraction phase\nconst staticData = $getWorkflowStaticData('global');\nstaticData.userMessage = userMessage;\nstaticData.extractions = [];\n\nlet queries;\ntry {\n  const content = $input.first().json.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  queries = parsed.queries || [userMessage];\n} catch (e) {\n  queries = [userMessage];\n}\n\n// Output one item per query for the HTTP Request node\nreturn queries.map(q => ({ json: { query: q } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000004",
+      "name": "Parse Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3100/api/conversations",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "limit",
+              "value": "10"
+            },
+            {
+              "name": "include",
+              "value": "avg_embedding,centroids"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000015",
+      "name": "Search Mnemosyne",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_CONVERSATIONS = 5;\nconst LAMBDA = 0.5;\n\nfunction cosineSim(a, b) {\n  if (!a || !b || a.length !== b.length) return 0;\n  let dot = 0, magA = 0, magB = 0;\n  for (let i = 0; i < a.length; i++) {\n    dot += a[i] * b[i];\n    magA += a[i] * a[i];\n    magB += b[i] * b[i];\n  }\n  const denom = Math.sqrt(magA) * Math.sqrt(magB);\n  return denom === 0 ? 0 : dot / denom;\n}\n\nfunction euclideanDistSq(a, b) {\n  let sum = 0;\n  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; sum += d * d; }\n  return sum;\n}\n\nfunction kMeans(vectors, k, maxIter) {\n  maxIter = maxIter || 50;\n  const n = vectors.length;\n  if (n === 0) return [];\n  if (n <= k) return vectors.map(v => v.slice());\n  const dim = vectors[0].length;\n  const centroids = [vectors[0].slice()];\n  const minDist = new Array(n).fill(Infinity);\n  for (let c = 1; c < k; c++) {\n    const last = centroids[c - 1];\n    let fIdx = 0, fDist = 0;\n    for (let i = 0; i < n; i++) {\n      const d = euclideanDistSq(vectors[i], last);\n      if (d < minDist[i]) minDist[i] = d;\n      if (minDist[i] > fDist) { fDist = minDist[i]; fIdx = i; }\n    }\n    centroids.push(vectors[fIdx].slice());\n  }\n  const asgn = new Array(n).fill(0);\n  for (let iter = 0; iter < maxIter; iter++) {\n    let changed = false;\n    for (let i = 0; i < n; i++) {\n      let best = 0, bestD = Infinity;\n      for (let c = 0; c < k; c++) {\n        const d = euclideanDistSq(vectors[i], centroids[c]);\n        if (d < bestD) { bestD = d; best = c; }\n      }\n      if (asgn[i] !== best) { asgn[i] = best; changed = true; }\n    }\n    if (!changed) break;\n    const sums = Array.from({length: k}, () => new Array(dim).fill(0));\n    const counts = new Array(k).fill(0);\n    for (let i = 0; i < n; i++) { counts[asgn[i]]++; for (let d = 0; d < dim; d++) sums[asgn[i]][d] += vectors[i][d]; }\n    for (let c = 0; c < k; c++) { if (counts[c] === 0) continue; for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c]; }\n  }\n  return centroids;\n}\n\nfunction titleWords(title) {\n  return title.toLowerCase().replace(/[^\\w\\s]/g, '').split(/\\s+/)\n    .filter(w => w.length > 2 && !['the','and','for','with','that','this','from','new','chat'].includes(w));\n}\nfunction jaccard(a, b) {\n  if (a.length === 0 && b.length === 0) return 0;\n  const setA = new Set(a), setB = new Set(b);\n  let inter = 0;\n  for (const w of setA) { if (setB.has(w)) inter++; }\n  const union = setA.size + setB.size - inter;\n  return union === 0 ? 0 : inter / union;\n}\n\n// Max centroid-to-centroid cosine similarity between two conversations\nfunction centroidSimilarity(centA, centB) {\n  if (!centA || !centB || centA.length === 0 || centB.length === 0) return null;\n  let maxSim = -Infinity;\n  for (const a of centA) {\n    for (const b of centB) {\n      const s = cosineSim(a, b);\n      if (s > maxSim) maxSim = s;\n    }\n  }\n  return maxSim;\n}\n\n// Pairwise similarity: prefer centroids, fallback to avgEmbedding, then Jaccard\nfunction similarity(ci, cj) {\n  const cs = centroidSimilarity(ci.centroids, cj.centroids);\n  if (cs !== null) return cs;\n  if (ci.avgEmbedding && cj.avgEmbedding) return cosineSim(ci.avgEmbedding, cj.avgEmbedding);\n  return jaccard(titleWords(ci.title), titleWords(cj.title));\n}\n\n// Collect all candidates, dedup by ID\nconst seenIds = new Set();\nconst candidates = [];\nfor (const item of $input.all()) {\n  for (const conv of (item.json.conversations || [])) {\n    if (!seenIds.has(conv.id)) {\n      seenIds.add(conv.id);\n      candidates.push({\n        id: conv.id,\n        title: conv.title || 'Untitled',\n        score: conv.score ?? 0,\n        tags: conv.tags || [],\n        avgEmbedding: conv.avgEmbedding || null,\n        centroids: conv.centroids || null,\n      });\n    }\n  }\n}\n\nif (candidates.length === 0) {\n  return [{ json: { _noResults: true } }];\n}\n\n// Topic clustering on avgEmbeddings\nconst withEmb = candidates.filter(c => c.avgEmbedding);\nconst topicAssignment = new Map();\nif (withEmb.length > 1) {\n  const K = Math.min(withEmb.length, 2 * MAX_CONVERSATIONS);\n  const vecs = withEmb.map(c => c.avgEmbedding);\n  const centroids = kMeans(vecs, K);\n  for (let i = 0; i < withEmb.length; i++) {\n    let bestC = 0, bestD = Infinity;\n    for (let c = 0; c < centroids.length; c++) {\n      const d = euclideanDistSq(vecs[i], centroids[c]);\n      if (d < bestD) { bestD = d; bestC = c; }\n    }\n    topicAssignment.set(withEmb[i].id, bestC);\n  }\n} else {\n  candidates.forEach((c, i) => topicAssignment.set(c.id, i));\n}\n// Assign topic -1 to candidates without embeddings\nfor (const c of candidates) {\n  if (!topicAssignment.has(c.id)) topicAssignment.set(c.id, -1);\n}\n\n// Normalize scores\nconst maxScore = Math.max(...candidates.map(c => c.score));\nconst minScore = Math.min(...candidates.map(c => c.score));\nconst scoreRange = maxScore - minScore || 1;\nconst normScores = new Map(candidates.map(c => [c.id, (c.score - minScore) / scoreRange]));\n\n// Greedy selection with topic diversity\nconst selected = [];\nconst remaining = new Set(candidates.map(c => c.id));\nconst topicCounts = new Map();\n\nwhile (selected.length < MAX_CONVERSATIONS && remaining.size > 0) {\n  // Find least-represented topic among remaining\n  let minTopicCount = Infinity;\n  for (const id of remaining) {\n    const t = topicAssignment.get(id);\n    const count = topicCounts.get(t) || 0;\n    if (count < minTopicCount) minTopicCount = count;\n  }\n\n  // Candidates from least-represented topics\n  const topicPool = [];\n  for (const id of remaining) {\n    const t = topicAssignment.get(id);\n    if ((topicCounts.get(t) || 0) === minTopicCount) topicPool.push(id);\n  }\n\n  // From topic pool, pick best MMR candidate\n  let bestId = null, bestMMR = -Infinity;\n  for (const id of topicPool) {\n    const cand = candidates.find(c => c.id === id);\n    const relevance = normScores.get(id);\n    let maxSim = 0;\n    for (const sel of selected) {\n      const sim = similarity(cand, sel);\n      if (sim > maxSim) maxSim = sim;\n    }\n    const mmr = LAMBDA * relevance - (1 - LAMBDA) * maxSim;\n    if (mmr > bestMMR) { bestMMR = mmr; bestId = id; }\n  }\n\n  if (bestId !== null) {\n    const cand = candidates.find(c => c.id === bestId);\n    selected.push(cand);\n    remaining.delete(bestId);\n    const t = topicAssignment.get(bestId);\n    topicCounts.set(t, (topicCounts.get(t) || 0) + 1);\n  } else {\n    break;\n  }\n}\n\n// Strip embedding data from output\nreturn selected.map(r => {\n  const { avgEmbedding, centroids, ...rest } = r;\n  return { json: rest };\n});",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000016",
+      "name": "Deduplicate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000005",
+      "name": "Has Results?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1580, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000006",
+      "name": "Loop Conversations",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1800, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:3100/api/conversations/{{ $json.id }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000007",
+      "name": "Fetch Conversation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2020, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst userMessage = staticData.userMessage;\nconst conv = $json;\nconst title = conv.title || 'Untitled';\nconst messages = (conv.messages || [])\n  .map(m => `${m.role}: ${m.content}`)\n  .join('\\n');\n\nreturn [{\n  json: {\n    model: 'openai/Hermes-4.3-36b',\n    messages: [\n      {\n        role: 'system',\n        content: 'You are provided with a past conversation between the user and an AI Assistant. You are also provided with a user query the AI Assistant is tasked with responding to. Your job is to analyze the provided historical conversation and extract any, all, and only information that the AI Assistant will find highly relevant or helpful to answer the user\\'s query. Be concise and specific. If nothing is relevant, respond with exactly NONE. It is VERY IMPORTANT that you thoroughly review your work and ensure you are ONLY extracting information the AI Assistant will find helpful and relevant to the users query. Think out loud why and how the extracted content will help answer the user\\'s query. Don\\'t include your thinking in the final output.'\n      },\n      {\n        role: 'user',\n        content: `User query: ${userMessage}\\n\\nPast conversation \"${title}\":\\n${messages}`\n      }\n    ],\n    temperature: 0.3,\n    stream: false\n  }\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000008",
+      "name": "Prepare Extract Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://minion.coho-mahi.ts.net:4000/v1/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000009",
+      "name": "Extract Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nif (!staticData.extractions) staticData.extractions = [];\n\nconst extraction = $json.choices[0].message.content;\nconst title = $('Fetch Conversation').first().json.title || 'Untitled';\n\nif (extraction && extraction.trim().toUpperCase() !== 'NONE') {\n  staticData.extractions.push({\n    title,\n    content: extraction.trim(),\n  });\n}\n\nreturn [{ json: { _collected: true } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000010",
+      "name": "Collect Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst extractions = staticData.extractions || [];\n\nlet context = '';\nif (extractions.length > 0) {\n  const sections = extractions.map(e => `### From: ${e.title}\\n${e.content}`);\n  context = `## Relevant Context from Past Conversations\\n\\n${sections.join('\\n\\n')}`;\n}\n\ndelete staticData.extractions;\ndelete staticData.userMessage;\n\nreturn [{ json: { context } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000011",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2020, 80]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { context: $json.context } }}"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000012",
+      "name": "Return Context",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2240, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.extractions;\ndelete staticData.userMessage;\n\nreturn [{ json: { context: '' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000013",
+      "name": "No Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 540]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { context: '' } }}"
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000014",
+      "name": "Return Empty",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2020, 540]
+    }
+  ],
+  "connections": {
+    "Recall Webhook": {
+      "main": [[{"node": "Prepare Query Prompt", "type": "main", "index": 0}]]
+    },
+    "Prepare Query Prompt": {
+      "main": [[{"node": "Generate Queries", "type": "main", "index": 0}]]
+    },
+    "Generate Queries": {
+      "main": [[{"node": "Parse Queries", "type": "main", "index": 0}]]
+    },
+    "Parse Queries": {
+      "main": [[{"node": "Search Mnemosyne", "type": "main", "index": 0}]]
+    },
+    "Search Mnemosyne": {
+      "main": [[{"node": "Deduplicate Results", "type": "main", "index": 0}]]
+    },
+    "Deduplicate Results": {
+      "main": [[{"node": "Has Results?", "type": "main", "index": 0}]]
+    },
+    "Has Results?": {
+      "main": [
+        [{"node": "Loop Conversations", "type": "main", "index": 0}],
+        [{"node": "No Context", "type": "main", "index": 0}]
+      ]
+    },
+    "Loop Conversations": {
+      "main": [
+        [{"node": "Build Context", "type": "main", "index": 0}],
+        [{"node": "Fetch Conversation", "type": "main", "index": 0}]
+      ]
+    },
+    "Fetch Conversation": {
+      "main": [[{"node": "Prepare Extract Prompt", "type": "main", "index": 0}]]
+    },
+    "Prepare Extract Prompt": {
+      "main": [[{"node": "Extract Info", "type": "main", "index": 0}]]
+    },
+    "Extract Info": {
+      "main": [[{"node": "Collect Extraction", "type": "main", "index": 0}]]
+    },
+    "Collect Extraction": {
+      "main": [[{"node": "Loop Conversations", "type": "main", "index": 0}]]
+    },
+    "Build Context": {
+      "main": [[{"node": "Return Context", "type": "main", "index": 0}]]
+    },
+    "No Context": {
+      "main": [[{"node": "Return Empty", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

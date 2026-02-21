@@ -1,6 +1,7 @@
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    restart: always
     environment:
       - POSTGRES_USER=mnemosyne
       - POSTGRES_PASSWORD=mnemosyne
@@ -16,6 +17,7 @@ services:
 
   backend:
     build: ./backend
+    restart: always
     ports:
       - "3100:3000"
     environment:
@@ -36,6 +38,7 @@ services:
 
   mcp-server:
     build: ./mcp-server
+    restart: always
     ports:
       - "8180:8080"
     environment:

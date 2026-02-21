@@ -29,6 +29,7 @@ export interface SearchConversationParams {
   tags?: string[];
   queryEmbedding?: number[] | null;
   limit?: number;
+  include?: string[];
 }
 
 export interface ConversationRepository {

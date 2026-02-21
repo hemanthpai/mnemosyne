@@ -55,7 +55,7 @@ export function conversationRoutes(service: ConversationService) {
     app.get<{ Querystring: SearchConversationsQuery }>(
       "/api/conversations",
       async (request) => {
-        const { query, tags, limit } = request.query;
+        const { query, tags, limit, include } = request.query;
 
         const tagList = tags
           ? tags.split(",").map((t) => t.trim().toLowerCase())
@@ -63,10 +63,15 @@ export function conversationRoutes(service: ConversationService) {
 
         const parsedLimit = limit ? parseInt(limit, 10) : undefined;
 
+        const includeList = include
+          ? include.split(",").map((s) => s.trim())
+          : undefined;
+
         const conversations = await service.search(
           query,
           tagList,
           parsedLimit,
+          includeList,
         );
         return { conversations, total: conversations.length };
       },

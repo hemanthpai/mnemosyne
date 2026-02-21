@@ -287,6 +287,94 @@ describe("GET /api/conversations", () => {
     expect(body.conversations[0].title).toBe("Work chat");
   });
 
+  it("accepts include query parameter", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-include",
+        title: "Include test",
+        messages: [{ role: "user", content: "Test message" }],
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/conversations?include=avg_embedding",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.conversations).toBeDefined();
+  });
+
+  it("accepts include=centroids query parameter", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-centroids",
+        title: "Centroids test",
+        messages: [{ role: "user", content: "Test message for centroids" }],
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/conversations?include=centroids",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.conversations).toBeDefined();
+  });
+
+  it("omits centroids when include is not set", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-no-centroids",
+        title: "No centroids test",
+        messages: [{ role: "user", content: "Test message" }],
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/conversations",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    for (const conv of body.conversations) {
+      expect(conv.centroids).toBeUndefined();
+    }
+  });
+
+  it("omits avgEmbedding when include is not set", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-no-include",
+        title: "No include test",
+        messages: [{ role: "user", content: "Test message" }],
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/conversations",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    for (const conv of body.conversations) {
+      expect(conv.avgEmbedding).toBeUndefined();
+    }
+  });
+
   it("respects limit parameter", async () => {
     const app = createApp();
     for (let i = 0; i < 5; i++) {

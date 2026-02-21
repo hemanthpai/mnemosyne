@@ -182,6 +182,7 @@ describe("ConversationService", () => {
         tags: ["tag"],
         queryEmbedding: fakeVector,
         limit: 5,
+        include: undefined,
       });
     });
 
@@ -196,6 +197,7 @@ describe("ConversationService", () => {
         query: "search query",
         tags: ["tag"],
         limit: undefined,
+        include: undefined,
       });
     });
 
@@ -207,7 +209,24 @@ describe("ConversationService", () => {
         query: undefined,
         tags: ["tag"],
         limit: undefined,
+        include: undefined,
       });
+    });
+
+    it("forwards include parameter to repository", async () => {
+      await service.search("test", undefined, undefined, ["avg_embedding"]);
+
+      expect(repo.search).toHaveBeenCalledWith(
+        expect.objectContaining({ include: ["avg_embedding"] }),
+      );
+    });
+
+    it("forwards centroids in include parameter to repository", async () => {
+      await service.search("test", undefined, undefined, ["avg_embedding", "centroids"]);
+
+      expect(repo.search).toHaveBeenCalledWith(
+        expect.objectContaining({ include: ["avg_embedding", "centroids"] }),
+      );
     });
   });
 

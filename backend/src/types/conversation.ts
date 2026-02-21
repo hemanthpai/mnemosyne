@@ -16,6 +16,8 @@ export interface Conversation {
   createdAt: string;
   updatedAt: string;
   score?: number;
+  avgEmbedding?: number[] | null;
+  centroids?: number[][] | null;
   messages?: ConversationMessage[];
 }
 
@@ -31,4 +33,5 @@ export interface SearchConversationsQuery {
   query?: string;
   tags?: string;
   limit?: string;
+  include?: string;
 }

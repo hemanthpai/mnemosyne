@@ -80,6 +80,7 @@ export class ConversationService {
     query?: string,
     tags?: string[],
     limit?: number,
+    include?: string[],
   ): Promise<Conversation[]> {
     let queryEmbedding: number[] | null = null;
 
@@ -88,10 +89,10 @@ export class ConversationService {
     }
 
     if (queryEmbedding) {
-      return this.repository.search({ query, tags, queryEmbedding, limit });
+      return this.repository.search({ query, tags, queryEmbedding, limit, include });
     }
 
-    return this.repository.search({ query, tags, limit });
+    return this.repository.search({ query, tags, limit, include });
   }
 
   async getById(id: string): Promise<Conversation | null> {

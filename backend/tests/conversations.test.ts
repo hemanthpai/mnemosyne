@@ -399,6 +399,135 @@ describe("GET /api/conversations", () => {
   });
 });
 
+describe("User scoping", () => {
+  it("stores and returns userId", async () => {
+    const app = createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-user-a",
+        userId: "user-a",
+        title: "User A's conversation",
+        messages: [{ role: "user", content: "Hello from user A" }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.userId).toBe("user-a");
+  });
+
+  it("filters search results by userId", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-scope-a",
+        userId: "user-a",
+        title: "User A topic",
+        messages: [{ role: "user", content: "Scoping test content" }],
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-scope-b",
+        userId: "user-b",
+        title: "User B topic",
+        messages: [{ role: "user", content: "Scoping test content" }],
+      },
+    });
+
+    const resA = await app.inject({
+      method: "GET",
+      url: "/api/conversations?query=Scoping&userId=user-a",
+    });
+    const bodyA = resA.json();
+    expect(bodyA.total).toBe(1);
+    expect(bodyA.conversations[0].userId).toBe("user-a");
+
+    const resB = await app.inject({
+      method: "GET",
+      url: "/api/conversations?query=Scoping&userId=user-b",
+    });
+    const bodyB = resB.json();
+    expect(bodyB.total).toBe(1);
+    expect(bodyB.conversations[0].userId).toBe("user-b");
+  });
+
+  it("returns all conversations when userId is not provided", async () => {
+    const app = createApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-all-a",
+        userId: "user-a",
+        title: "Backwards compat test",
+        messages: [{ role: "user", content: "compat message" }],
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-all-b",
+        userId: "user-b",
+        title: "Backwards compat test",
+        messages: [{ role: "user", content: "compat message" }],
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/conversations?query=compat",
+    });
+    const body = res.json();
+    expect(body.total).toBe(2);
+  });
+
+  it("upsert sets userId on existing conversation", async () => {
+    const app = createApp();
+    // Create without userId
+    await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-upsert-user",
+        title: "No user initially",
+      },
+    });
+
+    // Upsert with userId
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-upsert-user",
+        userId: "user-c",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().userId).toBe("user-c");
+  });
+
+  it("userId defaults to null when not provided", async () => {
+    const app = createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/conversations",
+      payload: {
+        sourceId: "src-no-user",
+        title: "No user id",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().userId).toBeNull();
+  });
+});
+
 describe("GET /api/conversations/:id", () => {
   it("returns a conversation by ID with messages", async () => {
     const app = createApp();

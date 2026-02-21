@@ -1,0 +1,241 @@
+{
+  "name": "Mnemosyne — Recall Tool",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query",
+              "type": "string"
+            },
+            {
+              "name": "userId",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [260, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000001",
+      "name": "When Called by Another Workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.query;\nlet query, userId;\n\n// Handle both simple string input and full context object from toolWorkflow\nif (typeof raw === 'string') {\n  query = raw;\n  userId = $json.userId || null;\n} else {\n  // toolWorkflow passes full execution context — extract actual values\n  query = raw?.item?.json?.input || raw?.item?.json?.chatInput || '';\n  userId = $json.userId || raw?.item?.json?.userId || null;\n}\n\nconst staticData = $getWorkflowStaticData('global');\nstaticData.userId = userId;\nstaticData.userMessage = query;\nstaticData.extractions = [];\n\n// Pass userId through item data — staticData is unreliable in expression templates\nreturn [{ json: { query, userId } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000010",
+      "name": "Init Static Data"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:3100/api/conversations",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "limit",
+              "value": "10"
+            },
+            {
+              "name": "include",
+              "value": "avg_embedding,centroids"
+            },
+            {
+              "name": "userId",
+              "value": "={{ $json.userId || '' }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000002",
+      "name": "Search Mnemosyne"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_CONVERSATIONS = 5;\nconst LAMBDA = 0.5;\n\nfunction cosineSim(a, b) {\n  if (!a || !b || a.length !== b.length) return 0;\n  let dot = 0, magA = 0, magB = 0;\n  for (let i = 0; i < a.length; i++) {\n    dot += a[i] * b[i];\n    magA += a[i] * a[i];\n    magB += b[i] * b[i];\n  }\n  const denom = Math.sqrt(magA) * Math.sqrt(magB);\n  return denom === 0 ? 0 : dot / denom;\n}\n\nfunction euclideanDistSq(a, b) {\n  let sum = 0;\n  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; sum += d * d; }\n  return sum;\n}\n\nfunction kMeans(vectors, k, maxIter) {\n  maxIter = maxIter || 50;\n  const n = vectors.length;\n  if (n === 0) return [];\n  if (n <= k) return vectors.map(v => v.slice());\n  const dim = vectors[0].length;\n  const centroids = [vectors[0].slice()];\n  const minDist = new Array(n).fill(Infinity);\n  for (let c = 1; c < k; c++) {\n    const last = centroids[c - 1];\n    let fIdx = 0, fDist = 0;\n    for (let i = 0; i < n; i++) {\n      const d = euclideanDistSq(vectors[i], last);\n      if (d < minDist[i]) minDist[i] = d;\n      if (minDist[i] > fDist) { fDist = minDist[i]; fIdx = i; }\n    }\n    centroids.push(vectors[fIdx].slice());\n  }\n  const asgn = new Array(n).fill(0);\n  for (let iter = 0; iter < maxIter; iter++) {\n    let changed = false;\n    for (let i = 0; i < n; i++) {\n      let best = 0, bestD = Infinity;\n      for (let c = 0; c < k; c++) {\n        const d = euclideanDistSq(vectors[i], centroids[c]);\n        if (d < bestD) { bestD = d; best = c; }\n      }\n      if (asgn[i] !== best) { asgn[i] = best; changed = true; }\n    }\n    if (!changed) break;\n    const sums = Array.from({length: k}, () => new Array(dim).fill(0));\n    const counts = new Array(k).fill(0);\n    for (let i = 0; i < n; i++) { counts[asgn[i]]++; for (let d = 0; d < dim; d++) sums[asgn[i]][d] += vectors[i][d]; }\n    for (let c = 0; c < k; c++) { if (counts[c] === 0) continue; for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c]; }\n  }\n  return centroids;\n}\n\nfunction titleWords(title) {\n  return title.toLowerCase().replace(/[^\\w\\s]/g, '').split(/\\s+/)\n    .filter(w => w.length > 2 && !['the','and','for','with','that','this','from','new','chat'].includes(w));\n}\nfunction jaccard(a, b) {\n  if (a.length === 0 && b.length === 0) return 0;\n  const setA = new Set(a), setB = new Set(b);\n  let inter = 0;\n  for (const w of setA) { if (setB.has(w)) inter++; }\n  const union = setA.size + setB.size - inter;\n  return union === 0 ? 0 : inter / union;\n}\n\nfunction centroidSimilarity(centA, centB) {\n  if (!centA || !centB || centA.length === 0 || centB.length === 0) return null;\n  let maxSim = -Infinity;\n  for (const a of centA) {\n    for (const b of centB) {\n      const s = cosineSim(a, b);\n      if (s > maxSim) maxSim = s;\n    }\n  }\n  return maxSim;\n}\n\nfunction similarity(ci, cj) {\n  const cs = centroidSimilarity(ci.centroids, cj.centroids);\n  if (cs !== null) return cs;\n  if (ci.avgEmbedding && cj.avgEmbedding) return cosineSim(ci.avgEmbedding, cj.avgEmbedding);\n  return jaccard(titleWords(ci.title), titleWords(cj.title));\n}\n\nconst seenIds = new Set();\nconst candidates = [];\nfor (const item of $input.all()) {\n  for (const conv of (item.json.conversations || [])) {\n    if (!seenIds.has(conv.id)) {\n      seenIds.add(conv.id);\n      candidates.push({\n        id: conv.id,\n        title: conv.title || 'Untitled',\n        score: conv.score ?? 0,\n        tags: conv.tags || [],\n        avgEmbedding: conv.avgEmbedding || null,\n        centroids: conv.centroids || null,\n      });\n    }\n  }\n}\n\nif (candidates.length === 0) {\n  return [{ json: { _noResults: true } }];\n}\n\nconst withEmb = candidates.filter(c => c.avgEmbedding);\nconst topicAssignment = new Map();\nif (withEmb.length > 1) {\n  const K = Math.min(withEmb.length, 2 * MAX_CONVERSATIONS);\n  const vecs = withEmb.map(c => c.avgEmbedding);\n  const centroids = kMeans(vecs, K);\n  for (let i = 0; i < withEmb.length; i++) {\n    let bestC = 0, bestD = Infinity;\n    for (let c = 0; c < centroids.length; c++) {\n      const d = euclideanDistSq(vecs[i], centroids[c]);\n      if (d < bestD) { bestD = d; bestC = c; }\n    }\n    topicAssignment.set(withEmb[i].id, bestC);\n  }\n} else {\n  candidates.forEach((c, i) => topicAssignment.set(c.id, i));\n}\nfor (const c of candidates) {\n  if (!topicAssignment.has(c.id)) topicAssignment.set(c.id, -1);\n}\n\nconst maxScore = Math.max(...candidates.map(c => c.score));\nconst minScore = Math.min(...candidates.map(c => c.score));\nconst scoreRange = maxScore - minScore || 1;\nconst normScores = new Map(candidates.map(c => [c.id, (c.score - minScore) / scoreRange]));\n\nconst selected = [];\nconst remaining = new Set(candidates.map(c => c.id));\nconst topicCounts = new Map();\n\nwhile (selected.length < MAX_CONVERSATIONS && remaining.size > 0) {\n  let minTopicCount = Infinity;\n  for (const id of remaining) {\n    const t = topicAssignment.get(id);\n    const count = topicCounts.get(t) || 0;\n    if (count < minTopicCount) minTopicCount = count;\n  }\n\n  const topicPool = [];\n  for (const id of remaining) {\n    const t = topicAssignment.get(id);\n    if ((topicCounts.get(t) || 0) === minTopicCount) topicPool.push(id);\n  }\n\n  let bestId = null, bestMMR = -Infinity;\n  for (const id of topicPool) {\n    const cand = candidates.find(c => c.id === id);\n    const relevance = normScores.get(id);\n    let maxSim = 0;\n    for (const sel of selected) {\n      const sim = similarity(cand, sel);\n      if (sim > maxSim) maxSim = sim;\n    }\n    const mmr = LAMBDA * relevance - (1 - LAMBDA) * maxSim;\n    if (mmr > bestMMR) { bestMMR = mmr; bestId = id; }\n  }\n\n  if (bestId !== null) {\n    const cand = candidates.find(c => c.id === bestId);\n    selected.push(cand);\n    remaining.delete(bestId);\n    const t = topicAssignment.get(bestId);\n    topicCounts.set(t, (topicCounts.get(t) || 0) + 1);\n  } else {\n    break;\n  }\n}\n\nreturn selected.map(r => {\n  const { avgEmbedding, centroids, ...rest } = r;\n  return { json: rest };\n});",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000003",
+      "name": "Deduplicate Results"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1140, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000004",
+      "name": "Has Results?"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1360, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000005",
+      "name": "Loop Conversations"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:3100/api/conversations/{{ $json.id }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1580, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000006",
+      "name": "Fetch Conversation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst userMessage = staticData.userMessage;\nconst conv = $json;\nconst title = conv.title || 'Untitled';\nconst messages = (conv.messages || [])\n  .map(m => `${m.role}: ${m.content}`)\n  .join('\\n');\n\nreturn [{\n  json: {\n    model: 'openai/Hermes-4.3-36b',\n    messages: [\n      {\n        role: 'system',\n        content: 'You are provided with a past conversation between the user and an AI Assistant. You are also provided with a user query the AI Assistant is tasked with responding to. Your job is to analyze the provided historical conversation and extract any, all, and only information that the AI Assistant will find highly relevant or helpful to answer the user\\'s query. Be concise and specific. If nothing is relevant, respond with exactly NONE. It is VERY IMPORTANT that you thoroughly review your work and ensure you are ONLY extracting information the AI Assistant will find helpful and relevant to the users query. Think out loud why and how the extracted content will help answer the user\\'s query. Don\\'t include your thinking in the final output.'\n      },\n      {\n        role: 'user',\n        content: `User query: ${userMessage}\\n\\nPast conversation \"${title}\":\\n${messages}`\n      }\n    ],\n    temperature: 0.3,\n    stream: false\n  }\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000007",
+      "name": "Prepare Extract Prompt"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://minion.coho-mahi.ts.net:4000/v1/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2020, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000008",
+      "name": "Extract Info"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nif (!staticData.extractions) staticData.extractions = [];\n\nconst extraction = $json.choices[0].message.content;\nconst title = $('Fetch Conversation').first().json.title || 'Untitled';\n\nif (extraction && extraction.trim().toUpperCase() !== 'NONE') {\n  staticData.extractions.push({\n    title,\n    content: extraction.trim(),\n  });\n}\n\nreturn [{ json: { _collected: true } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2240, 300],
+      "id": "b1c2d3e4-0001-4000-9000-000000000009",
+      "name": "Collect Extraction"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst extractions = staticData.extractions || [];\n\nlet context = '';\nif (extractions.length > 0) {\n  const sections = extractions.map(e => `### From: ${e.title}\\n${e.content}`);\n  context = `## Relevant Context from Past Conversations\\n\\n${sections.join('\\n\\n')}`;\n}\n\ndelete staticData.extractions;\ndelete staticData.userMessage;\ndelete staticData.userId;\n\nreturn [{ json: { response: context || 'No relevant memories found.' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 80],
+      "id": "b1c2d3e4-0001-4000-9000-000000000011",
+      "name": "Build Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.extractions;\ndelete staticData.userMessage;\ndelete staticData.userId;\n\nreturn [{ json: { response: 'No relevant memories found.' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 540],
+      "id": "b1c2d3e4-0001-4000-9000-000000000012",
+      "name": "No Context"
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [[{"node": "Init Static Data", "type": "main", "index": 0}]]
+    },
+    "Init Static Data": {
+      "main": [[{"node": "Search Mnemosyne", "type": "main", "index": 0}]]
+    },
+    "Search Mnemosyne": {
+      "main": [[{"node": "Deduplicate Results", "type": "main", "index": 0}]]
+    },
+    "Deduplicate Results": {
+      "main": [[{"node": "Has Results?", "type": "main", "index": 0}]]
+    },
+    "Has Results?": {
+      "main": [
+        [{"node": "Loop Conversations", "type": "main", "index": 0}],
+        [{"node": "No Context", "type": "main", "index": 0}]
+      ]
+    },
+    "Loop Conversations": {
+      "main": [
+        [{"node": "Build Context", "type": "main", "index": 0}],
+        [{"node": "Fetch Conversation", "type": "main", "index": 0}]
+      ]
+    },
+    "Fetch Conversation": {
+      "main": [[{"node": "Prepare Extract Prompt", "type": "main", "index": 0}]]
+    },
+    "Prepare Extract Prompt": {
+      "main": [[{"node": "Extract Info", "type": "main", "index": 0}]]
+    },
+    "Extract Info": {
+      "main": [[{"node": "Collect Extraction", "type": "main", "index": 0}]]
+    },
+    "Collect Extraction": {
+      "main": [[{"node": "Loop Conversations", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

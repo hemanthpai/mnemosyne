@@ -1,0 +1,73 @@
+{
+  "name": "Mnemosyne — Store Conversation",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "mnemosyne-store",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1a2c3d4-0001-4000-8000-000000000001",
+      "name": "Store Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "mnemosyne-store"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\n\nconst payload = { sourceId: body.source_id || body.sourceId };\n\nif (body.messages) payload.messages = body.messages;\nif (body.title) payload.title = body.title;\nif (body.tags) payload.tags = body.tags;\nif (body.source) payload.source = body.source;\n\nreturn [{ json: payload }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "b1a2c3d4-0001-4000-8000-000000000002",
+      "name": "Prepare Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3100/api/conversations",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "b1a2c3d4-0001-4000-8000-000000000003",
+      "name": "Upsert Conversation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, id: $json.id, messages: ($json.messages || []).length } }}"
+      },
+      "id": "b1a2c3d4-0001-4000-8000-000000000004",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [920, 300]
+    }
+  ],
+  "connections": {
+    "Store Webhook": {
+      "main": [[{"node": "Prepare Body", "type": "main", "index": 0}]]
+    },
+    "Prepare Body": {
+      "main": [[{"node": "Upsert Conversation", "type": "main", "index": 0}]]
+    },
+    "Upsert Conversation": {
+      "main": [[{"node": "Respond OK", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -25,6 +25,7 @@ export class InMemoryConversationRepository implements ConversationRepository {
       title: params.title,
       source: params.source,
       sourceId: params.sourceId,
+      userId: params.userId ?? null,
       tags: params.tags,
       createdAt: now,
       updatedAt: now,
@@ -73,6 +74,7 @@ export class InMemoryConversationRepository implements ConversationRepository {
         title: params.title ?? "",
         source: params.source ?? "",
         sourceId: params.sourceId,
+        userId: params.userId ?? null,
         tags: params.tags ?? [],
         createdAt: now,
         updatedAt: now,
@@ -83,6 +85,7 @@ export class InMemoryConversationRepository implements ConversationRepository {
       if (params.title !== undefined) conversation.title = params.title;
       if (params.source !== undefined) conversation.source = params.source;
       if (params.tags !== undefined) conversation.tags = params.tags;
+      if (params.userId !== undefined) conversation.userId = params.userId;
       conversation.updatedAt = now;
     }
 
@@ -144,6 +147,10 @@ export class InMemoryConversationRepository implements ConversationRepository {
           c.tags.map((t) => t.toLowerCase()).includes(tag.toLowerCase()),
         ),
       );
+    }
+
+    if (params.userId) {
+      result = result.filter((c) => c.userId === params.userId);
     }
 
     const limit = params.limit ?? 10;

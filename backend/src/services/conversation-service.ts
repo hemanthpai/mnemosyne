@@ -17,7 +17,7 @@ export class ConversationService {
   async store(
     title: string,
     messages: { role: string; content: string }[],
-    options: { source?: string; sourceId?: string; tags?: string[] } = {},
+    options: { source?: string; sourceId?: string; tags?: string[]; userId?: string | null } = {},
   ): Promise<Conversation> {
     const embeddedMessages = await Promise.all(
       messages.map(async (msg) => {
@@ -35,6 +35,7 @@ export class ConversationService {
       title,
       source: options.source ?? "",
       sourceId: options.sourceId,
+      userId: options.userId,
       tags: options.tags ?? [],
       messages: embeddedMessages,
     });
@@ -46,6 +47,7 @@ export class ConversationService {
       title?: string;
       source?: string;
       tags?: string[];
+      userId?: string | null;
       messages?: { role: string; content: string }[];
     } = {},
   ): Promise<Conversation> {
@@ -69,6 +71,7 @@ export class ConversationService {
 
     return this.repository.upsert({
       sourceId,
+      userId: options.userId,
       title: options.title,
       source: options.source,
       tags: options.tags,
@@ -81,6 +84,7 @@ export class ConversationService {
     tags?: string[],
     limit?: number,
     include?: string[],
+    userId?: string | null,
   ): Promise<Conversation[]> {
     let queryEmbedding: number[] | null = null;
 
@@ -89,10 +93,10 @@ export class ConversationService {
     }
 
     if (queryEmbedding) {
-      return this.repository.search({ query, tags, queryEmbedding, limit, include });
+      return this.repository.search({ query, tags, userId, queryEmbedding, limit, include });
     }
 
-    return this.repository.search({ query, tags, limit, include });
+    return this.repository.search({ query, tags, userId, limit, include });
   }
 
   async getById(id: string): Promise<Conversation | null> {

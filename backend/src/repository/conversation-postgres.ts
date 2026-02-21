@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS conversation_centroids (
   PRIMARY KEY (conversation_id, idx)
 );
 CREATE INDEX IF NOT EXISTS idx_conv_centroids_conv_id ON conversation_centroids(conversation_id);
+
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
 `;
 
 export class ConversationPostgresRepository implements ConversationRepository {
@@ -182,10 +185,10 @@ export class ConversationPostgresRepository implements ConversationRepository {
       await client.query("BEGIN");
 
       const convResult = await client.query(
-        `INSERT INTO conversations (title, source, source_id, tags)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, title, source, source_id, tags, created_at, updated_at`,
-        [params.title, params.source, params.sourceId ?? null, params.tags],
+        `INSERT INTO conversations (title, source, source_id, tags, user_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, title, source, source_id, user_id, tags, created_at, updated_at`,
+        [params.title, params.source, params.sourceId ?? null, params.tags, params.userId ?? null],
       );
 
       const conv = convResult.rows[0];
@@ -253,14 +256,15 @@ export class ConversationPostgresRepository implements ConversationRepository {
       if (existing.rows.length === 0) {
         // Create new conversation
         const insertResult = await client.query(
-          `INSERT INTO conversations (title, source, source_id, tags)
-           VALUES ($1, $2, $3, $4)
+          `INSERT INTO conversations (title, source, source_id, tags, user_id)
+           VALUES ($1, $2, $3, $4, $5)
            RETURNING id`,
           [
             params.title ?? "",
             params.source ?? "",
             params.sourceId,
             params.tags ?? [],
+            params.userId ?? null,
           ],
         );
         conversationId = insertResult.rows[0].id as string;
@@ -285,6 +289,11 @@ export class ConversationPostgresRepository implements ConversationRepository {
         if (params.tags !== undefined) {
           updates.push(`tags = $${idx}`);
           values.push(params.tags);
+          idx++;
+        }
+        if (params.userId !== undefined) {
+          updates.push(`user_id = $${idx}`);
+          values.push(params.userId);
           idx++;
         }
 
@@ -368,18 +377,26 @@ export class ConversationPostgresRepository implements ConversationRepository {
     params: SearchConversationParams,
     limit: number,
   ): Promise<Conversation[]> {
-    const tagCondition =
-      params.tags && params.tags.length > 0
-        ? `AND c.tags && $3`
-        : "";
-
+    const conditions: string[] = [];
     const values: unknown[] = [
       JSON.stringify(params.queryEmbedding),
       limit,
     ];
+    let nextIdx = 3;
+
     if (params.tags && params.tags.length > 0) {
+      conditions.push(`AND c.tags && $${nextIdx}`);
       values.push(params.tags);
+      nextIdx++;
     }
+
+    if (params.userId) {
+      conditions.push(`AND c.user_id = $${nextIdx}`);
+      values.push(params.userId);
+      nextIdx++;
+    }
+
+    const extraConditions = conditions.join(" ");
 
     const result = await this.pool.query(
       `WITH ranked AS (
@@ -387,7 +404,7 @@ export class ConversationPostgresRepository implements ConversationRepository {
                MIN(cm.embedding <=> $1::vector) AS best_distance
         FROM conversation_messages cm
         JOIN conversations c ON c.id = cm.conversation_id
-        WHERE cm.embedding IS NOT NULL ${tagCondition}
+        WHERE cm.embedding IS NOT NULL ${extraConditions}
         GROUP BY cm.conversation_id
         ORDER BY best_distance ASC
         LIMIT $2
@@ -438,13 +455,19 @@ export class ConversationPostgresRepository implements ConversationRepository {
       idx++;
     }
 
+    if (params.userId) {
+      conditions.push(`c.user_id = $${idx}`);
+      values.push(params.userId);
+      idx++;
+    }
+
     const where =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
     values.push(limit);
 
     const result = await this.pool.query(
-      `SELECT c.id, c.title, c.source, c.source_id, c.tags, c.created_at, c.updated_at
+      `SELECT c.id, c.title, c.source, c.source_id, c.user_id, c.tags, c.created_at, c.updated_at
        FROM conversations c
        ${where}
        ORDER BY c.created_at DESC
@@ -460,7 +483,7 @@ export class ConversationPostgresRepository implements ConversationRepository {
 
   async getById(id: string): Promise<Conversation | null> {
     const convResult = await this.pool.query(
-      `SELECT id, title, source, source_id, tags, created_at, updated_at
+      `SELECT id, title, source, source_id, user_id, tags, created_at, updated_at
        FROM conversations WHERE id = $1`,
       [id],
     );
@@ -493,7 +516,7 @@ export class ConversationPostgresRepository implements ConversationRepository {
       : "";
 
     const convResult = await this.pool.query(
-      `SELECT id, title, source, source_id, tags, created_at, updated_at${extraCols}
+      `SELECT id, title, source, source_id, user_id, tags, created_at, updated_at${extraCols}
        FROM conversations WHERE id IN (${placeholders})`,
       ids,
     );
@@ -565,6 +588,7 @@ export class ConversationPostgresRepository implements ConversationRepository {
       title: row.title as string,
       source: row.source as string,
       sourceId: row.source_id as string | undefined,
+      userId: (row.user_id as string | null) ?? null,
       tags: row.tags as string[],
       createdAt: (row.created_at as Date).toISOString(),
       updatedAt: (row.updated_at as Date).toISOString(),

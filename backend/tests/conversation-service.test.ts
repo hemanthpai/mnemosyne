@@ -116,6 +116,15 @@ describe("ConversationService", () => {
       expect(storeCall.source).toBe("");
       expect(storeCall.tags).toEqual([]);
     });
+
+    it("forwards userId to repository", async () => {
+      await service.store("Test", [{ role: "user", content: "Hello" }], {
+        userId: "user-abc",
+      });
+
+      const storeCall = (repo.store as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(storeCall.userId).toBe("user-abc");
+    });
   });
 
   describe("upsert", () => {
@@ -169,6 +178,16 @@ describe("ConversationService", () => {
       expect(embedding.embed).not.toHaveBeenCalled();
       const upsertCall = (repo.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(upsertCall.messages[0].embedding).toBeNull();
+    });
+
+    it("forwards userId to repository", async () => {
+      await service.upsert("src-user", {
+        userId: "user-xyz",
+        title: "With user",
+      });
+
+      const upsertCall = (repo.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(upsertCall.userId).toBe("user-xyz");
     });
   });
 
@@ -226,6 +245,22 @@ describe("ConversationService", () => {
 
       expect(repo.search).toHaveBeenCalledWith(
         expect.objectContaining({ include: ["avg_embedding", "centroids"] }),
+      );
+    });
+
+    it("forwards userId to repository", async () => {
+      await service.search("test", undefined, undefined, undefined, "user-123");
+
+      expect(repo.search).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "user-123" }),
+      );
+    });
+
+    it("does not include userId when not provided", async () => {
+      await service.search("test");
+
+      expect(repo.search).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: undefined }),
       );
     });
   });

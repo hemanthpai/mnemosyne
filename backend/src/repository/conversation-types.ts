@@ -4,6 +4,7 @@ export interface StoreConversationParams {
   title: string;
   source: string;
   sourceId?: string;
+  userId?: string | null;
   tags: string[];
   messages: {
     role: string;
@@ -14,6 +15,7 @@ export interface StoreConversationParams {
 
 export interface UpsertConversationParams {
   sourceId: string;
+  userId?: string | null;
   title?: string;
   source?: string;
   tags?: string[];
@@ -27,6 +29,7 @@ export interface UpsertConversationParams {
 export interface SearchConversationParams {
   query?: string;
   tags?: string[];
+  userId?: string | null;
   queryEmbedding?: number[] | null;
   limit?: number;
   include?: string[];

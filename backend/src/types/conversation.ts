@@ -12,6 +12,7 @@ export interface Conversation {
   title: string;
   source: string;
   sourceId?: string;
+  userId?: string | null;
   tags: string[];
   createdAt: string;
   updatedAt: string;
@@ -23,6 +24,7 @@ export interface Conversation {
 
 export interface StoreConversationRequest {
   sourceId: string;
+  userId?: string;
   title?: string;
   source?: string;
   tags?: string[];
@@ -34,4 +36,5 @@ export interface SearchConversationsQuery {
   tags?: string;
   limit?: string;
   include?: string;
+  userId?: string;
 }

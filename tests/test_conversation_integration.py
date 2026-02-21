@@ -444,6 +444,148 @@ class TestConversationSearch:
             )
 
 
+class TestUserScoping:
+    @pytest.mark.asyncio
+    async def test_store_with_user_id(self, backend_client):
+        source_id = unique("user-store")
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "userId": "user-alice",
+                "title": "Alice's conversation",
+                "messages": [{"role": "user", "content": "Hello from Alice"}],
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["userId"] == "user-alice"
+
+    @pytest.mark.asyncio
+    async def test_search_filters_by_user_id(self, backend_client):
+        marker = unique("userscope")
+        await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": unique("src-a"),
+                "userId": "user-alice",
+                "title": f"Alice {marker}",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"This is Alice's message about {marker} which is long enough for embedding",
+                    }
+                ],
+            },
+        )
+        await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": unique("src-b"),
+                "userId": "user-bob",
+                "title": f"Bob {marker}",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"This is Bob's message about {marker} which is long enough for embedding",
+                    }
+                ],
+            },
+        )
+
+        # Search as Alice
+        resp_a = await backend_client.get(
+            "/api/conversations",
+            params={"query": marker, "userId": "user-alice"},
+        )
+        data_a = resp_a.json()
+        assert data_a["total"] >= 1
+        for conv in data_a["conversations"]:
+            assert conv["userId"] == "user-alice"
+
+        # Search as Bob
+        resp_b = await backend_client.get(
+            "/api/conversations",
+            params={"query": marker, "userId": "user-bob"},
+        )
+        data_b = resp_b.json()
+        assert data_b["total"] >= 1
+        for conv in data_b["conversations"]:
+            assert conv["userId"] == "user-bob"
+
+    @pytest.mark.asyncio
+    async def test_search_without_user_id_returns_all(self, backend_client):
+        marker = unique("allscope")
+        await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": unique("src-a"),
+                "userId": "user-alice",
+                "title": f"Alice {marker}",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Alice's message about {marker} which is sufficiently long for embedding purposes",
+                    }
+                ],
+            },
+        )
+        await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": unique("src-b"),
+                "userId": "user-bob",
+                "title": f"Bob {marker}",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Bob's message about {marker} which is sufficiently long for embedding purposes",
+                    }
+                ],
+            },
+        )
+
+        # Search without userId returns both
+        resp = await backend_client.get(
+            "/api/conversations",
+            params={"query": marker},
+        )
+        data = resp.json()
+        assert data["total"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_upsert_sets_user_id(self, backend_client):
+        source_id = unique("upsert-user")
+
+        # Create without userId
+        await backend_client.post(
+            "/api/conversations",
+            json={"sourceId": source_id, "title": "No user yet"},
+        )
+
+        # Upsert with userId
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={"sourceId": source_id, "userId": "user-charlie"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["userId"] == "user-charlie"
+
+    @pytest.mark.asyncio
+    async def test_user_id_null_by_default(self, backend_client):
+        source_id = unique("no-user")
+        resp = await backend_client.post(
+            "/api/conversations",
+            json={
+                "sourceId": source_id,
+                "title": "No user id",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["userId"] is None
+
+
 class TestConversationCentroids:
     @pytest.mark.asyncio
     async def test_centroids_returned_with_include(self, backend_client):

@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const userMessage = $json.body.message;\n\nreturn [{\n  json: {\n    model: 'nousresearch/hermes-4-70b',\n    messages: [\n      {\n        role: 'system',\n        content: 'Your job is to generate 2-3 diverse search queries to find relevant past conversations to help another AI Assistant agent respond to the user message specified. Each query should target a different aspect: key topics, entities, or related concepts. Specifically, you should seek to find out what has the user shared or asked about the relevant topics, entities, or related concepts. Return a JSON object with a \"queries\" array of strings.'\n      },\n      {\n        role: 'user',\n        content: userMessage\n      }\n    ],\n    response_format: {\n      type: 'json_schema',\n      json_schema: {\n        name: 'search_queries',\n        strict: true,\n        schema: {\n          type: 'object',\n          properties: {\n            queries: {\n              type: 'array',\n              items: { type: 'string' }\n            }\n          },\n          required: ['queries'],\n          additionalProperties: false\n        }\n      }\n    },\n    temperature: 0.7,\n    stream: false\n  }\n}];",
+        "jsCode": "const userMessage = $json.body.message;\nconst userId = $json.body.userId || null;\n\n// Store userId in static data for search phase\nconst staticData = $getWorkflowStaticData('global');\nstaticData.userId = userId;\n\nreturn [{\n  json: {\n    model: 'nousresearch/hermes-4-70b',\n    messages: [\n      {\n        role: 'system',\n        content: 'Your job is to generate 2-3 diverse search queries to find relevant past conversations to help another AI Assistant agent respond to the user message specified. Each query should target a different aspect: key topics, entities, or related concepts. Specifically, you should seek to find out what has the user shared or asked about the relevant topics, entities, or related concepts. Return a JSON object with a \"queries\" array of strings.'\n      },\n      {\n        role: 'user',\n        content: userMessage\n      }\n    ],\n    response_format: {\n      type: 'json_schema',\n      json_schema: {\n        name: 'search_queries',\n        strict: true,\n        schema: {\n          type: 'object',\n          properties: {\n            queries: {\n              type: 'array',\n              items: { type: 'string' }\n            }\n          },\n          required: ['queries'],\n          additionalProperties: false\n        }\n      }\n    },\n    temperature: 0.7,\n    stream: false\n  }\n}];",
         "mode": "runOnceForAllItems"
       },
       "id": "a1b2c3d4-0002-4000-8000-000000000002",
@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const userMessage = $('Recall Webhook').first().json.body.message;\n\n// Store userMessage in static data for extraction phase\nconst staticData = $getWorkflowStaticData('global');\nstaticData.userMessage = userMessage;\nstaticData.extractions = [];\n\nlet queries;\ntry {\n  const content = $input.first().json.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  queries = parsed.queries || [userMessage];\n} catch (e) {\n  queries = [userMessage];\n}\n\n// Output one item per query for the HTTP Request node\nreturn queries.map(q => ({ json: { query: q } }));",
+        "jsCode": "const userMessage = $('Recall Webhook').first().json.body.message;\n\n// Store userMessage in static data for extraction phase\nconst staticData = $getWorkflowStaticData('global');\nstaticData.userMessage = userMessage;\nstaticData.extractions = [];\n\n// Read userId from static data (set by Prepare Query Prompt)\nconst userId = staticData.userId || null;\n\nlet queries;\ntry {\n  const content = $input.first().json.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  queries = parsed.queries || [userMessage];\n} catch (e) {\n  queries = [userMessage];\n}\n\n// Pass userId through item data — staticData is unreliable in expression templates\nreturn queries.map(q => ({ json: { query: q, userId } }));",
         "mode": "runOnceForAllItems"
       },
       "id": "a1b2c3d4-0002-4000-8000-000000000004",
@@ -56,7 +56,7 @@
     },
     {
       "parameters": {
-        "url": "http://host.docker.internal:3100/api/conversations",
+        "url": "=http://host.docker.internal:3100/api/conversations",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -71,6 +71,10 @@
             {
               "name": "include",
               "value": "avg_embedding,centroids"
+            },
+            {
+              "name": "userId",
+              "value": "={{ $json.userId || '' }}"
             }
           ]
         },
@@ -190,7 +194,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst extractions = staticData.extractions || [];\n\nlet context = '';\nif (extractions.length > 0) {\n  const sections = extractions.map(e => `### From: ${e.title}\\n${e.content}`);\n  context = `## Relevant Context from Past Conversations\\n\\n${sections.join('\\n\\n')}`;\n}\n\ndelete staticData.extractions;\ndelete staticData.userMessage;\n\nreturn [{ json: { context } }];",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst extractions = staticData.extractions || [];\n\nlet context = '';\nif (extractions.length > 0) {\n  const sections = extractions.map(e => `### From: ${e.title}\\n${e.content}`);\n  context = `## Relevant Context from Past Conversations\\n\\n${sections.join('\\n\\n')}`;\n}\n\ndelete staticData.extractions;\ndelete staticData.userMessage;\ndelete staticData.userId;\n\nreturn [{ json: { context } }];",
         "mode": "runOnceForAllItems"
       },
       "id": "a1b2c3d4-0002-4000-8000-000000000011",
@@ -212,7 +216,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.extractions;\ndelete staticData.userMessage;\n\nreturn [{ json: { context: '' } }];",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.extractions;\ndelete staticData.userMessage;\ndelete staticData.userId;\n\nreturn [{ json: { context: '' } }];",
         "mode": "runOnceForAllItems"
       },
       "id": "a1b2c3d4-0002-4000-8000-000000000013",

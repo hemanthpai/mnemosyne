@@ -45,7 +45,7 @@ if (DATABASE_URL) {
   console.log("Conversation service initialized");
 }
 
-const app = buildApp({ service, conversationService });
+const app = buildApp({ service, conversationService, databaseUrl: DATABASE_URL });
 
 try {
   await app.listen({ host: HOST, port: PORT });

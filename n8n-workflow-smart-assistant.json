@@ -1,0 +1,393 @@
+{
+  "name": "Smart Assistant v2",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "mode": "webhook",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [-1200, 180],
+      "id": "fb5ee9ef-328f-4216-83e6-2c6099d02226",
+      "name": "When chat message received",
+      "webhookId": "89bebed3-382a-4390-b5eb-8efec2fee628"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst sessionId = $json.sessionId;\nconst chatInput = $json.chatInput;\nconst userId = $json.userId || null;\n\nconst sessionKey = `seen_${sessionId}`;\nconst isFirstMessage = !staticData[sessionKey];\n\nif (isFirstMessage) {\n  staticData[sessionKey] = Date.now();\n}\n\nreturn [{ json: { chatInput, sessionId, userId, isFirstMessage } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-960, 180],
+      "id": "a1c2d3e4-0001-4000-9000-000000000001",
+      "name": "Check Session"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "first-msg-check",
+              "leftValue": "={{ $json.isFirstMessage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-720, 180],
+      "id": "a1c2d3e4-0001-4000-9000-000000000002",
+      "name": "Is First Message?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/mnemosyne-recall",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: $json.chatInput, userId: $json.userId || undefined }) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-460, 40],
+      "id": "a1c2d3e4-0001-4000-9000-000000000003",
+      "name": "Recall Memory",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatInput = $('Check Session').first().json.chatInput;\nconst sessionId = $('Check Session').first().json.sessionId;\nconst userId = $('Check Session').first().json.userId || null;\n\nlet context = '';\ntry {\n  context = $json.context || '';\n} catch (e) {\n  context = '';\n}\n\nreturn [{ json: { chatInput, sessionId, userId, recallContext: context } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-200, 40],
+      "id": "a1c2d3e4-0001-4000-9000-000000000004",
+      "name": "Format Recall"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatInput = $json.chatInput;\nconst sessionId = $json.sessionId;\nconst userId = $json.userId || null;\n\nreturn [{ json: { chatInput, sessionId, userId, recallContext: '' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 320],
+      "id": "a1c2d3e4-0001-4000-9000-000000000005",
+      "name": "No Recall"
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "=You are a knowledgeable, helpful assistant. You think carefully before responding and provide accurate, well-reasoned answers.\n\n## Personal Memory\n\nYou have access to a personal memory system that stores past conversations. When this conversation started, your memory was automatically searched for relevant context.\n\n{{ $json.recallContext || 'No relevant memories were found for the initial query.' }}\n\nUse any relevant context above to personalize your responses and maintain continuity across conversations. Do not explicitly mention the memory system to the user unless they ask about it.\n\n## Tools\n\nYou have access to the following tools:\n\n### research_assistant\nA specialized research agent that performs thorough, multi-step web research — searching, reading full pages, refining queries, and synthesizing findings — then returns a comprehensive summary with sources.\n\n### recall_memory\nSearches your personal memory for relevant past conversations. Returns a summary of relevant information found.\n\n## When to Use Tools\n\n### research_assistant — Use when:\n- The user asks about current events, news, or anything time-sensitive\n- The user asks for information that changes frequently (prices, standings, weather, stock data, release dates, \"latest\", \"current\", \"now\")\n- You are not confident in the accuracy of your answer\n- The query involves specific recent facts, statistics, or data you may not have\n- The user explicitly asks you to search, look up, or find something\n- The topic is niche or specialized enough that your training data is likely incomplete\n\n### recall_memory — Use when:\n- The user references something they told you in a past conversation that isn't in the memory context above\n- The conversation shifts to a new topic where past context might be helpful\n- The user explicitly asks \"what did I say about...\", \"do you remember...\", or similar\n\n### Do NOT use either tool when:\n- You can answer confidently from your own knowledge or the memory context provided above\n- The user is asking for your opinion, brainstorming, or creative help\n- The query is conversational or personal (greetings, preferences, advice based on what the user told you in this conversation)\n- The user asks you to write, edit, summarize, translate, or transform text they've provided\n\nWhen in doubt about facts, use research_assistant. When in doubt about the user's history, use recall_memory.\n\n## How to Use Tools\n\n- Pass clear, specific queries. Rephrase the user's question into an effective query if needed.\n- You may call tools more than once if the first result is insufficient or if the question has multiple facets.\n- After receiving results, synthesize them into a clear, natural response. Do not narrate the tool usage or say \"according to my research tool\" or \"my memory system says\".\n- Cite sources when presenting factual claims from research.\n\n## Response Style\n\n- Be direct and concise. Lead with the answer, then provide supporting detail.\n- Use natural language. Avoid unnecessary bullet points, headers, or formatting unless the response genuinely benefits from structure.\n- Match the user's tone and complexity level. Technical users get technical answers; casual questions get conversational replies.\n- If you don't know something and tools are unhelpful, say so honestly rather than guessing.\n\nToday's Date: {{ $today.toLocaleString({ dateStyle: 'full' }) }}\nCurrent Time: {{ $now.toLocaleString({ timeStyle: 'long' }) }}",
+          "enableStreaming": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [80, 180],
+      "id": "be64c38b-3bb5-4f5d-b71f-afb27fd93e7a",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "qwen3-235b-a22b-instruct-2507-mlx",
+          "mode": "list",
+          "cachedResultName": "qwen3-235b-a22b-instruct-2507-mlx"
+        },
+        "responsesApiEnabled": false,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [-80, 420],
+      "id": "f49bb53d-3e2d-4065-9f3b-9559aa6feef2",
+      "name": "Qwen3-235B-A22B-2507-Instruct",
+      "credentials": {
+        "openAiApi": {
+          "id": "CltcUQlbnoPbR1tN",
+          "name": "LiteLLM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}",
+        "tableName": "n8n_chat_memory",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [40, 420],
+      "id": "7bdb3e83-7b1c-4e18-ba80-e4b2a1aadc5e",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "REPLACE_WITH_POSTGRES_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "description": "Searches the web and reads full pages to research a topic. \nUse this when the user asks about current events, recent \ndevelopments, or anything that requires up-to-date information. \nInput: a clear research question. \nOutput: a detailed summary with sources.",
+        "workflowId": {
+          "__rl": true,
+          "value": "oW0k624OAVb5ZWuY",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/oW0k624OAVb5ZWuY",
+          "cachedResultName": "Search Sub-Agent"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $input }}"
+          },
+          "matchingColumns": ["query"],
+          "schema": [
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [160, 420],
+      "id": "71d5f96b-3882-4de0-a7fd-a513870284da",
+      "name": "research_assistant"
+    },
+    {
+      "parameters": {
+        "description": "Searches your personal memory for relevant past conversations. Use this when the user references something from a past conversation, when the topic shifts and past context might help, or when the user asks 'do you remember' or 'what did I say about'. Input: a clear search query. Output: a summary of relevant information from past conversations.",
+        "workflowId": {
+          "__rl": true,
+          "value": "fniDlOxoyeNiQiAB",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $input }}",
+            "userId": "={{ $('Check Session').first().json.userId || '' }}"
+          },
+          "matchingColumns": ["query"],
+          "schema": [
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [280, 420],
+      "id": "a1c2d3e4-0001-4000-9000-000000000006",
+      "name": "recall_memory"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatInput = $('When chat message received').first().json.chatInput;\nconst sessionId = $('When chat message received').first().json.sessionId;\nconst userId = $('Check Session').first().json.userId || null;\nconst agentOutput = $json.output;\n\nconst staticData = $getWorkflowStaticData('global');\nconst titleKey = `title_${sessionId}`;\n\nconst payload = {\n  sourceId: `smart-assistant-${sessionId}`,\n  source: 'smart-assistant',\n  tags: ['smart-assistant'],\n  messages: [\n    { role: 'user', content: chatInput },\n    { role: 'assistant', content: agentOutput }\n  ]\n};\n\nif (userId) {\n  payload.userId = userId;\n}\n\nif (!staticData[titleKey]) {\n  payload.title = chatInput.substring(0, 100);\n  staticData[titleKey] = true;\n}\n\ntry {\n  await fetch('http://host.docker.internal:3100/api/conversations', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify(payload)\n  });\n} catch (e) {\n  // Store failed, continue anyway\n}\n\n// Pass through AI Agent output so Chat Trigger returns it to the user\nreturn [{ json: $json }];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [360, 180],
+      "id": "a1c2d3e4-0001-4000-9000-000000000007",
+      "name": "Store & Respond"
+    }
+  ],
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Check Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Session": {
+      "main": [
+        [
+          {
+            "node": "Is First Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is First Message?": {
+      "main": [
+        [
+          {
+            "node": "Recall Memory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Recall",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recall Memory": {
+      "main": [
+        [
+          {
+            "node": "Format Recall",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Recall": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Recall": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen3-235B-A22B-2507-Instruct": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "research_assistant": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "recall_memory": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Store & Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "timezone": "America/Los_Angeles",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

@@ -56,15 +56,31 @@ def extract_tags(meta_json: dict) -> list[str]:
     return []
 
 
-def load_conversations(db_path: str) -> list[dict]:
-    """Load all conversations from webui.db."""
+def load_conversations(
+    db_path: str,
+    filter_user_id: str | None = None,
+    include_shared: bool = False,
+) -> list[dict]:
+    """Load conversations from webui.db with optional user filtering."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, title, chat, meta, created_at FROM chat ORDER BY created_at")
+    cursor.execute(
+        "SELECT user_id, id, title, chat, meta, created_at FROM chat ORDER BY created_at"
+    )
 
     conversations = []
+    skipped_shared = 0
     for row in cursor.fetchall():
-        row_id, title, chat_str, meta_str, created_at = row
+        user_id, row_id, title, chat_str, meta_str, created_at = row
+
+        # Skip shared users by default
+        if not include_shared and user_id and str(user_id).startswith("shared-"):
+            skipped_shared += 1
+            continue
+
+        # Filter to specific user if requested
+        if filter_user_id and user_id != filter_user_id:
+            continue
 
         try:
             chat = json.loads(chat_str) if chat_str else {}
@@ -81,6 +97,7 @@ def load_conversations(db_path: str) -> list[dict]:
 
         conversations.append({
             "source_id": row_id,
+            "user_id": user_id,
             "title": title or "Untitled",
             "source": "open-webui",
             "tags": tags,
@@ -88,6 +105,8 @@ def load_conversations(db_path: str) -> list[dict]:
         })
 
     conn.close()
+    if skipped_shared:
+        print(f"Skipped {skipped_shared} shared-user conversations")
     return conversations
 
 
@@ -96,10 +115,16 @@ def main():
     parser.add_argument("--db", required=True, help="Path to webui.db")
     parser.add_argument("--backend-url", required=True, help="Mnemosyne backend URL (e.g. http://localhost:3100)")
     parser.add_argument("--dry-run", action="store_true", help="Parse and validate only, don't POST")
+    parser.add_argument("--user-id", default=None, help="Only ingest conversations for this user ID")
+    parser.add_argument("--include-shared", action="store_true", help="Include shared-* user conversations (skipped by default)")
     args = parser.parse_args()
 
     print(f"Loading conversations from {args.db}...")
-    conversations = load_conversations(args.db)
+    conversations = load_conversations(
+        args.db,
+        filter_user_id=args.user_id,
+        include_shared=args.include_shared,
+    )
     print(f"Found {len(conversations)} conversations with messages")
 
     total_messages = sum(len(c["messages"]) for c in conversations)
@@ -117,7 +142,7 @@ def main():
     if args.dry_run:
         print("\n--- Dry run summary ---")
         for i, conv in enumerate(conversations[:5]):
-            print(f"  [{i+1}] {conv['title']} ({len(conv['messages'])} msgs, tags: {conv['tags']})")
+            print(f"  [{i+1}] {conv['title']} (user: {conv.get('user_id', 'N/A')}, {len(conv['messages'])} msgs, tags: {conv['tags']})")
         if len(conversations) > 5:
             print(f"  ... and {len(conversations) - 5} more")
         print("\nDry run complete. No data was sent.")
@@ -148,6 +173,8 @@ def main():
             "tags": conv["tags"],
             "messages": conv["messages"],
         }
+        if conv.get("user_id"):
+            payload["userId"] = conv["user_id"]
 
         try:
             resp = client.post("/api/conversations", json=payload)

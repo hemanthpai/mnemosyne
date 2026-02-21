@@ -10,7 +10,7 @@ export function conversationRoutes(service: ConversationService) {
     app.post<{ Body: StoreConversationRequest }>(
       "/api/conversations",
       async (request, reply) => {
-        const { sourceId, title, source, tags, messages } =
+        const { sourceId, userId, title, source, tags, messages } =
           request.body ?? {};
 
         if (!sourceId || typeof sourceId !== "string" || sourceId.trim() === "") {
@@ -44,6 +44,7 @@ export function conversationRoutes(service: ConversationService) {
         const conversation = await service.upsert(sourceId.trim(), {
           title: title?.trim(),
           source,
+          userId: userId || undefined,
           tags: Array.isArray(tags) ? tags : undefined,
           messages,
         });
@@ -55,7 +56,7 @@ export function conversationRoutes(service: ConversationService) {
     app.get<{ Querystring: SearchConversationsQuery }>(
       "/api/conversations",
       async (request) => {
-        const { query, tags, limit, include } = request.query;
+        const { query, tags, limit, include, userId } = request.query;
 
         const tagList = tags
           ? tags.split(",").map((t) => t.trim().toLowerCase())
@@ -72,6 +73,7 @@ export function conversationRoutes(service: ConversationService) {
           tagList,
           parsedLimit,
           includeList,
+          userId || undefined,
         );
         return { conversations, total: conversations.length };
       },

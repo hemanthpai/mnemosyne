@@ -1,18 +1,21 @@
 import Fastify from "fastify";
 import type { MemoryService } from "./services/memory-service.js";
 import type { ConversationService } from "./services/conversation-service.js";
+import type { RecallService } from "./services/recall-service.js";
 import { memoryRoutes } from "./routes/memories.js";
 import { conversationRoutes } from "./routes/conversations.js";
+import { recallRoutes } from "./routes/recall.js";
 import { chatMemoryRoutes } from "./routes/chat-memory.js";
 
 export interface AppOptions {
   service: MemoryService;
   conversationService?: ConversationService;
+  recallService?: RecallService;
   databaseUrl?: string;
 }
 
 export function buildApp(options: AppOptions) {
-  const { service, conversationService, databaseUrl } = options;
+  const { service, conversationService, recallService, databaseUrl } = options;
   const app = Fastify({ logger: false });
 
   app.get("/health", async (_request, reply) => {
@@ -27,6 +30,10 @@ export function buildApp(options: AppOptions) {
 
   if (conversationService) {
     app.register(conversationRoutes(conversationService));
+  }
+
+  if (recallService) {
+    app.register(recallRoutes(recallService));
   }
 
   if (databaseUrl) {

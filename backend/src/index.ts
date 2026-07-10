@@ -6,12 +6,21 @@ import { OllamaEmbeddingService, NoopEmbeddingService } from "./embedding/index.
 import type { EmbeddingService } from "./embedding/index.js";
 import { MemoryService } from "./services/memory-service.js";
 import { ConversationService } from "./services/conversation-service.js";
+import { LiteLlmClient, NoopLlmClient } from "./services/llm-client.js";
+import { RecallService } from "./services/recall-service.js";
+import { LobeChatSyncService } from "./services/lobechat-sync-service.js";
 
 const HOST = process.env.HOST ?? "0.0.0.0";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
 const EMBEDDING_URL = process.env.EMBEDDING_URL;
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "qwen3-embedding:8b-q8_0";
+const LITELLM_URL = process.env.LITELLM_URL;
+const LOBECHAT_DATABASE_URL = process.env.LOBECHAT_DATABASE_URL;
+const LOBECHAT_SYNC_INTERVAL = parseInt(
+  process.env.LOBECHAT_SYNC_INTERVAL ?? "30000",
+  10,
+);
 
 let repository: MemoryRepository;
 
@@ -45,7 +54,27 @@ if (DATABASE_URL) {
   console.log("Conversation service initialized");
 }
 
-const app = buildApp({ service, conversationService, databaseUrl: DATABASE_URL });
+// LLM client + Recall service
+const LITELLM_API_KEY = process.env.LITELLM_API_KEY;
+const llmClient = LITELLM_URL
+  ? new LiteLlmClient(LITELLM_URL, LITELLM_API_KEY)
+  : new NoopLlmClient();
+
+let recallService: RecallService | undefined;
+if (conversationService && LITELLM_URL) {
+  recallService = new RecallService(conversationService, llmClient, {
+    queryModel: process.env.RECALL_QUERY_MODEL,
+    extractModel: process.env.RECALL_EXTRACT_MODEL,
+  });
+  console.log(`Recall service initialized (LiteLLM: ${LITELLM_URL})`);
+}
+
+const app = buildApp({
+  service,
+  conversationService,
+  recallService,
+  databaseUrl: DATABASE_URL,
+});
 
 try {
   await app.listen({ host: HOST, port: PORT });
@@ -53,4 +82,19 @@ try {
 } catch (err) {
   app.log.error(err);
   process.exit(1);
+}
+
+// LobeChat sync (background, non-blocking)
+if (LOBECHAT_DATABASE_URL && conversationService) {
+  const syncService = new LobeChatSyncService(
+    LOBECHAT_DATABASE_URL,
+    conversationService,
+    LOBECHAT_SYNC_INTERVAL,
+  );
+  syncService.start().catch((err) => {
+    console.error("LobeChat sync service failed to start:", err);
+  });
+  console.log(
+    `LobeChat sync service started (interval: ${LOBECHAT_SYNC_INTERVAL}ms)`,
+  );
 }

@@ -154,6 +154,37 @@ async def search_conversations(
 
 
 @mcp.tool()
+async def recall_context(
+    query: str,
+    user_id: str | None = None,
+    ctx: Context = None,
+) -> str:
+    """Recall relevant past conversations based on a search query.
+
+    Runs a full recall pipeline: generates diverse search queries,
+    finds matching conversations, selects topic-diverse results,
+    and extracts relevant information from each.
+
+    Use when the user references past conversations or when
+    additional history context would help answer their question.
+
+    Args:
+        query: The search query describing what context to recall.
+        user_id: Optional user ID to scope results to a specific user.
+    """
+    client = _get_client(ctx)
+    payload: dict = {"query": query}
+    if user_id:
+        payload["userId"] = user_id
+    response = await client.post("/api/recall", json=payload)
+    if response.status_code == 200:
+        data = response.json()
+        context = data.get("context", "")
+        return context if context else "No relevant past conversations found."
+    return f"Error recalling context: {response.text}"
+
+
+@mcp.tool()
 async def get_conversation(
     id: str,
     ctx: Context = None,

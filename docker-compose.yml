@@ -1,11 +1,23 @@
+# ⚠️ mnemosyne is DECOMMISSIONED (2026-06-05) — superseded by Mem0 + LobeChat memory.
+# The app (backend, mcp-server) is removed and the `mnemosyne` DB was dropped
+# (final dump: ~/mnemosyne-pg-final-20260605-*.sql.gz).
+#
+# This Postgres is RETAINED ONLY because LobeChat's live DB lives here
+# (lobe-chat → host.docker.internal:5432/lobechat). It is ParadeDB w/ pg_search,
+# which LobeChat requires for full-text search.
+#
+# TODO (LobeChat transformation): give LobeChat its OWN ParadeDB, migrate the
+# `lobechat` DB out, repoint lobe-chat, then retire this container + dir.
+# Until then: do NOT recreate this container with changed config (live data).
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: paradedb/paradedb:latest-pg17
     restart: always
+    command: postgres -c shared_preload_libraries=pg_search
     environment:
       - POSTGRES_USER=mnemosyne
       - POSTGRES_PASSWORD=mnemosyne
-      - POSTGRES_DB=mnemosyne
+      - POSTGRES_DB=lobechat
     ports:
       - "5432:5432"
     volumes:
@@ -16,39 +28,6 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
-
-  backend:
-    build: ./backend
-    restart: always
-    ports:
-      - "3100:3000"
-    environment:
-      - HOST=0.0.0.0
-      - PORT=3000
-      - DATABASE_URL=postgresql://mnemosyne:mnemosyne@postgres:5432/mnemosyne
-      - EMBEDDING_URL=http://minion.coho-mahi.ts.net:11434
-      - EMBEDDING_MODEL=qwen3-embedding:8b-q8_0
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-
-  mcp-server:
-    build: ./mcp-server
-    restart: always
-    ports:
-      - "8180:8080"
-    environment:
-      - BACKEND_URL=http://backend:3000
-      - MCP_PORT=8080
-    depends_on:
-      backend:
-        condition: service_healthy
 
 volumes:
   pgdata:

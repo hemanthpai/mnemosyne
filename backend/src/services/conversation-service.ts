@@ -103,6 +103,10 @@ export class ConversationService {
     return this.repository.getById(id);
   }
 
+  async findBySourceId(sourceId: string): Promise<Conversation | null> {
+    return this.repository.findBySourceId(sourceId);
+  }
+
   async healthCheck(): Promise<boolean> {
     return this.repository.healthCheck();
   }
